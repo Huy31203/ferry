@@ -20,6 +20,7 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": ["binaries/gifsicle"],
     "targets": "all",
     "category": "Utility",
     "shortDescription": "Shrinks images as you copy them.",
