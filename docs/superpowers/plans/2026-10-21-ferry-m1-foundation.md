@@ -1230,6 +1230,8 @@ mkdir -p "$CACHE" "$OUT_DIR"
 ACTUAL="$(sha256 "$TARBALL")"
 if [ "$ACTUAL" != "${GIFSICLE_SHA256:-$SHA256}" ]; then
   echo "gifsicle tarball checksum mismatch: got $ACTUAL" >&2
+  # Drop the cached download so a corrupt file is fetched again next run.
+  rm -f "$TARBALL"
   exit 1
 fi
 
@@ -1294,10 +1296,17 @@ lipo -archs src-tauri/binaries/gifsicle-universal-apple-darwin
 
 Expected: both builds print `LCDF Gifsicle 1.98` and `built …/gifsicle-x86_64-apple-darwin` / `…universal-apple-darwin`; `lipo` prints `x86_64 arm64`. `ls src-tauri/binaries` shows the universal file plus its `aarch64-apple-darwin` and `x86_64-apple-darwin` copies.
 
+The Windows branch cannot run on this Mac, so check it against the extracted source now. Run `sed -n '1,80p' target/gifsicle-build/x86_64-apple-darwin/src/Makefile.w32`, then confirm three things:
+- the target is named `gifsicle.exe`;
+- any `config.h` it expects (for example `config-win.h` copied or `#include`d) is available;
+- the `CFLAGS` passed by the script keep every define the makefile's own `CFLAGS` sets, because the command-line value replaces the makefile's.
+
+Fix the Windows branch of the script to match before committing.
+
 - [ ] **Step 3: Check that a bad checksum stops the build**
 
 Run: `GIFSICLE_SHA256=0000 scripts/build-gifsicle.sh; echo "exit=$?"`
-Expected: `gifsicle tarball checksum mismatch: got e9d4cc08…` and `exit=1`. Nothing new is written to `src-tauri/binaries/`.
+Expected: `gifsicle tarball checksum mismatch: got e9d4cc08…` and `exit=1`. Nothing new is written to `src-tauri/binaries/`, and `target/gifsicle-build/gifsicle-1.98.tar.gz` is gone (it is downloaded again next run).
 
 - [ ] **Step 4: Bundle the sidecar**
 
@@ -1359,6 +1368,17 @@ tauri-nspanel = "2.1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 ```
+
+`platform/macos.rs` imports `NSWindowStyleMask` through tauri-nspanel's re-export. Confirm that the re-export exists:
+
+```bash
+cargo fetch
+grep -rn "pub use objc2_app_kit" ~/.cargo/registry/src/*/tauri-nspanel-2.*/src/lib.rs
+```
+
+If grep prints nothing, take these two steps:
+1. Add `objc2-app-kit = { version = "0.3", features = ["NSWindow"] }` under the macOS dependencies.
+2. In Step 2, import `objc2_app_kit::NSWindowStyleMask` directly instead of through `tauri_nspanel`.
 
 - [ ] **Step 2: Write the platform modules**
 
@@ -1771,7 +1791,9 @@ Replace `src/stack/Stack.svelte` with:
 </style>
 ```
 
-Create `src/stack/Card.svelte` (Done state from the approved design; rail actions are wired in M2, so they are disabled here):
+Create `src/stack/Card.svelte` from the Done state in the approved design. Two parts of it wait for M2:
+- The rail actions are wired in M2, so here they are disabled.
+- The card is deliberately not keyboard-focusable yet. The stack window can never be the key window, so a `tabindex` would do nothing, and Svelte flags it as an a11y warning. M2 adds R§5's "global hotkey focuses the newest card" together with that focus path.
 
 ```svelte
 <script lang="ts">
@@ -2045,6 +2067,8 @@ name: CI
 
 on:
   push:
+    # release.yml builds tags; skipping them here avoids building every installer twice.
+    tags-ignore: ['v*']
   pull_request:
 
 concurrency:
