@@ -14,6 +14,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 imagequant = "4.4"
 # No nasm_simd, so building Ferry never needs NASM. Revisit if JPEG latency matters.
 mozjpeg = { version = "0.10", default-features = false }
+# The same features mozjpeg already enables; named here for the decoder's error manager.
+mozjpeg-sys = { version = "2.2.3", default-features = false, features = ["unwinding"] }
 oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }

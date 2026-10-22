@@ -1016,6 +1016,7 @@ dependencies = [
  "imagequant",
  "libc",
  "mozjpeg",
+ "mozjpeg-sys",
  "oxipng",
  "png 0.18.1",
  "serde",

@@ -2,9 +2,14 @@
 //! The ICC profile and pixel density always survive; EXIF follows the
 //! metadata setting but never loses the orientation (spec §5.8).
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::os::raw::c_int;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use mozjpeg::{ColorSpace, Compress, Decompress, Marker};
+use mozjpeg_sys::{
+    JWRN_HIT_MARKER, JWRN_HUFF_BAD_CODE, JWRN_JPEG_EOF, JWRN_MUST_RESYNC, jpeg_common_struct,
+    jpeg_error_mgr, jpeg_std_error,
+};
 
 use super::{OptimiseError, OptimiseOptions, quality};
 
@@ -54,11 +59,46 @@ fn reaches_eoi(data: &[u8]) -> bool {
     }
 }
 
+/// libjpeg only warns about damaged entropy data and fills the lost pixels in,
+/// and mozjpeg's default error manager discards the warnings. This one unwinds
+/// on the warnings that mean lost pixels, like a fatal error. Harmless ones, such
+/// as extra bytes before the end marker, which cameras leave, stay silent.
+fn strict_error_mgr() -> jpeg_error_mgr {
+    // SAFETY: `jpeg_std_error` fills in a zeroed manager, as libjpeg expects.
+    unsafe {
+        let mut err: jpeg_error_mgr = std::mem::zeroed();
+        jpeg_std_error(&mut err);
+        err.error_exit = Some(fatal);
+        err.emit_message = Some(warning);
+        err
+    }
+}
+
+extern "C-unwind" fn fatal(_: &mut jpeg_common_struct) {
+    resume_unwind(Box::new("libjpeg fatal error"));
+}
+
+extern "C-unwind" fn warning(cinfo: &mut jpeg_common_struct, level: c_int) {
+    // Level -1 is a warning; the rest are traces.
+    if level >= 0 {
+        return;
+    }
+    // SAFETY: libjpeg points `err` at the live manager before it reports anything.
+    let code = unsafe { (*cinfo.err).msg_code };
+    if matches!(
+        code,
+        JWRN_HIT_MARKER | JWRN_HUFF_BAD_CODE | JWRN_JPEG_EOF | JWRN_MUST_RESYNC
+    ) {
+        resume_unwind(Box::new("damaged JPEG data"));
+    }
+}
+
 fn run(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     let decode_err = |e: std::io::Error| OptimiseError::Decode(e.to_string());
     let encode_err = |e: std::io::Error| OptimiseError::Encode(e.to_string());
 
-    let mut decoder = Decompress::with_markers(&[Marker::APP(1), Marker::APP(2)])
+    let mut decoder = Decompress::with_err(strict_error_mgr())
+        .with_markers(&[Marker::APP(1), Marker::APP(2)])
         .from_mem(input)
         .map_err(decode_err)?;
     let (width, height) = decoder.size();
@@ -354,5 +394,45 @@ mod tests {
         let full = testutil::jpeg(300, 200, 95, &testutil::JpegExtras::default());
         let out = optimise(&full, &OptimiseOptions::default()).unwrap();
         assert!(reaches_eoi(&out));
+    }
+
+    #[test]
+    fn damage_inside_the_scan_is_refused_even_when_an_end_marker_follows() {
+        let full = testutil::jpeg(300, 200, 90, &testutil::JpegExtras::default());
+        // The first half of the picture plus a closing FF D9: the marker walk
+        // reaches the end, but libjpeg would fill the rest with grey.
+        let mut halved = full[..full.len() / 2].to_vec();
+        halved.extend_from_slice(&[0xFF, 0xD9]);
+        // A run of zeroed bytes in the middle of the scan throws the decoder out of step.
+        let mut zeroed = full.clone();
+        let mid = full.len() / 2;
+        zeroed[mid..mid + 2000].fill(0);
+        for (what, damaged) in [
+            ("half plus an end marker", halved),
+            ("zeroed bytes", zeroed),
+        ] {
+            let result = optimise(&damaged, &OptimiseOptions::default());
+            assert!(
+                matches!(result, Err(OptimiseError::Decode(_))),
+                "{what}: {:?}",
+                result.map(|out| out.len())
+            );
+        }
+    }
+
+    #[test]
+    fn extra_bytes_before_the_end_marker_are_tolerated() {
+        // Cameras and some editors leave stray bytes there; the picture is intact.
+        let full = testutil::jpeg(300, 200, 90, &testutil::JpegExtras::default());
+        let mut padded = full[..full.len() - 2].to_vec();
+        padded.extend_from_slice(&[0x12, 0x34, 0x56, 0xFF, 0xD9]);
+        assert!(optimise(&padded, &OptimiseOptions::default()).is_ok());
+    }
+
+    #[test]
+    fn a_progressive_jpeg_is_still_accepted() {
+        let full = testutil::jpeg(300, 200, 90, &testutil::JpegExtras::default());
+        let progressive = optimise(&full, &OptimiseOptions::default()).unwrap();
+        assert!(optimise(&progressive, &OptimiseOptions::default()).is_ok());
     }
 }
