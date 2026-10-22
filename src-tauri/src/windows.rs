@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ferry_core::geometry::{Corner, Rect, fit, place};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::{i18n::t, platform};
+use ferry_core::i18n::t;
+
+use crate::platform;
 
 pub const STACK: &str = "stack";
 pub const SETTINGS: &str = "settings";

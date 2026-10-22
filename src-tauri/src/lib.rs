@@ -1,4 +1,3 @@
-mod i18n;
 mod platform;
 mod tray;
 mod windows;

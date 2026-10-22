@@ -6,7 +6,9 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
-use crate::{i18n::t, windows};
+use ferry_core::i18n::t;
+
+use crate::windows;
 
 pub fn build(app: &AppHandle) -> Result<()> {
     let test_card = MenuItem::with_id(app, "test_card", t("tray.test_card"), true, None::<&str>)?;
