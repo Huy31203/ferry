@@ -102,6 +102,9 @@
   $effect(() => {
     const action = hotAction;
     void copied;
+    // The button may come or go with the card's state (a busy card has no toolbar).
+    void rail.length;
+    void card.state.kind;
     const button = action && cardEl?.querySelector<HTMLElement>(`[data-action="${action}"]`);
     if (!action || !button || !cardEl) {
       tip = null;
