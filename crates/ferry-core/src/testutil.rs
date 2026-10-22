@@ -41,6 +41,16 @@ pub fn png(w: u32, h: u32) -> Vec<u8> {
     out
 }
 
+/// A valid small PNG whose header claims `w`×`h` pixels, far more than its data holds.
+pub fn png_claiming_size(w: u32, h: u32) -> Vec<u8> {
+    let mut out = png(1, 1);
+    out[16..20].copy_from_slice(&w.to_be_bytes());
+    out[20..24].copy_from_slice(&h.to_be_bytes());
+    let crc = crc32(&out[12..29]);
+    out[29..33].copy_from_slice(&crc.to_be_bytes());
+    out
+}
+
 /// Insert an ancillary chunk right after IHDR.
 pub fn with_png_chunk(png: &[u8], name: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let ihdr_end = 8 + 12 + 13;
