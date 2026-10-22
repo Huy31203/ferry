@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { dragAllFiles, upsert } from '../lib/cards';
+  import { draggable, upsert } from '../lib/cards';
   import type { JobUpdate, StackConfig } from '../lib/ipc';
   import Card from './Card.svelte';
   import DragAllBar from './DragAllBar.svelte';
@@ -10,6 +10,12 @@
   let cards = $state<JobUpdate[]>([]);
   let config = $state<StackConfig>({ corner: 'bottom_right', card_size: 'default', auto_hide_secs: 6 });
   let hovered = $state<string | null>(null);
+  /** The button the pointer is on: its card (null for the Drag all bar) and its `data-action`. */
+  let hot = $state<{ card: string | null; action: string } | null>(null);
+  let overBar = $state(false);
+  let dragging = $state(0);
+  // Pointer on the Drag all bar, or a drag under way: no card may fade out from under the user.
+  const held = $derived(overBar || dragging > 0);
   let root = $state<HTMLDivElement>();
 
   const top = $derived(config.corner.startsWith('top'));
@@ -41,9 +47,27 @@
 
   // Rust forwards the pointer because a never-key window gets no :hover. AppKit's
   // y runs up from the window's bottom edge.
-  function pointAt(x: number, fromBottom: number) {
-    const el = document.elementFromPoint(x, window.innerHeight - fromBottom);
+  function track(el: Element | null) {
     hovered = el?.closest<HTMLElement>('[data-card-id]')?.dataset.cardId ?? null;
+    overBar = el?.closest('[data-bar]') != null;
+    const button = el?.closest<HTMLElement>('[data-action]');
+    hot = button
+      ? { card: button.closest<HTMLElement>('[data-card-id]')?.dataset.cardId ?? null, action: button.dataset.action as string }
+      : null;
+  }
+
+  function pointAt(x: number, fromBottom: number) {
+    track(document.elementFromPoint(x, window.innerHeight - fromBottom));
+  }
+
+  function leave() {
+    hovered = null;
+    overBar = false;
+    hot = null;
+  }
+
+  function dragState(active: boolean) {
+    dragging = Math.max(0, dragging + (active ? 1 : -1));
   }
 
   onMount(() => {
@@ -55,9 +79,7 @@
       listen<{ x: number; fromBottom: number }>('stack:pointer', (event) =>
         pointAt(event.payload.x, event.payload.fromBottom),
       ),
-      listen('stack:pointer-leave', () => {
-        hovered = null;
-      }),
+      listen('stack:pointer-leave', leave),
       listen<{ floating: StackConfig }>('settings:changed', (event) => {
         config = {
           corner: event.payload.floating.corner,
@@ -92,18 +114,34 @@
   }
 </script>
 
-<div class="stack" class:top bind:this={root}>
+<!-- Native pointer events cover Windows; on macOS the panel never gets them and Rust forwards the pointer instead. -->
+<div
+  class="stack"
+  class:top
+  bind:this={root}
+  role="presentation"
+  onpointermove={(event) => track(event.target as Element)}
+  onpointerleave={leave}
+>
   {#if cards.length > 1}
-    <DragAllBar files={dragAllFiles(cards)} onclear={clearAll} />
+    <DragAllBar
+      cards={draggable(cards)}
+      hotAction={hot && hot.card === null ? hot.action : null}
+      onclear={clearAll}
+      ondrag={dragState}
+    />
   {/if}
   {#each cards as card (card.id)}
     <Card
       {card}
       hovered={card.id === hovered}
+      {held}
+      hotAction={hot?.card === card.id ? hot.action : null}
       compact={config.card_size === 'compact'}
       {railRight}
       autoHideSecs={config.auto_hide_secs}
       onclose={() => close(card.id)}
+      ondrag={dragState}
     />
   {/each}
 </div>

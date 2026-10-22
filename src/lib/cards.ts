@@ -33,7 +33,12 @@ export function upsert(cards: JobUpdate[], card: JobUpdate): JobUpdate[] {
   return cards.map((c, i) => (i === at ? card : c));
 }
 
+/** The cards "Drag all" carries: every finished one. */
+export function draggable(cards: JobUpdate[]): JobUpdate[] {
+  return cards.filter(canDrag);
+}
+
 /** The files "Drag all" carries: every finished card's output. */
 export function dragAllFiles(cards: JobUpdate[]): string[] {
-  return cards.filter(canDrag).map((c) => c.output as string);
+  return draggable(cards).map((c) => c.output as string);
 }
