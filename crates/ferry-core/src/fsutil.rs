@@ -4,7 +4,9 @@
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", test))]
 use std::sync::mpsc;
+#[cfg(any(target_os = "macos", test))]
 use std::thread;
 use std::time::Duration;
 
@@ -89,6 +91,8 @@ pub fn copy_xattrs(_from: &Path, _to: &Path) -> io::Result<()> {
 
 /// Run `work` on its own thread and stop waiting after `limit`. A blocked
 /// system call cannot be cancelled, so the thread is left to finish by itself.
+/// Only the macOS `copy_xattrs` calls it; the tests run it on every OS.
+#[cfg(any(target_os = "macos", test))]
 fn with_timeout<T: Send + 'static>(
     limit: Duration,
     work: impl FnOnce() -> io::Result<T> + Send + 'static,
