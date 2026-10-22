@@ -4,7 +4,7 @@
 - **Status:** Approved design, awaiting spec review
 - **Requirements:** [docs/requirements/ferry-optimize-requirements.md](../../requirements/ferry-optimize-requirements.md) ("R§" below)
 - **Builds on:** [Cycle 1 spec](2026-10-21-ferry-cycle1-foundation-phase1-design.md) ("C1§" below), merged and released as 0.1.1
-- **Mockups:** `.superpowers/brainstorm/78228-1792661273/content/` (card-layout, crop-popover, compare; git-ignored, chosen options A, A, confirmed)
+- **Mockups (local only, git-ignored):** `.superpowers/brainstorm/78228-1792661273/content/` (card-layout → A, crop-popover → A, compare → confirmed)
 
 ## 1. Goal and success criteria
 
@@ -26,13 +26,14 @@ Windows behaviour is **built but not verified on a real desktop**, as in Cycle 1
 
 | Topic | Decision | Why |
 | --- | --- | --- |
-| Transform engine | In-process: decode with the codecs already linked (png, mozjpeg, libwebp), resample with `fast_image_resize` 5.x (MIT/Apache, pure Rust, SIMD), re-encode with the existing optimisers | No new sidecar or per-OS binary; testable on 3 OSes. libvips stays an option for the later media-types slice (HEIC/AVIF), behind the same edit step |
-| Animated GIF | gifsicle's own `--crop` / `--resize` / `--lossy` | Already bundled; keeps frames and timing |
+| Transform engine | In-process: decode with the codecs already linked (png, mozjpeg, libwebp) plus the `gif` crate 0.14 (MIT/Apache, pure Rust) for a GIF's first frame; resample with `fast_image_resize` 6.x (MIT/Apache, pure Rust, SIMD); re-encode with the existing optimisers | No new sidecar or per-OS binary; testable on 3 OSes. libvips stays an option for the later media-types slice (HEIC/AVIF), behind the same edit step |
+| Animated GIF | gifsicle's own `--crop` / `--resize` / `--lossy`; the `gif` crate only reads the first frame (smart framing, convert to still) | Already bundled; keeps frames and timing |
 | Animated WebP / APNG | Edit tools disabled ("Animated WebP can't be edited yet") | No animation encoder yet (C1§2) |
 | Convert targets | PNG, JPEG, WebP. A GIF can be converted to a still (first frame) | AVIF/HEIC/JXL belong to the media-types slice |
 | Edit model | A per-job `Edits` recipe re-applied to the original on every run | R§1.7 "always re-encoding from the original"; no generation loss; Restore = clear the recipe |
 | Explicit edits vs plain optimise | Plain optimise keeps C1 rules (Already optimal / Larger keep the original). Any explicit edit always writes its result, even if larger | The user asked for it; the card shows the real sizes |
 | Output location | New File handling setting, Images row: Optimised and Converted each choose In place (default), Same folder, Specific folder or Temporary | User request; R§2.6. Video/PDF rows arrive with those types |
+| One result per job | A job owns exactly one result file at a time. A run whose output differs from the last one first undoes the last one (as Restore would, without changing the card), then writes the new one | Switching between optimised and converted, or re-converting, never leaves stray files |
 | Trash | `trash` crate 5.x for moving produced files to the Trash / Recycle Bin | Never hard-delete user-visible files (safety rules) |
 | Text input in the stack | The stack panel becomes key only while a text field is open, then hands focus back | The panel is non-activating (C1); rename, crop and fit need typing |
 | Hover hotkeys | Registered globally only while the pointer is over an idle card; setting on by default | The stack never has focus, so keys must be global; scoped to hover to limit stealing |
@@ -81,38 +82,55 @@ src/
 ### 4.2 `ferry-core` edit interfaces
 
 ```rust
-pub enum Framing { Centre, Smart }
-
-pub struct Crop { pub aspect: (u32, u32), pub framing: Framing }   // e.g. (16, 9)
+#[derive(Default)]
+pub enum Framing { #[default] Centre, Smart }
 
 pub enum Size {
-    Exact { width: u32, height: u32 },  // cover-crops to w:h (using framing), then scales
+    Exact { width: u32, height: u32 },  // cover-crops to w:h using `framing`, then scales
     Width(u32),                         // height follows the ratio ("0 keeps ratio")
     Height(u32),
     LongEdge(u32),
 }
 
+// Serialize + Deserialize: sent to the card as `JobUpdate.edits`.
 #[derive(Default)]
 pub struct Edits {
-    pub crop: Option<Crop>,
-    pub size: Option<Size>,        // mutually exclusive with `scale`: setting one clears the other
-    pub scale: Option<u8>,         // 10..=90 percent of the (cropped) original
-    pub format: Option<Format>,    // Png | Jpeg | WebP; None keeps the source format
-    pub compression: Option<u8>,   // 5..=100; None uses settings
-    pub fit_under: Option<u64>,    // bytes; overrides compression
-    pub level: Level,              // Normal | Aggressive (Extreme = Aggressive + compression 5)
+    pub aspect: Option<(u32, u32)>, // crop to this ratio, e.g. (16, 9); None = "Free" (no ratio crop)
+    pub framing: Framing,           // where the aspect crop and an Exact size cut from
+    pub size: Option<Size>,         // mutually exclusive with `scale`: setting one clears the other
+    pub scale: Option<u8>,          // 10..=90 percent of the (cropped) original
+    pub format: Option<Format>,     // Png | Jpeg | WebP; None keeps the source format
+    pub compression: Option<u8>,    // 5..=100; None uses settings
+    pub fit_under: Option<u64>,     // bytes; setting it clears compression and the reverse
+    pub level: Level,               // Normal | Aggressive (Extreme = Aggressive + compression 5)
 }
 
-impl Edits { pub fn is_plain(&self) -> bool; }  // only level set → C1 optimise rules
+impl Edits {
+    pub fn is_plain(&self) -> bool;          // nothing but `level` → C1 optimise rules
+    pub fn merge(&mut self, p: EditsPatch);  // applies the exclusivity rules above
+}
+
+/// What a card sends: an absent field is left alone, `null` clears it, a value sets it.
+/// Rust side: every field is `Option<Option<T>>` with a small `deserialize_with` helper.
+pub struct EditsPatch {
+    pub aspect: Option<Option<(u32, u32)>>,
+    pub framing: Option<Framing>,
+    pub size: Option<Option<Size>>,
+    pub scale: Option<Option<u8>>,
+    pub format: Option<Option<Format>>,
+    pub compression: Option<Option<u8>>,
+    pub fit_under: Option<Option<u64>>,
+    pub level: Option<Level>,
+}
 
 pub fn apply(original: &[u8], source: Format, edits: &Edits, o: &OptimiseOptions)
     -> Result<Applied, OptimiseError>;
 pub struct Applied { pub bytes: Vec<u8>, pub format: Format, pub dims: (u32, u32), pub missed_target: bool }
 ```
 
-- **Order is fixed:** decode → orient → crop → size or scale → encode in target format → optimise. Repeating "downscale 50%" sets `scale = 50`; it never compounds.
+- **Order is fixed:** decode → orient → aspect crop → size or scale → encode in target format → optimise. Repeating "downscale 50%" sets `scale = 50`; it never compounds.
 - **Never upscale:** sizes larger than the cropped original clamp to it; the crop popover shows "Larger than the original" as a hint.
-- **Raster path:** used only when `crop`, `size`, `scale` or a format change is present. Plain compression changes and fit-under-size on the same format go straight to the existing optimiser with a new quality, so metadata rules (C1§5.8) stay identical.
+- **Raster path:** used only when `aspect`, `size`, `scale` or a format change is present. Plain compression changes and fit-under-size on the same format go straight to the existing optimiser with a new quality, so metadata rules (C1§5.8) stay identical.
 - **Orientation and colour:** JPEG EXIF orientation is applied to pixels before cropping and the output carries orientation 1 (minimal EXIF as in C1§5.8). The ICC profile is carried into the output (PNG `iCCP`, JPEG APP2, WebP `ICCP`); pixels are not colour-converted.
 - **Alpha to JPEG:** flattened onto white.
 - **GIF:** animated GIFs use gifsicle `--crop x,y+wxh` then `--resize WxH` then the usual `-O3 --lossy`. Smart framing on a GIF uses the first frame's energy map. Converting a GIF to PNG/JPEG/WebP takes the first frame.
@@ -123,7 +141,8 @@ pub struct Applied { pub bytes: Vec<u8>, pub format: Format, pub dims: (u32, u32
 
 - `Job` gains `edits: Edits`, `source_path: Option<PathBuf>` (a file job's original location), `kind: OutputKind { Optimised, Converted }`, and outputs are resolved by `output::resolve` on first run per kind, then kept.
 - `Job::run(edits)` stores the recipe and applies it; `Retry`, **Re-optimise** and **Optimise aggressively** re-run the current recipe with the level changed; **Restore** clears it.
-- **Convert keep-both** (⌥/Alt-click a chip, or the menu with ⌥): a new `Job` with a new id that shares the same backup path; it gets its own card.
+- **Kind:** a run with `edits.format` set (and different from the source format) is Converted; otherwise Optimised. Clearing `format` (clicking the source format's chip) makes the job Optimised again: the conversion is undone (one result per job, §2) and the Optimised rule applies.
+- **Convert keep-both** (⌥/Alt-click a chip, or the menu's "Convert and keep both ▸"): a new `Job` with a new id that shares the same backup path; it gets its own card.
 - **Rename:** `Job::rename(new_stem)` renames the current output in its folder (file job: the real file; clipboard job: the working file used by drag-out). Rejects empty names, path separators and names reserved on Windows; a taken name returns `RenameError::Taken`. Later runs keep the new stem.
 - `JobUpdate` gains:
 
@@ -133,7 +152,7 @@ pub dims_after: Option<(u32, u32)>,
 pub format: String,            // current output format, e.g. "webp"
 pub converted: bool,
 pub can_edit: bool,            // backup present, not animated WebP/APNG, not busy
-pub edits: EditsView,          // scale, compression, crop aspect, size, format: what the sliders and popovers start from
+pub edits: Edits,              // the current recipe: what the sliders and popovers start from
 pub note: Option<String>,      // amber note, e.g. "Couldn't reach 1 MB"
 ```
 
@@ -149,6 +168,7 @@ pub fn resolve(source: &Path, kind: OutputKind, ext: &str, dims: (u32, u32), rul
 - **Same folder / Specific folder:** the template (file name only; `%f %e %z %y %m %d %P`) is rendered in that folder. The source is never touched. Defaults: Optimised `%f_optimised.%e`, Converted `%f.%e`, folder `~/Pictures/Ferry`.
 - **Temporary:** `<work_dir>/files/<job id>/<stem>.<ext>`.
 - **Collisions:** if the resolved file exists and is not this job's own earlier output, append ` (2)`, ` (3)`, … before the extension. A resolved path equal to the source counts as In place.
+- **Switching results:** before a run writes to a path different from the job's last result, the last result is undone: a file Ferry created goes to the Trash, and a source Ferry overwrote or trashed gets the original back. Example: Optimised = Same folder wrote `shot_optimised.png`; converting to WebP with Converted = In place trashes `shot_optimised.png`, writes `shot.webp` and trashes `shot.png`.
 - **Restore:** In place puts the original back at the source path (atomic) and, after a conversion, moves the converted file to the Trash. Other locations move the produced file to the Trash; the source was never changed.
 
 ### 4.5 Tauri app
@@ -160,7 +180,7 @@ pub fn resolve(source: &Path, kind: OutputKind, ext: &str, dims: (u32, u32), rul
   - `card_menu(id, x, y)`: pops the native menu at the cursor.
   - `card_compare(id)`, `card_preview(id)`.
   - `stack_focus(on: bool)`: key-on-demand for text fields.
-- **Context menu (`menu.rs`):** Open · Show in Finder/Explorer ─ Copy · Copy path · Rename… ─ Compare with original ⌘D · Preview Space ─ Re-optimise · Optimise aggressively · Fit under size… ─ Downscale ▸ (90 % … 10 %) · Crop… · Convert to ▸ (PNG, JPEG, WebP; ⌥ shows "… (keep both)") ─ Restore original ─ Close. Items that need the original are disabled when `can_edit` is false; Restore is disabled without a backup. Rename…, Crop… and Fit under size… open the card's inline UI through a `card:open` event.
+- **Context menu (`menu.rs`):** Open · Show in Finder/Explorer ─ Copy · Copy path · Rename… ─ Compare with original ⌘D · Preview Space ─ Re-optimise · Optimise aggressively · Fit under size… ─ Downscale ▸ (90 % … 10 %) · Crop… · Convert to ▸ (PNG, JPEG, WebP) · Convert and keep both ▸ (same list; muda has no ⌥-alternate items) ─ Restore original ─ Close. Items that need the original are disabled when `can_edit` is false; Restore is disabled without a backup. Rename…, Crop… and Fit under size… open the card's inline UI through a `card:open` event.
 - **Hover hotkeys (`hover_keys.rs`):** the pointer forwarding that drives hover (C1 stack) also tells Rust which idle card is under the pointer. On enter, register Space, ⌘/Ctrl+D, `-`, `1`–`9` via `tauri-plugin-global-shortcut`; on leave, when the card becomes busy, while the stack is key, or when `floating.hover_hotkeys` is off, unregister. `1`–`9` set scale 10 %–90 %; `-` steps 10 percentage points down from the current scale (100 → 90 → … → 10).
 - **Key-on-demand (platform):** macOS: the panel's `canBecomeKeyWindow` returns true only while a field is open; `makeKeyWindow` without activating the app (non-activating panel), `resignKeyWindow` afterwards so keys return to the frontmost app. Windows: drop `WS_EX_NOACTIVATE` and `SetForegroundWindow` while a field is open, remember the previous foreground window and restore it on close.
 - **Compare window:** one reusable window (`compare.html`), sized to the image (max 80 % of the screen of the card), loads the backup and the current output through the asset protocol. Takes focus while open; Esc closes and focus returns.
@@ -181,7 +201,7 @@ Downscale · Compression · Crop · Restore · Compare · Copy · ⋯ (opens the
 ### 5.3 Crop and Fit popovers (layout A)
 
 - Open beside the card toward the screen centre; the stack window grows to fit, and the card draws the live crop frame on its thumbnail.
-- **Crop:** aspect chips Free, 16:9, 4:3, 1:1, 1.91:1, 9:16; W × H fields (0 keeps ratio); Size / Long edge toggle; Smart / Centre toggle; ×0.5 / ×2; saved sizes from settings with "Restore defaults"; **Crop** button (Enter). Invalid input (non-number, both 0, over 30 000) turns the field red with a hint and disables Crop.
+- **Crop:** aspect chips (Free = no ratio crop, only the size fields apply), 16:9, 4:3, 1:1, 1.91:1, 9:16; W × H fields (0 keeps ratio); Size / Long edge toggle; Smart / Centre toggle; ×0.5 / ×2; saved sizes from settings with "Restore defaults"; **Crop** button (Enter). Invalid input (non-number, both 0, over 30 000) turns the field red with a hint and disables Crop.
 - **Fit under size:** number field, KB/MB unit, chips 1 MB, 5 MB, 10 MB, 25 MB; **Fit** button (Enter).
 - Both call `stack_focus(true)` on open and `stack_focus(false)` on close, Esc, Enter or click-away.
 
@@ -250,6 +270,7 @@ Version 1 files load with these defaults (serde defaults; unknown fields kept, C
 
 - **Key-on-demand on a non-activating panel.** Text input in the stack is new. Mitigation: spike it first in M3b (a rename field) before the popovers; fallback is a small separate key window for the popover.
 - **Quick Look from an inactive app.** `QLPreviewPanel` follows the key window's responder chain. Mitigation: fallback `qlmanage -p`, which always works but looks plainer.
+- **Bare-key global shortcuts.** `global-hotkey`'s parser accepts `Space`, `-` and `1`–`9` with no modifier, but registering them system-wide is untested here (Carbon on macOS, `RegisterHotKey` on Windows). Mitigation: part of the M3b spike; fallback is a `CGEventTap` / low-level keyboard hook scoped to hover.
 - **Hover hotkeys stealing keys.** Space typed into another app while the pointer rests on a card goes to Ferry. Mitigation: register only on hover over an idle card, unregister on leave and on focus change; the setting turns it off.
 - **Press-and-drag in the panel.** Drag events after mousedown should reach the webview even without key status (clicks already do); verify in the M3b spike alongside the rename field.
 - **Large images.** A 50 MB-limit PNG decodes to a few hundred MB of RGBA. Mitigation: the existing per-CPU semaphore; resize in `fast_image_resize` is streaming-friendly; no extra copies beyond one RGBA buffer.
