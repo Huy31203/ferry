@@ -5,6 +5,8 @@
 //! Win32 calls and the style is re-applied on every show. tao never learns the
 //! window is visible, which is why `hide` also lives here.
 
+use std::path::Path;
+
 use tauri::WebviewWindow;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -55,4 +57,16 @@ pub fn hide(window: &WebviewWindow) -> tauri::Result<()> {
         ShowWindow(window.hwnd()?.0, SW_HIDE);
     }
     Ok(())
+}
+
+/// Windows uses the default accent this cycle (spec §7).
+pub fn accent_rgb() -> Option<(u8, u8, u8)> {
+    None
+}
+
+/// The executable's file name, which is what the clipboard snapshot reports as
+/// its source app.
+pub fn app_identifier(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
 }

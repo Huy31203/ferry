@@ -4,6 +4,7 @@ mod hotkeys;
 mod jobs;
 mod logging;
 mod platform;
+mod prefs;
 mod state;
 mod tray;
 mod windows;
@@ -29,6 +30,11 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_drag::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -87,10 +93,38 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(registered);
     tray::build(app)?;
     clipboard::start(app);
+    housekeeping(app);
     if let LoadStatus::Recovered { .. } = status {
         jobs::notice(app, t("error.settings_reset"));
     }
     Ok(())
+}
+
+/// Work that follows the settings at every start: prune old backups off the
+/// main path, and make the login item and the Dock icon match.
+fn housekeeping(app: &AppHandle) {
+    let (retention, login, dock) = {
+        let settings = app.state::<AppState>().settings.read().unwrap().clone();
+        (
+            settings.backups.retention_days,
+            settings.general.launch_at_login,
+            settings.general.show_dock_icon,
+        )
+    };
+    prefs::sync_autostart(app, login);
+    if dock {
+        prefs::set_dock(app, true);
+    }
+    let app = app.clone();
+    std::thread::spawn(
+        move || match app.state::<AppState>().backups.prune(retention) {
+            Ok(report) => info!(
+                removed = report.removed.len(),
+                retention, "pruned old backups"
+            ),
+            Err(e) => tracing::warn!("could not prune old backups: {e}"),
+        },
+    );
 }
 
 /// The bundled gifsicle sits next to Ferry's own executable (Tauri `externalBin`).
