@@ -4,3 +4,4 @@ node_modules/
 src-tauri/gen/
 src-tauri/binaries/
 .DS_Store
+.worktrees/
