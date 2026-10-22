@@ -1,14 +1,14 @@
 //! Optimise one image from memory (spec §4.2). Never worse than the input:
 //! the caller keeps the original unless the result is `Smaller`.
 
-mod png;
-mod jpeg;
-pub(crate) mod webp;
 mod gif;
+mod jpeg;
+mod png;
+pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
 
-use crate::cancel::CancelToken;
+use crate::{cancel::CancelToken, sniff::Format};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -92,9 +92,33 @@ pub fn classify(input_len: usize, output: Vec<u8>) -> Outcome {
     }
 }
 
+pub fn optimise(
+    input: &[u8],
+    format: Format,
+    o: &OptimiseOptions,
+) -> Result<Outcome, OptimiseError> {
+    if o.cancel.is_cancelled() {
+        return Err(OptimiseError::Cancelled);
+    }
+    if crate::sniff::is_animated(input, format) && format != Format::Gif {
+        return Ok(Outcome::AlreadyOptimal);
+    }
+    let output = match format {
+        Format::Png => png::optimise(input, o)?,
+        Format::Jpeg => jpeg::optimise(input, o)?,
+        Format::WebP => webp::optimise(input, o)?,
+        Format::Gif => gif::optimise(input, o)?,
+    };
+    if o.cancel.is_cancelled() {
+        return Err(OptimiseError::Cancelled);
+    }
+    Ok(classify(input.len(), output))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil;
 
     fn opts(level: Level, compression: u8) -> OptimiseOptions {
         OptimiseOptions {
@@ -123,5 +147,97 @@ mod tests {
         assert_eq!(classify(1000, vec![0; 991]), Outcome::AlreadyOptimal);
         assert_eq!(classify(1000, vec![0; 1000]), Outcome::AlreadyOptimal);
         assert_eq!(classify(1000, vec![0; 1001]), Outcome::Larger);
+    }
+
+    #[test]
+    fn a_cancelled_token_stops_before_any_work() {
+        let o = OptimiseOptions::default();
+        o.cancel.cancel();
+        assert!(matches!(
+            optimise(b"not even an image", Format::Png, &o),
+            Err(OptimiseError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn a_one_pixel_png_comes_back_larger_so_the_original_is_kept() {
+        let tiny = testutil::png(1, 1);
+        assert_eq!(
+            optimise(&tiny, Format::Png, &OptimiseOptions::default()).unwrap(),
+            Outcome::Larger
+        );
+    }
+
+    #[test]
+    fn re_optimising_a_webp_is_already_optimal() {
+        let o = OptimiseOptions::default();
+        let source = testutil::webp(400, 300, 95, &webp::Extras::default());
+        let Outcome::Smaller { bytes: once } = optimise(&source, Format::WebP, &o).unwrap() else {
+            panic!("the first pass should shrink a quality-95 WebP");
+        };
+        assert_eq!(
+            optimise(&once, Format::WebP, &o).unwrap(),
+            Outcome::AlreadyOptimal
+        );
+    }
+
+    #[test]
+    fn animated_webp_and_apng_are_left_alone() {
+        let o = OptimiseOptions::default();
+        assert_eq!(
+            optimise(&testutil::animated_webp(), Format::WebP, &o).unwrap(),
+            Outcome::AlreadyOptimal
+        );
+        // acTL (frames = 2, plays = 0) marks a PNG as animated.
+        let apng =
+            testutil::with_png_chunk(&testutil::png(64, 64), b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]);
+        assert_eq!(
+            optimise(&apng, Format::Png, &o).unwrap(),
+            Outcome::AlreadyOptimal
+        );
+    }
+
+    #[test]
+    fn broken_input_is_an_error_not_a_panic() {
+        let o = OptimiseOptions::default();
+        let png = testutil::png(200, 200);
+        let jpeg = testutil::jpeg(200, 200, 90, &testutil::JpegExtras::default());
+        let webp = testutil::webp(200, 200, 90, &webp::Extras::default());
+        for (format, valid) in [
+            (Format::Png, png),
+            (Format::Jpeg, jpeg),
+            (Format::WebP, webp),
+        ] {
+            for broken in [
+                valid[..valid.len() / 2].to_vec(),
+                b"definitely not an image".to_vec(),
+                Vec::new(),
+            ] {
+                assert!(
+                    matches!(optimise(&broken, format, &o), Err(OptimiseError::Decode(_))),
+                    "{format:?} with {} bytes",
+                    broken.len()
+                );
+            }
+        }
+    }
+
+    /// NFR-P2: a 5 MB clipboard image in under 1.5 s. Timing depends on the
+    /// machine, so run it on purpose: `cargo test --release -- --ignored five_megabyte`.
+    #[test]
+    #[ignore = "timing; run with --release --ignored"]
+    fn five_megabyte_png_is_optimised_within_the_clipboard_budget() {
+        let input = testutil::png(4096, 2560);
+        assert!(
+            input.len() >= 4_500_000,
+            "fixture is only {} bytes",
+            input.len()
+        );
+        let start = std::time::Instant::now();
+        let outcome = optimise(&input, Format::Png, &OptimiseOptions::default()).unwrap();
+        let took = start.elapsed();
+        println!("5 MB PNG optimised in {took:?}");
+        assert!(matches!(outcome, Outcome::Smaller { .. }));
+        assert!(took.as_millis() < 1500, "took {took:?}");
     }
 }
