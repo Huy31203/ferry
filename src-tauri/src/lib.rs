@@ -23,13 +23,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![windows::stack_resize])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
-        .run(|_app, event| {
+        .run(|_app, event| match event {
             // Closing Settings must not quit a tray app; only "Quit Ferry" (an explicit exit code) does.
-            if let tauri::RunEvent::ExitRequested {
+            tauri::RunEvent::ExitRequested {
                 code: None, api, ..
-            } = event
-            {
-                api.prevent_exit();
-            }
+            } => api.prevent_exit(),
+            // Finder, Spotlight and `open Ferry.app` re-activate the running app instead of
+            // starting a second process, so single-instance never sees them.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => windows::open_settings(_app),
+            _ => {}
         });
 }

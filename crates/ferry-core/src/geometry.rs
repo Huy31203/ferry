@@ -36,6 +36,13 @@ pub fn place(area: Rect, size: (u32, u32), corner: Corner, margin: u32) -> (i32,
     (x as i32, y as i32)
 }
 
+/// `size` clamped so a window with `margin` pixels on every side still fits in
+/// `area`. Without this, a tall stack would run under the taskbar or off-screen.
+pub fn fit(area: Rect, size: (u32, u32), margin: u32) -> (u32, u32) {
+    let room = |extent: u32| extent.saturating_sub(margin.saturating_mul(2));
+    (size.0.min(room(area.width)), size.1.min(room(area.height)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +104,32 @@ mod tests {
             place(FULL_HD, (2000, 1200), Corner::BottomRight, 16),
             (0, 0)
         );
+    }
+
+    #[test]
+    fn fit_leaves_a_window_that_already_fits() {
+        assert_eq!(fit(FULL_HD, (300, 200), 16), (300, 200));
+    }
+
+    #[test]
+    fn fit_clamps_a_stack_taller_than_the_work_area() {
+        let above_taskbar = Rect {
+            height: 1032,
+            ..FULL_HD
+        };
+        // five 200 px cards plus gaps and padding are 1056 px tall
+        assert_eq!(fit(above_taskbar, (324, 1056), 4), (324, 1024));
+    }
+
+    #[test]
+    fn fit_clamps_width_and_never_underflows() {
+        let tiny = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        assert_eq!(fit(FULL_HD, (2000, 200), 16), (1888, 200));
+        assert_eq!(fit(tiny, (300, 200), 16), (0, 0));
     }
 }
