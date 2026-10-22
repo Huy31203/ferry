@@ -6,6 +6,7 @@
   import Card from './Card.svelte';
 
   let cards = $state<CardData[]>([]);
+  let hovered = $state<string | null>(null);
   let root = $state<HTMLDivElement>();
 
   // Ask Rust to fit the window to the stack; 0×0 hides it. getBoundingClientRect
@@ -25,15 +26,30 @@
     report();
   });
 
+  // Rust forwards the pointer because a never-key window gets no :hover. AppKit's
+  // y runs up from the window's bottom edge.
+  function pointAt(x: number, fromBottom: number) {
+    const el = document.elementFromPoint(x, window.innerHeight - fromBottom);
+    hovered = el?.closest<HTMLElement>('[data-card-id]')?.dataset.cardId ?? null;
+  }
+
   onMount(() => {
-    const unlisten = listen<CardData>('stack:test-card', (event) => {
-      cards = [...cards, event.payload];
-    });
+    const unlisten = Promise.all([
+      listen<CardData>('stack:test-card', (event) => {
+        cards = [...cards, event.payload];
+      }),
+      listen<{ x: number; fromBottom: number }>('stack:pointer', (event) =>
+        pointAt(event.payload.x, event.payload.fromBottom),
+      ),
+      listen('stack:pointer-leave', () => {
+        hovered = null;
+      }),
+    ]);
     const observer = new ResizeObserver(report);
     if (root) observer.observe(root);
     return () => {
       observer.disconnect();
-      unlisten.then((stop) => stop());
+      unlisten.then((stops) => stops.forEach((stop) => stop()));
     };
   });
 
@@ -44,7 +60,7 @@
 
 <div class="stack" bind:this={root}>
   {#each cards as card (card.id)}
-    <Card {card} onclose={() => close(card.id)} />
+    <Card {card} hovered={card.id === hovered} onclose={() => close(card.id)} />
   {/each}
 </div>
 
