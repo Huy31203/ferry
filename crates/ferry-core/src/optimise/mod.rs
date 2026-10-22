@@ -2,7 +2,7 @@
 //! the caller keeps the original unless the result is `Smaller`.
 
 mod gif;
-mod jpeg;
+pub(crate) mod jpeg;
 pub(crate) mod png;
 pub(crate) mod webp;
 
