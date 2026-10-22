@@ -105,6 +105,52 @@ pub fn gif_frame_count(bytes: &[u8]) -> usize {
 }
 
 /// Position after a run of GIF data sub-blocks that starts at `pos`.
+/// Whether every block is whole and the trailer is there. gifsicle only warns
+/// about a truncated GIF and pads the missing frame data, so the optimiser
+/// checks this first.
+pub fn gif_is_complete(bytes: &[u8]) -> bool {
+    let Some(&screen_flags) = bytes.get(10) else {
+        return false;
+    };
+    let mut pos = 13;
+    if screen_flags & 0x80 != 0 {
+        pos += 3 << ((screen_flags & 7) + 1);
+    }
+    loop {
+        let next = match bytes.get(pos) {
+            Some(0x3B) => return true,
+            Some(0x21) => whole_sub_blocks(bytes, pos + 2),
+            Some(0x2C) => {
+                let Some(&image_flags) = bytes.get(pos + 9) else {
+                    return false;
+                };
+                pos += 10;
+                if image_flags & 0x80 != 0 {
+                    pos += 3 << ((image_flags & 7) + 1);
+                }
+                whole_sub_blocks(bytes, pos + 1) // LZW minimum code size, then data
+            }
+            _ => None,
+        };
+        let Some(next) = next else {
+            return false;
+        };
+        pos = next;
+    }
+}
+
+/// The position after a chain of sub-blocks, or `None` if it runs off the end
+/// before its zero-length terminator.
+fn whole_sub_blocks(bytes: &[u8], mut pos: usize) -> Option<usize> {
+    loop {
+        let len = usize::from(*bytes.get(pos)?);
+        pos += 1 + len;
+        if len == 0 {
+            return Some(pos);
+        }
+    }
+}
+
 fn skip_sub_blocks(bytes: &[u8], mut pos: usize) -> usize {
     while let Some(&len) = bytes.get(pos) {
         pos += 1 + len as usize;
@@ -188,5 +234,16 @@ mod tests {
     #[test]
     fn jpeg_is_never_animated() {
         assert!(!is_animated(&[0xFF, 0xD8, 0xFF, 0xDB], Format::Jpeg));
+    }
+
+    #[test]
+    fn a_gif_is_complete_only_when_every_block_and_the_trailer_are_there() {
+        let full = crate::testutil::gif(2);
+        assert!(gif_is_complete(&full));
+        assert!(gif_is_complete(&crate::testutil::gif(1)));
+        for cut in [0, 6, 13, 100, full.len() / 2, full.len() - 1] {
+            assert!(!gif_is_complete(&full[..cut]), "cut at {cut}");
+        }
+        assert!(!gif_is_complete(b"not a gif"));
     }
 }

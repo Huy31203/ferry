@@ -3,6 +3,7 @@
 
 use super::{OptimiseError, OptimiseOptions, quality};
 use crate::sidecar::{self, DEFAULT_TIMEOUT, SidecarError};
+use crate::sniff::gif_is_complete;
 
 /// gifsicle `--lossy` strength for a quality: 0 at q100, 30 at q80, 90 at q40.
 fn lossy(q: u8) -> u32 {
@@ -10,6 +11,9 @@ fn lossy(q: u8) -> u32 {
 }
 
 pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    if !gif_is_complete(input) {
+        return Err(OptimiseError::Decode("the GIF is incomplete".into()));
+    }
     let Some(gifsicle) = &o.gifsicle else {
         return Err(OptimiseError::Unsupported(
             "gifsicle missing — reinstall Ferry".into(),
@@ -131,13 +135,30 @@ mod tests {
     }
 
     #[test]
-    fn garbage_is_an_encode_error() {
+    fn garbage_is_a_decode_error() {
         let Some(o) = with_gifsicle(OptimiseOptions::default()) else {
             return;
         };
         assert!(matches!(
             optimise(b"GIF89a-but-not-really", &o),
-            Err(OptimiseError::Encode(_))
+            Err(OptimiseError::Decode(_))
         ));
+    }
+
+    #[test]
+    fn a_gif_cut_short_is_refused_not_padded() {
+        // gifsicle exits 0 on a truncated file and pads the missing frame data.
+        let o = OptimiseOptions {
+            gifsicle: testutil::gifsicle(),
+            ..OptimiseOptions::default()
+        };
+        let full = testutil::gif(3);
+        for cut in [full.len() / 2, full.len() * 7 / 10, full.len() * 9 / 10] {
+            let err = optimise(&full[..cut], &o).unwrap_err();
+            assert!(
+                matches!(&err, OptimiseError::Decode(m) if m.contains("incomplete")),
+                "cut at {cut}: {err}"
+            );
+        }
     }
 }
