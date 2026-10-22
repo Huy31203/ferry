@@ -24,7 +24,7 @@
 - JPEG orientation is applied to pixels before cropping; the output carries orientation 1. ICC profiles are carried, never colour-converted. Alpha flattens onto white for JPEG.
 - Output locations apply to file jobs only; defaults: Optimised and Converted both In place, folder `~/Pictures/Ferry`, templates `%f_optimised.%e` and `%f.%e`. Settings `version` becomes 2.
 - User-visible files Ferry produced are moved to the Trash, never deleted. A Trash failure leaves the file and is logged by the app.
-- Subagents run on model `opus` (never `fable`).
+- Implementers run on model `sonnet`; plan writing and reviews run on `opus` (never `fable`).
 - Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Review Focus
