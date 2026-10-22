@@ -73,6 +73,18 @@ fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
     }
 }
 
+/// What to do to the login item: `Some(true)` to (re)write it, `Some(false)`
+/// to remove it, `None` for nothing. While wanted it is written at every start,
+/// because an item registered when the app ran from a DMG or Downloads keeps
+/// pointing there after the app is moved to /Applications.
+fn autostart_step(want: bool, enabled: bool) -> Option<bool> {
+    match (want, enabled) {
+        (true, _) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    }
+}
+
 /// Make the login item match `want`. Debug builds never touch it: the default
 /// is on, and a development run must not register `target/debug/ferry`.
 pub fn sync_autostart(app: &AppHandle, want: bool) {
@@ -81,16 +93,17 @@ pub fn sync_autostart(app: &AppHandle, want: bool) {
     }
     use tauri_plugin_autostart::ManagerExt;
     let launcher = app.autolaunch();
-    let result = match launcher.is_enabled() {
-        Ok(on) if on != want => {
-            if want {
-                launcher.enable()
-            } else {
-                launcher.disable()
-            }
+    let enabled = match launcher.is_enabled() {
+        Ok(on) => on,
+        Err(e) => {
+            warn!("could not read the login item: {e}");
+            return;
         }
-        Ok(_) => Ok(()),
-        Err(e) => Err(e),
+    };
+    let result = match autostart_step(want, enabled) {
+        Some(true) => launcher.enable(),
+        Some(false) => launcher.disable(),
+        None => Ok(()),
     };
     if let Err(e) = result {
         warn!("could not update the login item: {e}");
@@ -179,5 +192,14 @@ mod tests {
         s.floating.corner = ferry_core::settings::Corner::TopLeft;
         s.backups.retention_days = 30;
         assert_eq!(Effects::between(&base, &s), Effects::default());
+    }
+
+    #[test]
+    fn the_login_item_is_rewritten_at_every_start_while_wanted() {
+        // An existing item may point at an old location of the app (a DMG, Downloads).
+        assert_eq!(autostart_step(true, true), Some(true));
+        assert_eq!(autostart_step(true, false), Some(true));
+        assert_eq!(autostart_step(false, true), Some(false));
+        assert_eq!(autostart_step(false, false), None);
     }
 }
