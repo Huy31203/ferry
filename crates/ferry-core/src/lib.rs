@@ -18,6 +18,7 @@ pub mod sidecar;
 pub mod sniff;
 pub mod template;
 pub mod trigger;
+pub mod workdir;
 
 #[cfg(test)]
 mod testutil;
