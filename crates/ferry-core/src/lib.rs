@@ -4,6 +4,7 @@
 pub mod cancel;
 pub mod geometry;
 pub mod optimise;
+pub mod sidecar;
 pub mod sniff;
 
 #[cfg(test)]
