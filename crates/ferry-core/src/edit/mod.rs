@@ -1,6 +1,7 @@
 //! What a card asks for after the fact (spec §4.2): a recipe that every run
 //! applies to the backed-up original, so edits never compound or lose quality.
 
+pub mod fit;
 pub mod geometry;
 pub mod raster;
 pub mod smart;
