@@ -1,12 +1,35 @@
-/** A result card as sent by Rust. Sizes are bytes; `thumb` is an image URL or null. */
-export interface CardData {
+/** Mirrors ferry_core::job (Rust serialises with serde; sizes are bytes). */
+export type JobState =
+  | { kind: 'queued' }
+  | { kind: 'optimising'; progress: number; step: string }
+  | { kind: 'done' }
+  | { kind: 'already_optimal' }
+  | { kind: 'larger' }
+  | { kind: 'error'; reason: string }
+  | { kind: 'restored' };
+
+export interface JobUpdate {
   id: string;
+  state: JobState;
   name: string;
   ext: string;
   before: number;
-  after: number;
+  after: number | null;
   detail: string;
-  thumb: string | null;
+  thumb_path: string | null;
+  source: 'clipboard' | 'file';
+  can_restore: boolean;
+  can_retry: boolean;
+  output: string | null;
+}
+
+export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
+
+/** The floating-results settings the stack page needs (commands::stack_ready). */
+export interface StackConfig {
+  corner: Corner;
+  card_size: 'default' | 'compact';
+  auto_hide_secs: number;
 }
 
 export const isMac = navigator.userAgent.includes('Mac');

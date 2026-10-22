@@ -2,12 +2,18 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import type { CardData } from '../lib/ipc';
+  import { dragAllFiles, upsert } from '../lib/cards';
+  import type { JobUpdate, StackConfig } from '../lib/ipc';
   import Card from './Card.svelte';
+  import DragAllBar from './DragAllBar.svelte';
 
-  let cards = $state<CardData[]>([]);
+  let cards = $state<JobUpdate[]>([]);
+  let config = $state<StackConfig>({ corner: 'bottom_right', card_size: 'default', auto_hide_secs: 6 });
   let hovered = $state<string | null>(null);
   let root = $state<HTMLDivElement>();
+
+  const top = $derived(config.corner.startsWith('top'));
+  const railRight = $derived(config.corner.endsWith('left'));
 
   // Ask Rust to fit the window to the stack; 0×0 hides it. getBoundingClientRect
   // forces layout, so this works even while the window is still hidden.
@@ -34,9 +40,10 @@
   }
 
   onMount(() => {
+    // Listen first, then tell Rust we are ready, so no card falls in between.
     const unlisten = Promise.all([
-      listen<CardData>('stack:test-card', (event) => {
-        cards = [...cards, event.payload];
+      listen<JobUpdate>('job:update', (event) => {
+        cards = upsert(cards, event.payload);
       }),
       listen<{ x: number; fromBottom: number }>('stack:pointer', (event) =>
         pointAt(event.payload.x, event.payload.fromBottom),
@@ -44,7 +51,12 @@
       listen('stack:pointer-leave', () => {
         hovered = null;
       }),
-    ]);
+    ]).then(async (stops) => {
+      const [stackConfig, pending] = await invoke<[StackConfig, JobUpdate[]]>('stack_ready');
+      config = stackConfig;
+      for (const card of pending) cards = upsert(cards, card);
+      return stops;
+    });
     const observer = new ResizeObserver(report);
     if (root) observer.observe(root);
     return () => {
@@ -56,11 +68,26 @@
   function close(id: string) {
     cards = cards.filter((card) => card.id !== id);
   }
+
+  function clearAll() {
+    cards = [];
+    invoke('clear_all');
+  }
 </script>
 
-<div class="stack" bind:this={root}>
+<div class="stack" class:top bind:this={root}>
+  {#if cards.length > 1}
+    <DragAllBar files={dragAllFiles(cards)} onclear={clearAll} />
+  {/if}
   {#each cards as card (card.id)}
-    <Card {card} hovered={card.id === hovered} onclose={() => close(card.id)} />
+    <Card
+      {card}
+      hovered={card.id === hovered}
+      compact={config.card_size === 'compact'}
+      {railRight}
+      autoHideSecs={config.auto_hide_secs}
+      onclose={() => close(card.id)}
+    />
   {/each}
 </div>
 
@@ -78,6 +105,9 @@
     flex-direction: column;
     justify-content: flex-end;
     height: 100%;
+  }
+  :global(#app:has(.stack.top)) {
+    justify-content: flex-start;
   }
   .stack {
     flex-shrink: 0;
