@@ -32,6 +32,13 @@
     report();
   });
 
+  // A new corner or card size changes where the window sits and how big it is.
+  $effect(() => {
+    void config.corner;
+    void config.card_size;
+    report();
+  });
+
   // Rust forwards the pointer because a never-key window gets no :hover. AppKit's
   // y runs up from the window's bottom edge.
   function pointAt(x: number, fromBottom: number) {
@@ -50,6 +57,16 @@
       ),
       listen('stack:pointer-leave', () => {
         hovered = null;
+      }),
+      listen<{ floating: StackConfig }>('settings:changed', (event) => {
+        config = {
+          corner: event.payload.floating.corner,
+          card_size: event.payload.floating.card_size,
+          auto_hide_secs: event.payload.floating.auto_hide_secs,
+        };
+      }),
+      listen('stack:clear', () => {
+        cards = [];
       }),
     ]).then(async (stops) => {
       const [stackConfig, pending] = await invoke<[StackConfig, JobUpdate[]]>('stack_ready');

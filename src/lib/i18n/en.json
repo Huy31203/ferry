@@ -5,8 +5,6 @@
   "tray.about": "About Ferry",
   "tray.quit": "Quit Ferry",
   "settings.window_title": "Ferry Settings",
-  "settings.placeholder_title": "Settings",
-  "settings.placeholder_body": "Settings panes arrive in the next milestone.",
   "card.aria": "{name}, {state}",
   "stack.window_title": "Ferry results",
   "card.state.done": "optimised",
