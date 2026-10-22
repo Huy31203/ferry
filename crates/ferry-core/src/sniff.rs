@@ -161,9 +161,110 @@ fn skip_sub_blocks(bytes: &[u8], mut pos: usize) -> usize {
     pos
 }
 
+/// Width and height from the header alone, without decoding; `None` when the
+/// header is cut short or not where the format puts it.
+pub fn dimensions(bytes: &[u8], format: Format) -> Option<(u32, u32)> {
+    match format {
+        Format::Png => Some((be32(bytes, 16)?, be32(bytes, 20)?)),
+        Format::Gif => Some((le16(bytes, 6)?, le16(bytes, 8)?)),
+        Format::Jpeg => jpeg_dimensions(bytes),
+        Format::WebP => webp_dimensions(bytes),
+    }
+}
+
+fn be32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+fn be16(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?).into())
+}
+
+fn le16(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?).into())
+}
+
+fn le24(bytes: &[u8], at: usize) -> Option<u32> {
+    let b = bytes.get(at..at + 3)?;
+    Some(u32::from(b[0]) | u32::from(b[1]) << 8 | u32::from(b[2]) << 16)
+}
+
+/// The size in the first start-of-frame segment (SOF0 to SOF15, except the
+/// DHT, JPG and DAC markers that share that range).
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let mut pos = 2;
+    loop {
+        if *bytes.get(pos)? != 0xFF {
+            return None;
+        }
+        let marker = *bytes.get(pos + 1)?;
+        match marker {
+            0xFF => pos += 1,               // fill byte
+            0x01 | 0xD0..=0xD8 => pos += 2, // no length
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                return Some((be16(bytes, pos + 7)?, be16(bytes, pos + 5)?));
+            }
+            _ => pos += 2 + be16(bytes, pos + 2)? as usize,
+        }
+    }
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match bytes.get(12..16)? {
+        b"VP8X" => Some((le24(bytes, 24)? + 1, le24(bytes, 27)? + 1)),
+        // Lossless: a 0x2F signature, then 14-bit width − 1 and height − 1.
+        b"VP8L" if *bytes.get(20)? == 0x2F => {
+            let bits = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
+            Some(((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1))
+        }
+        // Lossy: a 3-byte frame tag and the 9D 01 2A start code, then 14-bit sizes.
+        b"VP8 " if bytes.get(23..26)? == [0x9D, 0x01, 0x2A] => {
+            Some((le16(bytes, 26)? & 0x3FFF, le16(bytes, 28)? & 0x3FFF))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dimensions_come_from_the_header_of_every_format() {
+        use crate::{optimise::webp::Extras, testutil};
+        assert_eq!(
+            dimensions(&testutil::png(37, 21), Format::Png),
+            Some((37, 21))
+        );
+        assert_eq!(dimensions(&testutil::gif(1), Format::Gif), Some((64, 48)));
+        let jpeg = testutil::jpeg(
+            50,
+            30,
+            80,
+            &testutil::JpegExtras {
+                exif: Some(testutil::exif_with_orientation(6, 100)),
+                ..Default::default()
+            },
+        );
+        assert_eq!(dimensions(&jpeg, Format::Jpeg), Some((50, 30)));
+        let lossy = testutil::webp(41, 19, 80, &Extras::default());
+        assert_eq!(dimensions(&lossy, Format::WebP), Some((41, 19)));
+        let alpha = testutil::webp_with_transparent_corner(40, 22);
+        assert_eq!(dimensions(&alpha, Format::WebP), Some((40, 22)));
+        let rgba = testutil::screenshot_rgba(33, 17);
+        let lossless = webp::Encoder::from_rgba(&rgba, 33, 17)
+            .encode_lossless()
+            .to_vec();
+        assert_eq!(dimensions(&lossless, Format::WebP), Some((33, 17)));
+    }
+
+    #[test]
+    fn dimensions_of_a_cut_header_are_unknown() {
+        let png = crate::testutil::png(8, 8);
+        assert_eq!(dimensions(&png[..20], Format::Png), None);
+        assert_eq!(dimensions(b"\xFF\xD8\xFF\xE0\x00", Format::Jpeg), None);
+        assert_eq!(dimensions(b"RIFF\0\0\0\0WEBPVP8 ", Format::WebP), None);
+    }
 
     #[test]
     fn detects_png() {
