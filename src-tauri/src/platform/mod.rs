@@ -7,7 +7,6 @@ pub mod clipboard;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-#[allow(unused_imports)] // accent_rgb, app_identifier: used from Task 7
 pub use macos::{accent_rgb, app_identifier, hide, make_non_activating, show_without_focus};
 
 #[cfg(windows)]

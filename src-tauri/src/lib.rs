@@ -51,6 +51,15 @@ pub fn run() {
             commands::card_reveal,
             commands::open_log,
             commands::clear_all,
+            commands::settings_get,
+            commands::settings_set,
+            commands::template_preview,
+            commands::tray_style_previews,
+            commands::accent_color,
+            commands::pick_app,
+            commands::open_backups,
+            commands::open_work,
+            commands::force_clean,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")

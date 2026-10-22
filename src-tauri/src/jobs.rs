@@ -131,6 +131,46 @@ pub fn output(app: &AppHandle, id: &JobId) -> Option<std::path::PathBuf> {
     path.exists().then_some(path)
 }
 
+/// "Force clean working directory" (§5.6): delete the working files of every
+/// finished job and forget those jobs (their cards and Recent results), keeping
+/// what queued or running jobs still use. Backups are untouched.
+pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, String> {
+    let state = app.state::<AppState>();
+    let (keep, busy) = {
+        let mut jobs = state.jobs.lock().unwrap();
+        jobs.retain(|_, entry| entry.is_busy());
+        let keep: Vec<std::path::PathBuf> = jobs.values().map(|e| e.output.clone()).collect();
+        let busy: Vec<JobUpdate> = jobs
+            .values()
+            .map(|e| e.last.lock().unwrap().clone())
+            .collect();
+        (keep, busy)
+    };
+    state.recent.lock().unwrap().clear();
+    state
+        .clipboard
+        .lock()
+        .unwrap()
+        .accumulated
+        .retain(|f| keep.contains(f));
+    let report = ferry_core::workdir::clean(&state.work_dir, &keep).map_err(|e| e.to_string())?;
+    info!(
+        files = report.files,
+        bytes = report.bytes,
+        "working directory cleaned"
+    );
+    // Empty the stack, then put back the cards of the jobs that carry on.
+    state.stack.lock().unwrap().pending.clear();
+    if let Err(e) = app.emit_to(STACK, "stack:clear", ()) {
+        warn!("could not clear the stack: {e}");
+    }
+    for card in busy {
+        show(app, card);
+    }
+    tray::rebuild(app);
+    Ok(report)
+}
+
 /// Send a card to the stack, or hold it until the stack page is listening.
 pub fn show(app: &AppHandle, update: JobUpdate) {
     let state = app.state::<AppState>();

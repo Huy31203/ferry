@@ -95,7 +95,6 @@ pub fn hide(window: &WebviewWindow) -> tauri::Result<()> {
 }
 
 /// The user's accent colour (System Settings → Appearance), in sRGB.
-#[allow(dead_code)] // used from Task 7
 pub fn accent_rgb() -> Option<(u8, u8, u8)> {
     use objc2_app_kit::{NSColor, NSColorSpace};
     let color = NSColor::controlAccentColor();
@@ -110,7 +109,6 @@ pub fn accent_rgb() -> Option<(u8, u8, u8)> {
 
 /// The bundle identifier of the `.app` at `path`, which is what the clipboard
 /// snapshot reports as its source app.
-#[allow(dead_code)] // used from Task 7
 pub fn app_identifier(path: &Path) -> Option<String> {
     use objc2_foundation::{NSBundle, NSString};
     let bundle = NSBundle::bundleWithPath(&NSString::from_str(path.to_str()?))?;
