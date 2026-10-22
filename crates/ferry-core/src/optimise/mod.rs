@@ -4,6 +4,7 @@
 mod png;
 mod jpeg;
 pub(crate) mod webp;
+mod gif;
 
 use std::{fmt, path::PathBuf};
 

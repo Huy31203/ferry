@@ -248,3 +248,22 @@ pub fn webp_with_transparent_corner(w: u32, h: u32) -> Vec<u8> {
     }
     webp::Encoder::from_rgba(&rgba, w, h).encode(95.0).to_vec()
 }
+
+/// `FERRY_GIFSICLE` (the sidecar's path), when it is set and exists. GIF tests
+/// skip without it; CI sets it and fails if it is missing.
+pub fn gifsicle() -> Option<std::path::PathBuf> {
+    std::env::var_os("FERRY_GIFSICLE")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
+}
+
+/// Insert a comment extension right after the global colour table.
+pub fn with_gif_comment(gif: &[u8], text: &str) -> Vec<u8> {
+    let at = 13 + 768; // header + screen descriptor + 256-colour table
+    let mut out = gif[..at].to_vec();
+    out.extend_from_slice(&[0x21, 0xFE, text.len() as u8]);
+    out.extend_from_slice(text.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&gif[at..]);
+    out
+}
