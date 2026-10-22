@@ -1,0 +1,510 @@
+//! `settings.json`: the model with its defaults (spec §5.7), tolerant loading
+//! and an atomic save. Unknown fields at any level survive a load and save, so
+//! a newer or hand-edited file loses nothing.
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use crate::fsutil;
+
+pub const VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub version: u32,
+    pub general: General,
+    pub clipboard: Clipboard,
+    pub images: Images,
+    pub floating: Floating,
+    pub backups: Backups,
+    pub hotkeys: Hotkeys,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartState {
+    Running,
+    Paused,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrayStyle {
+    Default,
+    Classic,
+    Flat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardSize {
+    Default,
+    Compact,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct General {
+    pub launch_at_login: bool,
+    pub start_state: StartState,
+    pub show_dock_icon: bool,
+    pub show_in_screenshots: bool,
+    pub tray_style: TrayStyle,
+    pub language: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Clipboard {
+    pub enabled: bool,
+    pub skip_multiple_files: bool,
+    pub max_size_mb: u32,
+    pub ignored_apps: Vec<String>,
+    pub accumulate: bool,
+    pub copy_paths: bool,
+    pub file_template: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Images {
+    /// 5 to 100; the encoders' quality `q`.
+    pub compression: u8,
+    /// Stored and shown, but no effect this cycle ("Coming soon").
+    pub adaptive: bool,
+    /// Stored and shown, but no effect this cycle ("Coming soon").
+    pub switch_png_jpeg: bool,
+    pub strip_metadata: bool,
+    pub preserve_dates: bool,
+    pub ignored_extensions: Vec<String>,
+    pub max_size_mb: u32,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Floating {
+    pub enabled: bool,
+    pub corner: Corner,
+    pub card_size: CardSize,
+    /// Seconds before a card hides; `0` keeps it until dismissed.
+    pub auto_hide_secs: u32,
+    pub follow_cursor: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Backups {
+    pub retention_days: u32,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hotkeys {
+    pub optimise: String,
+    pub aggressive: String,
+    pub cycle_state: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Hotkeys {
+    /// `Ctrl+Shift+C/A/P` on macOS; Windows adds Alt because Ctrl+Shift+C opens
+    /// browser dev tools.
+    pub fn for_platform(mac: bool) -> Self {
+        let modifiers = if mac { "Ctrl+Shift" } else { "Ctrl+Alt+Shift" };
+        Self {
+            optimise: format!("{modifiers}+C"),
+            aggressive: format!("{modifiers}+A"),
+            cycle_state: format!("{modifiers}+P"),
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Hotkeys {
+    fn default() -> Self {
+        Self::for_platform(cfg!(target_os = "macos"))
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            version: VERSION,
+            general: General::default(),
+            clipboard: Clipboard::default(),
+            images: Images::default(),
+            floating: Floating::default(),
+            backups: Backups::default(),
+            hotkeys: Hotkeys::default(),
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            launch_at_login: true,
+            start_state: StartState::Running,
+            show_dock_icon: false,
+            show_in_screenshots: false,
+            tray_style: TrayStyle::Default,
+            language: "en".into(),
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Clipboard {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            skip_multiple_files: true,
+            max_size_mb: 50,
+            ignored_apps: Vec::new(),
+            accumulate: false,
+            copy_paths: false,
+            file_template: "%f".into(),
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Images {
+    fn default() -> Self {
+        Self {
+            compression: 80,
+            adaptive: false,
+            switch_png_jpeg: false,
+            strip_metadata: true,
+            preserve_dates: true,
+            ignored_extensions: Vec::new(),
+            max_size_mb: 50,
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Floating {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            corner: Corner::BottomRight,
+            card_size: CardSize::Default,
+            auto_hide_secs: 6,
+            follow_cursor: true,
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Backups {
+    fn default() -> Self {
+        Self {
+            retention_days: 7,
+            extra: Map::new(),
+        }
+    }
+}
+
+/// How `Settings::load` found the file.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LoadStatus {
+    Loaded,
+    Missing,
+    /// The file could not be parsed. Defaults are in use; `backup` is where the
+    /// unreadable file was copied, or `None` if that copy failed too.
+    Recovered {
+        backup: Option<PathBuf>,
+    },
+}
+
+impl Settings {
+    /// Read `path`. A missing file gives defaults; a corrupt one gives defaults
+    /// and is copied to `<path>.bak` first. Out-of-range values are clamped.
+    pub fn load(path: &Path) -> (Settings, LoadStatus) {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return (Settings::default(), LoadStatus::Missing);
+            }
+            Err(_) => return (Settings::default(), recover(path)),
+        };
+        match serde_json::from_slice::<Settings>(&bytes) {
+            Ok(settings) => (settings.clamped(), LoadStatus::Loaded),
+            Err(_) => (Settings::default(), recover(path)),
+        }
+    }
+
+    /// Write the file atomically, creating its folder if needed.
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let json = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        fsutil::atomic_replace(path, &json)
+    }
+
+    /// A hand-edited file must not turn the encoders or the size limit into nonsense.
+    fn clamped(mut self) -> Self {
+        self.images.compression = self.images.compression.clamp(5, 100);
+        self.images.max_size_mb = self.images.max_size_mb.max(1);
+        self.clipboard.max_size_mb = self.clipboard.max_size_mb.max(1);
+        self
+    }
+}
+
+fn recover(path: &Path) -> LoadStatus {
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(".bak");
+    let backup = path.with_file_name(name);
+    let backup = fs::copy(path, &backup).is_ok().then_some(backup);
+    LoadStatus::Recovered { backup }
+}
+
+/// Expand a leading `~` using `home`. Anything else is returned unchanged.
+pub fn expand_home(path: &str, home: &Path) -> PathBuf {
+    match path.strip_prefix('~') {
+        Some("") => home.to_owned(),
+        Some(rest) if rest.starts_with(['/', '\\']) => home.join(&rest[1..]),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// Store `path` with a leading `~` when it is inside `home`, so a settings file
+/// synced to another account still points at that account's folders.
+pub fn contract_home(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Ok(rest) => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn defaults_match_the_spec() {
+        let s = Settings::default();
+        assert_eq!(s.version, 1);
+        assert_eq!(s.images.compression, 80);
+        assert!(s.images.strip_metadata && s.images.preserve_dates);
+        assert_eq!(s.clipboard.file_template, "%f");
+        assert_eq!(s.clipboard.max_size_mb, 50);
+        assert_eq!(s.floating.corner, Corner::BottomRight);
+        assert_eq!(s.floating.auto_hide_secs, 6);
+        assert_eq!(s.backups.retention_days, 7);
+        assert_eq!(s.general.start_state, StartState::Running);
+        assert!(!s.general.show_in_screenshots);
+    }
+
+    #[test]
+    fn hotkeys_default_per_platform() {
+        let mac = Hotkeys::for_platform(true);
+        assert_eq!(
+            (
+                mac.optimise.as_str(),
+                mac.aggressive.as_str(),
+                mac.cycle_state.as_str()
+            ),
+            ("Ctrl+Shift+C", "Ctrl+Shift+A", "Ctrl+Shift+P")
+        );
+        assert_eq!(Hotkeys::for_platform(false).optimise, "Ctrl+Alt+Shift+C");
+        assert_eq!(Hotkeys::for_platform(false).cycle_state, "Ctrl+Alt+Shift+P");
+    }
+
+    #[test]
+    fn a_missing_file_gives_defaults_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let (settings, status) = Settings::load(&path);
+        assert_eq!(settings, Settings::default());
+        assert_eq!(status, LoadStatus::Missing);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn missing_fields_take_their_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"images": {"compression": 60}, "floating": {"corner": "top_left"}}"#,
+        )
+        .unwrap();
+        let (settings, status) = Settings::load(&path);
+        assert_eq!(status, LoadStatus::Loaded);
+        assert_eq!(settings.images.compression, 60);
+        assert!(
+            settings.images.strip_metadata,
+            "sibling field keeps its default"
+        );
+        assert_eq!(settings.floating.corner, Corner::TopLeft);
+        assert_eq!(settings.clipboard, Clipboard::default());
+    }
+
+    #[test]
+    fn unknown_fields_survive_a_load_and_save_at_every_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"future": {"a": 1}, "images": {"compression": 70, "sharpen": true},
+                "hotkeys": {"paste_special": "Ctrl+Alt+V"}}"#,
+        )
+        .unwrap();
+        let (settings, _) = Settings::load(&path);
+        settings.save(&path).unwrap();
+        let saved = read_json(&path);
+        assert_eq!(saved["future"], json!({"a": 1}));
+        assert_eq!(saved["images"]["sharpen"], json!(true));
+        assert_eq!(saved["images"]["compression"], json!(70));
+        assert_eq!(saved["hotkeys"]["paste_special"], json!("Ctrl+Alt+V"));
+        assert_eq!(
+            saved["images"]["strip_metadata"],
+            json!(true),
+            "defaults are written out"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_file_gives_defaults_and_keeps_a_bak_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, b"{ not json").unwrap();
+        let (settings, status) = Settings::load(&path);
+        assert_eq!(settings, Settings::default());
+        let bak = dir.path().join("settings.json.bak");
+        assert_eq!(
+            status,
+            LoadStatus::Recovered {
+                backup: Some(bak.clone())
+            }
+        );
+        assert_eq!(fs::read(bak).unwrap(), b"{ not json");
+    }
+
+    #[test]
+    fn an_empty_file_and_a_non_object_count_as_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for content in ["", "[]", "42", r#"{"images": {"compression": "high"}}"#] {
+            fs::write(&path, content).unwrap();
+            let (settings, status) = Settings::load(&path);
+            assert_eq!(settings, Settings::default(), "{content:?}");
+            assert!(
+                matches!(status, LoadStatus::Recovered { .. }),
+                "{content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn out_of_range_values_are_clamped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"images": {"compression": 0, "max_size_mb": 0}, "clipboard": {"max_size_mb": 0}}"#,
+        )
+        .unwrap();
+        let (settings, status) = Settings::load(&path);
+        assert_eq!(status, LoadStatus::Loaded);
+        assert_eq!(settings.images.compression, 5);
+        assert_eq!(settings.images.max_size_mb, 1);
+        assert_eq!(settings.clipboard.max_size_mb, 1);
+        fs::write(&path, r#"{"images": {"compression": 200}}"#).unwrap();
+        assert_eq!(Settings::load(&path).0.images.compression, 100);
+    }
+
+    #[test]
+    fn save_creates_the_folder_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config/ferry/settings.json");
+        Settings::default().save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path),
+            (Settings::default(), LoadStatus::Loaded)
+        );
+        assert!(
+            !dir.path()
+                .join("config/ferry/settings.json.ferry-tmp")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn a_changed_setting_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut settings = Settings::default();
+        settings.images.compression = 55;
+        settings.clipboard.ignored_apps = vec!["com.1password.1password".into()];
+        settings.floating.card_size = CardSize::Compact;
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).0, settings);
+    }
+
+    #[test]
+    fn home_is_stored_as_a_tilde_and_expanded_back() {
+        let home = Path::new("/Users/gos");
+        assert_eq!(
+            contract_home(Path::new("/Users/gos/Pictures/x"), home),
+            "~/Pictures/x"
+        );
+        assert_eq!(contract_home(Path::new("/Users/gos"), home), "~");
+        assert_eq!(
+            contract_home(Path::new("/Volumes/Photos"), home),
+            "/Volumes/Photos"
+        );
+        assert_eq!(
+            contract_home(Path::new("/Users/gosling/x"), home),
+            "/Users/gosling/x"
+        );
+        assert_eq!(
+            expand_home("~/Pictures/x", home),
+            Path::new("/Users/gos/Pictures/x")
+        );
+        assert_eq!(expand_home("~", home), Path::new("/Users/gos"));
+        assert_eq!(
+            expand_home("/Volumes/Photos", home),
+            Path::new("/Volumes/Photos")
+        );
+        assert_eq!(expand_home("~other/x", home), Path::new("~other/x"));
+    }
+}

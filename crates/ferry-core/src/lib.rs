@@ -6,6 +6,7 @@ pub mod cancel;
 pub mod fsutil;
 pub mod geometry;
 pub mod optimise;
+pub mod settings;
 pub mod sidecar;
 pub mod sniff;
 pub mod template;
