@@ -441,13 +441,22 @@
     align-items: center;
     min-width: 0;
   }
+  /* Both chips are 20px tall with their text centred, so "png" lines up with the name. */
+  .name,
+  .ext {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    height: 20px;
+    line-height: 1;
+    border-radius: 999px;
+  }
   .name {
     min-width: 0;
     flex-shrink: 1;
     background: rgba(255, 255, 255, 0.16);
     font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 999px;
+    padding: 0 8px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -457,8 +466,7 @@
     border: 1px solid rgba(255, 255, 255, 0.45);
     font-size: 11px;
     font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 999px;
+    padding: 0 7px;
   }
   .line {
     display: flex;
