@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::fsutil;
+use crate::{edit, fsutil, template};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -99,8 +99,67 @@ pub struct Images {
     pub preserve_dates: bool,
     pub ignored_extensions: Vec<String>,
     pub max_size_mb: u32,
+    pub output: Output,
+    /// Saved crop sizes, newest first.
+    pub crop_sizes: Vec<(u32, u32)>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// Where a file job's result goes (spec §4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Location {
+    InPlace,
+    SameFolder,
+    Folder,
+    Temporary,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputRule {
+    pub location: Location,
+    /// Used by `Folder`; stored with `~` (see `contract_home`).
+    pub folder: String,
+    /// File name only: `%f %e %z %y %m %d %P`.
+    pub template: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for OutputRule {
+    fn default() -> Self {
+        Self {
+            location: Location::InPlace,
+            folder: "~/Pictures/Ferry".into(),
+            template: "%f.%e".into(),
+            extra: Map::new(),
+        }
+    }
+}
+
+/// Images row of the File handling pane: optimised results and conversions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Output {
+    pub optimised: OutputRule,
+    pub converted: OutputRule,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for Output {
+    fn default() -> Self {
+        Self {
+            optimised: OutputRule {
+                template: "%f_optimised.%e".into(),
+                ..OutputRule::default()
+            },
+            converted: OutputRule::default(),
+            extra: Map::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,6 +171,8 @@ pub struct Floating {
     /// Seconds before a card hides; `0` keeps it until dismissed.
     pub auto_hide_secs: u32,
     pub follow_cursor: bool,
+    /// Space, Cmd/Ctrl+D, - and 1–9 act on the hovered card.
+    pub hover_hotkeys: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -208,6 +269,8 @@ impl Default for Images {
             preserve_dates: true,
             ignored_extensions: Vec::new(),
             max_size_mb: 50,
+            output: Output::default(),
+            crop_sizes: vec![(1200, 628), (1080, 1080), (1920, 1080), (1280, 720)],
             extra: Map::new(),
         }
     }
@@ -221,6 +284,7 @@ impl Default for Floating {
             card_size: CardSize::Default,
             auto_hide_secs: 6,
             follow_cursor: true,
+            hover_hotkeys: true,
             extra: Map::new(),
         }
     }
@@ -291,6 +355,23 @@ impl Settings {
                 .filter(|item| !item.is_empty())
                 .collect();
         }
+        let defaults = Output::default();
+        for (rule, default) in [
+            (&mut self.images.output.optimised, &defaults.optimised),
+            (&mut self.images.output.converted, &defaults.converted),
+        ] {
+            if rule.template.trim().is_empty() || template::validate(&rule.template).is_err() {
+                rule.template = default.template.clone();
+            }
+            if rule.folder.trim().is_empty() {
+                rule.folder = default.folder.clone();
+            }
+        }
+        let side = 1..=edit::MAX_SIDE;
+        self.images
+            .crop_sizes
+            .retain(|(w, h)| side.contains(w) && side.contains(h));
+        self.version = self.version.max(VERSION);
         self
     }
 }
@@ -334,7 +415,7 @@ mod tests {
     #[test]
     fn defaults_match_the_spec() {
         let s = Settings::default();
-        assert_eq!(s.version, 1);
+        assert_eq!(s.version, 2);
         assert_eq!(s.images.compression, 80);
         assert!(s.images.strip_metadata && s.images.preserve_dates);
         assert_eq!(s.clipboard.file_template, "%f");
@@ -541,5 +622,55 @@ mod tests {
             s.clipboard.ignored_apps,
             vec!["com.example.App".to_string()]
         );
+    }
+
+    #[test]
+    fn cycle_2_defaults_match_the_spec() {
+        let s = Settings::default();
+        assert_eq!(
+            serde_json::to_value(&s.images.output).unwrap(),
+            json!({
+                "optimised": { "location": "in_place", "folder": "~/Pictures/Ferry", "template": "%f_optimised.%e" },
+                "converted": { "location": "in_place", "folder": "~/Pictures/Ferry", "template": "%f.%e" }
+            })
+        );
+        assert_eq!(
+            s.images.crop_sizes,
+            [(1200, 628), (1080, 1080), (1920, 1080), (1280, 720)]
+        );
+        assert!(s.floating.hover_hotkeys);
+    }
+
+    #[test]
+    fn a_version_1_file_loads_as_version_2_with_the_new_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"version": 1, "images": {"compression": 70}}"#).unwrap();
+        let (settings, _) = Settings::load(&path);
+        assert_eq!(settings.version, 2);
+        assert_eq!(settings.images.compression, 70);
+        assert_eq!(settings.images.output, Output::default());
+        assert!(settings.floating.hover_hotkeys);
+    }
+
+    #[test]
+    fn broken_output_rules_and_crop_sizes_are_repaired() {
+        let mut s = Settings::default();
+        s.images.output.optimised.template = "%q".into();
+        s.images.output.converted.template = "  ".into();
+        s.images.output.converted.folder = String::new();
+        s.images.crop_sizes = vec![(0, 100), (1200, 628), (40_000, 10)];
+        let s = s.sanitised();
+        let defaults = Output::default();
+        assert_eq!(
+            s.images.output.optimised.template,
+            defaults.optimised.template
+        );
+        assert_eq!(
+            s.images.output.converted.template,
+            defaults.converted.template
+        );
+        assert_eq!(s.images.output.converted.folder, defaults.converted.folder);
+        assert_eq!(s.images.crop_sizes, [(1200, 628)]);
     }
 }
