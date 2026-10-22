@@ -3,11 +3,11 @@
 //! results on the clipboard and sends `job:update` to the stack.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use ferry_core::cancel::CancelToken;
-use ferry_core::i18n::t;
+use ferry_core::i18n::{t, tf};
 use ferry_core::job::{JobId, JobState, JobUpdate, Source};
 use ferry_core::optimise::Level;
 use ferry_core::pipeline::{self, Job, RunOptions};
@@ -15,30 +15,29 @@ use ferry_core::sniff::Format;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
-use crate::state::{AppState, Entry};
+use crate::state::{AppState, Entry, output_busy, relock};
 use crate::{platform, tray, windows::STACK};
 
 /// Show the job's Queued card now (NFR-P3) and run it when a worker is free.
 /// `source_seq` is the clipboard copy a clipboard job came from; its first run
 /// leaves the result off the clipboard if the user has copied something since.
-pub fn start(app: &AppHandle, job: Job, level: Level, source_seq: Option<u64>) {
+/// Returns false, starting nothing, when a queued or running job already
+/// writes the same file: two writers would share one temporary file.
+pub fn start(app: &AppHandle, job: Job, level: Level, source_seq: Option<u64>) -> bool {
     let state = app.state::<AppState>();
     let queued = job.update(JobState::Queued, None);
-    let entry = Arc::new(Entry {
-        output: job.output.clone(),
-        source_seq: Mutex::new(source_seq),
-        job: Mutex::new(job),
-        cancel: Mutex::new(CancelToken::new()),
-        last: Mutex::new(queued.clone()),
-    });
-    state
-        .jobs
-        .lock()
-        .unwrap()
-        .insert(queued.id.clone(), entry.clone());
+    let entry = Arc::new(Entry::new(job, source_seq, queued.clone()));
+    {
+        let mut jobs = state.jobs.lock().unwrap();
+        if output_busy(&jobs, &entry) {
+            return false;
+        }
+        jobs.insert(queued.id.clone(), entry.clone());
+    }
     show(app, queued);
     tray::refresh(app);
     spawn(app, entry, level);
+    true
 }
 
 /// Show a card that is not a job, such as "Nothing to optimise on the clipboard".
@@ -52,7 +51,7 @@ pub fn notice(app: &AppHandle, reason: String) {
 pub fn rerun(app: &AppHandle, id: &JobId, aggressive: bool) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let (queued, level) = {
-        let job = entry.job.lock().unwrap();
+        let job = relock(&entry.job);
         let level = if aggressive {
             Level::Aggressive
         } else {
@@ -61,7 +60,7 @@ pub fn rerun(app: &AppHandle, id: &JobId, aggressive: bool) -> Result<(), String
         (job.update(JobState::Queued, None), level)
     };
     *entry.cancel.lock().unwrap() = CancelToken::new();
-    *entry.last.lock().unwrap() = queued.clone();
+    entry.begin_rerun(queued.clone());
     show(app, queued);
     tray::refresh(app);
     spawn(app, entry, level);
@@ -72,13 +71,9 @@ pub fn rerun(app: &AppHandle, id: &JobId, aggressive: bool) -> Result<(), String
 pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let options = run_options(app, CancelToken::new());
-    let finished = entry
-        .job
-        .lock()
-        .unwrap()
-        .restore(&options, &mut |format, bytes, file| {
-            deliver(app, format, bytes, file, None)
-        });
+    let finished = relock(&entry.job).restore(&options, &mut |format, bytes, file| {
+        deliver(app, format, bytes, file, None)
+    });
     finish(app, &entry, finished.update, finished.cause, None);
     Ok(())
 }
@@ -86,7 +81,7 @@ pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
 /// Copy the card's result again: the image for a clipboard job, the file for a file job.
 pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
-    let job = entry.job.lock().unwrap();
+    let job = relock(&entry.job);
     let state = app.state::<AppState>();
     let copy_paths = state.settings.read().unwrap().clipboard.copy_paths;
     let mut log = state.clipboard.lock().unwrap();
@@ -102,11 +97,29 @@ pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
     Ok(())
 }
 
-/// Stop a queued or running job; its card is already gone and nothing changes.
+/// Stop a queued or running job and leave its file as it was. A first run's
+/// card is already gone; a cancelled re-run goes back to the earlier result's
+/// card, which keeps its Restore.
 pub fn cancel(app: &AppHandle, id: &JobId) {
     let state = app.state::<AppState>();
-    if let Some(entry) = state.jobs.lock().unwrap().remove(id) {
+    let back = {
+        let mut jobs = state.jobs.lock().unwrap();
+        let Some(entry) = jobs.get(id).cloned() else {
+            return;
+        };
         entry.cancel.lock().unwrap().cancel();
+        let back = if entry.is_busy() {
+            entry.cancel_back()
+        } else {
+            None
+        };
+        if back.is_none() {
+            jobs.remove(id);
+        }
+        back
+    };
+    if let Some(card) = back {
+        show(app, card);
     }
     tray::refresh(app);
 }
@@ -186,7 +199,7 @@ fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
         // A panic in an encoder must still end the job (spec §6).
         if let Err(e) = joined {
             let update = {
-                let job = entry.job.lock().unwrap_or_else(|p| p.into_inner());
+                let job = relock(&entry.job);
                 job.update(
                     JobState::Error {
                         reason: t("error.unexpected"),
@@ -200,9 +213,9 @@ fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
 }
 
 fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
-    let options = run_options(app, cancel);
+    let options = run_options(app, cancel.clone());
     let started = Instant::now();
-    let mut job = entry.job.lock().unwrap();
+    let mut job = relock(&entry.job);
     info!(
         job = job.id.as_str(),
         source = ?job.source,
@@ -219,6 +232,10 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
         &options,
         &state.backups,
         &mut |update| {
+            // A cancelled job's card has already been dealt with.
+            if cancel.is_cancelled() {
+                return;
+            }
             *entry.last.lock().unwrap() = update.clone();
             show(app, update);
         },
@@ -278,6 +295,9 @@ fn idle_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
     if entry.is_busy() {
         return Err("the job is still running".into());
     }
+    if output_busy(&state.jobs.lock().unwrap(), &entry) {
+        return Err(tf("error.busy", &[("name", &entry_name(&entry))]));
+    }
     Ok(entry)
 }
 
@@ -287,10 +307,11 @@ fn run_options(app: &AppHandle, cancel: CancelToken) -> RunOptions {
     RunOptions::new(&settings, state.gifsicle.clone(), cancel)
 }
 
-/// True when a queued or running file job already targets `path`; two writers
-/// would share one temporary file.
-pub fn is_busy_path(app: &AppHandle, path: &Path) -> bool {
-    let state = app.state::<AppState>();
-    let jobs = state.jobs.lock().unwrap();
-    jobs.values().any(|e| e.is_busy() && e.output == path)
+fn entry_name(entry: &Entry) -> String {
+    entry
+        .output
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
