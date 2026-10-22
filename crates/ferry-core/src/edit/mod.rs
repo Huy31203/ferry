@@ -8,8 +8,11 @@ pub mod smart;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::optimise::Level;
-use crate::sniff::Format;
+use crate::i18n::tf;
+use crate::optimise::{self, Level, OptimiseError, OptimiseOptions, gif};
+use crate::sniff::{self, Format};
+use geometry::Rect;
+use raster::Raster;
 
 /// The largest width, height or long edge a card may ask for.
 pub const MAX_SIDE: u32 = 30_000;
@@ -175,6 +178,156 @@ where
     Option::<T>::deserialize(d).map(Some)
 }
 
+/// What `apply` made: the bytes, their format and size, and whether a
+/// fit-under-size target was out of reach.
+#[derive(Debug)]
+pub struct Applied {
+    pub bytes: Vec<u8>,
+    pub format: Format,
+    pub dims: (u32, u32),
+    pub missed_target: bool,
+}
+
+/// Run the whole recipe on the original (spec §4.2). `o` carries the
+/// settings; the recipe's level and compression override them.
+pub fn apply(
+    original: &[u8],
+    source: Format,
+    edits: &Edits,
+    o: &OptimiseOptions,
+) -> Result<Applied, OptimiseError> {
+    if o.cancel.is_cancelled() {
+        return Err(OptimiseError::Cancelled);
+    }
+    if source != Format::Gif && sniff::is_animated(original, source) {
+        return Err(OptimiseError::Unsupported(tf(
+            "error.animated_edit",
+            &[("format", source.label())],
+        )));
+    }
+    let target = match edits.format {
+        Some(format) if format != Format::Gif => format,
+        _ => source,
+    };
+    let (work, dims) = prepare(original, source, target, edits)?;
+    let mut base = o.clone();
+    base.level = edits.level;
+    if let Some(compression) = edits.compression {
+        base.compression = compression;
+    }
+    let (bytes, missed_target) = match edits.fit_under {
+        Some(limit) => {
+            let fitted = fit::search(limit, |q| {
+                work.run(&OptimiseOptions {
+                    compression: q,
+                    level: Level::Normal,
+                    ..base.clone()
+                })
+            })?;
+            (fitted.bytes, fitted.missed)
+        }
+        None => (work.run(&base)?, false),
+    };
+    if o.cancel.is_cancelled() {
+        return Err(OptimiseError::Cancelled);
+    }
+    Ok(Applied {
+        bytes,
+        format: target,
+        dims,
+        missed_target,
+    })
+}
+
+/// The encoder a recipe needs, prepared once so fit-under-size can run it
+/// several times.
+enum Work<'a> {
+    /// GIF to GIF, animated or not: gifsicle crops and resizes every frame.
+    Gifsicle {
+        input: &'a [u8],
+        crop: Option<Rect>,
+        size: Option<(u32, u32)>,
+    },
+    /// Same format, same pixels: the format's optimiser at a new quality, so
+    /// Cycle 1's metadata rules stay exactly as they were.
+    Encoder { input: &'a [u8], format: Format },
+    /// Everything else: decoded, cut and re-encoded.
+    Pixels { raster: Raster, format: Format },
+}
+
+impl Work<'_> {
+    fn run(&self, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+        match self {
+            Work::Gifsicle { input, crop, size } => gif::edit(input, *crop, *size, o),
+            Work::Encoder { input, format } => optimise::encode(input, *format, o),
+            Work::Pixels { raster, format } => raster::encode(raster, *format, o),
+        }
+    }
+}
+
+fn prepare<'a>(
+    original: &'a [u8],
+    source: Format,
+    target: Format,
+    edits: &Edits,
+) -> Result<(Work<'a>, (u32, u32)), OptimiseError> {
+    if source == Format::Gif && target == Format::Gif {
+        let full = sniff::dimensions(original, Format::Gif)
+            .ok_or_else(|| OptimiseError::Decode("the GIF is incomplete".into()))?;
+        let window = geometry::crop_size(full, edits);
+        // Smart framing judges the first frame.
+        let first = (edits.framing == Framing::Smart && window != full)
+            .then(|| raster::decode(original, Format::Gif))
+            .transpose()?;
+        let crop = place(full, window, edits.framing, first.as_ref());
+        let out = geometry::output_size(window, edits);
+        let work = Work::Gifsicle {
+            input: original,
+            crop: (window != full).then_some(crop),
+            size: (out != window).then_some(out),
+        };
+        return Ok((work, out));
+    }
+    if !edits.reshapes() && target == source {
+        let dims = raster::display_dims(original, source).unwrap_or_default();
+        return Ok((
+            Work::Encoder {
+                input: original,
+                format: source,
+            },
+            dims,
+        ));
+    }
+    let decoded = raster::decode(original, source)?;
+    let full = (decoded.width, decoded.height);
+    let window = geometry::crop_size(full, edits);
+    let crop = place(full, window, edits.framing, Some(&decoded));
+    let out = geometry::output_size(window, edits);
+    let shaped = if window == full && out == full {
+        decoded
+    } else {
+        raster::cut(&decoded, crop, out)?
+    };
+    Ok((
+        Work::Pixels {
+            raster: shaped,
+            format: target,
+        },
+        out,
+    ))
+}
+
+/// Where the window sits: the busiest spot for Smart (when pixels are at
+/// hand), else the centre.
+fn place(full: (u32, u32), window: (u32, u32), framing: Framing, pixels: Option<&Raster>) -> Rect {
+    match (framing, pixels) {
+        (Framing::Smart, Some(r)) if window != full => {
+            smart::frame(&r.rgba, r.width, r.height, window)
+        }
+        _ => geometry::centre(full, window),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +455,123 @@ mod tests {
                 "level": "normal"
             })
         );
+    }
+
+    use crate::optimise::OptimiseOptions;
+    use crate::sniff::{dimensions, gif_frame_count, sniff};
+    use crate::testutil;
+
+    fn applied(bytes: &[u8], source: Format, f: impl FnOnce(&mut Edits)) -> Applied {
+        let mut edits = Edits::default();
+        f(&mut edits);
+        apply(bytes, source, &edits, &OptimiseOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn a_downscale_halves_the_picture() {
+        let a = applied(&testutil::png(300, 200), Format::Png, |e| {
+            e.scale = Some(50)
+        });
+        assert_eq!((a.format, a.dims), (Format::Png, (150, 100)));
+        assert_eq!(dimensions(&a.bytes, Format::Png), Some((150, 100)));
+    }
+
+    #[test]
+    fn crop_scale_and_convert_run_in_one_pass() {
+        let a = applied(&testutil::png(300, 200), Format::Png, |e| {
+            e.aspect = Some((1, 1));
+            e.scale = Some(50);
+            e.format = Some(Format::WebP);
+        });
+        assert_eq!((a.format, a.dims), (Format::WebP, (100, 100)));
+        assert_eq!(sniff(&a.bytes), Some(Format::WebP));
+        assert_eq!(dimensions(&a.bytes, Format::WebP), Some((100, 100)));
+    }
+
+    #[test]
+    fn a_lower_compression_keeps_the_format_and_size_and_shrinks_the_file() {
+        let jpeg = testutil::jpeg(300, 200, 95, &testutil::JpegExtras::default());
+        let high = applied(&jpeg, Format::Jpeg, |e| e.compression = Some(95));
+        let low = applied(&jpeg, Format::Jpeg, |e| e.compression = Some(30));
+        assert_eq!((low.format, low.dims), (Format::Jpeg, (300, 200)));
+        assert!(low.bytes.len() < high.bytes.len());
+    }
+
+    #[test]
+    fn fit_under_lands_under_the_target_or_says_it_missed() {
+        let jpeg = testutil::jpeg(400, 300, 95, &testutil::JpegExtras::default());
+        let full = applied(&jpeg, Format::Jpeg, |e| e.compression = Some(100));
+        let target = full.bytes.len() as u64 / 2;
+        let fitted = applied(&jpeg, Format::Jpeg, |e| e.fit_under = Some(target));
+        assert!(fitted.bytes.len() as u64 <= target && !fitted.missed_target);
+        let missed = applied(&jpeg, Format::Jpeg, |e| e.fit_under = Some(100));
+        assert!(missed.missed_target);
+    }
+
+    #[test]
+    fn a_gif_converts_to_a_still_from_its_first_frame() {
+        let a = applied(&testutil::gif(3), Format::Gif, |e| {
+            e.format = Some(Format::Png)
+        });
+        assert_eq!((a.format, a.dims), (Format::Png, (64, 48)));
+        assert_eq!(sniff(&a.bytes), Some(Format::Png));
+    }
+
+    #[test]
+    fn asking_for_gif_output_keeps_the_source_format() {
+        let a = applied(&testutil::png(60, 40), Format::Png, |e| {
+            e.format = Some(Format::Gif)
+        });
+        assert_eq!(a.format, Format::Png);
+    }
+
+    #[test]
+    fn an_animated_webp_cannot_be_edited() {
+        let edits = Edits {
+            scale: Some(50),
+            ..Edits::default()
+        };
+        let result = apply(
+            &testutil::animated_webp(),
+            Format::WebP,
+            &edits,
+            &OptimiseOptions::default(),
+        );
+        assert!(
+            matches!(result, Err(OptimiseError::Unsupported(m)) if m == "Animated WebP can't be edited yet")
+        );
+    }
+
+    #[test]
+    fn an_animated_gif_is_downscaled_by_gifsicle_and_stays_animated() {
+        let Some(gifsicle) = testutil::gifsicle() else {
+            return;
+        };
+        let o = OptimiseOptions {
+            gifsicle: Some(gifsicle),
+            ..OptimiseOptions::default()
+        };
+        let edits = Edits {
+            scale: Some(50),
+            ..Edits::default()
+        };
+        let a = apply(&testutil::gif(3), Format::Gif, &edits, &o).unwrap();
+        assert_eq!((a.format, a.dims), (Format::Gif, (32, 24)));
+        assert_eq!(gif_frame_count(&a.bytes), 3);
+        assert_eq!(dimensions(&a.bytes, Format::Gif), Some((32, 24)));
+    }
+
+    #[test]
+    fn a_cancelled_token_stops_an_edit() {
+        let o = OptimiseOptions::default();
+        o.cancel.cancel();
+        let edits = Edits {
+            scale: Some(50),
+            ..Edits::default()
+        };
+        assert!(matches!(
+            apply(&testutil::png(60, 40), Format::Png, &edits, &o),
+            Err(OptimiseError::Cancelled)
+        ));
     }
 }

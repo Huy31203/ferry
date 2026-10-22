@@ -36,6 +36,7 @@
   "card.detail.bitmap": "from bitmap",
   "error.backup": "Backup failed: {why}",
   "error.backup_missing": "The original is gone from the backups folder",
+  "error.animated_edit": "Animated {format} can't be edited yet",
   "error.write": "Can't write to {dir}",
   "error.read": "Can't read {name}: {why}",
   "error.not_an_image": "{name} is not a PNG, JPEG, GIF or WebP image",
