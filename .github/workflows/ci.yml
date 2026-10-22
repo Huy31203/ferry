@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    # release.yml builds tags; skipping them here avoids building every installer twice.
+    tags-ignore: ['v*']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - run: cargo clippy -p ferry-core --all-targets -- -D warnings
+      - run: cargo test -p ferry-core
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+
+  bundle:
+    name: bundle (${{ matrix.name }})
+    needs: [core, web]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: macos
+            os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build gifsicle sidecar
+        shell: bash
+        run: scripts/build-gifsicle.sh ${{ matrix.target }}
+      - run: pnpm build
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test -p ferry
+      - name: Build installer
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Smoke test installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "target/${{ matrix.target }}/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "no NSIS installer was produced" }
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'Ferry\Ferry.exe'
+          if (-not (Test-Path $exe)) {
+            Get-ChildItem -Recurse (Join-Path $env:LOCALAPPDATA 'Ferry') -ErrorAction SilentlyContinue | Format-Table FullName
+            throw "Ferry.exe not found at $exe"
+          }
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'Ferry\gifsicle.exe'))) { throw "gifsicle sidecar missing from install" }
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 10
+          if ($proc.HasExited) { throw "Ferry exited early with code $($proc.ExitCode)" }
+          Stop-Process -Id $proc.Id -Force
+          Write-Host "Ferry installed and stayed running for 10 s"
+      - name: Upload installer
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ferry-${{ matrix.name }}
+          path: |
+            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 90
