@@ -3,14 +3,18 @@
   import { t } from '../lib/i18n';
   import { isMac, type CardData } from '../lib/ipc';
 
-  let { card, onclose }: { card: CardData; onclose: () => void } = $props();
+  let {
+    card,
+    hovered = false,
+    onclose,
+  }: { card: CardData; hovered?: boolean; onclose: () => void } = $props();
 
   const label = $derived(
     t('card.aria', { name: `${card.name}.${card.ext}`, state: t('card.state.done') }),
   );
 </script>
 
-<article class="card" aria-label={label}>
+<article class="card" class:hovered data-card-id={card.id} aria-label={label}>
   <div class="thumb" aria-hidden="true">
     {#if card.thumb}
       <img src={card.thumb} alt="" />
@@ -137,8 +141,10 @@
     transition: opacity 120ms;
   }
   .card:hover .rail,
+  .card.hovered .rail,
   .card:focus-within .rail,
   .card:hover .close,
+  .card.hovered .close,
   .card:focus-within .close {
     opacity: 1;
   }
@@ -153,6 +159,7 @@
     transition: left 120ms;
   }
   .card:hover .info,
+  .card.hovered .info,
   .card:focus-within .info {
     left: 52px;
   }
