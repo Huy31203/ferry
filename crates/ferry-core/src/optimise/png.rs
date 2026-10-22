@@ -74,7 +74,7 @@ fn encode_err(e: impl std::fmt::Display) -> OptimiseError {
 }
 
 /// Decode any PNG to 8-bit RGBA.
-fn decode(input: &[u8]) -> Result<(u32, u32, Vec<RGBA>), OptimiseError> {
+pub(crate) fn decode(input: &[u8]) -> Result<(u32, u32, Vec<RGBA>), OptimiseError> {
     let decode_err = |e: png::DecodingError| OptimiseError::Decode(e.to_string());
     let mut decoder = png::Decoder::new(Cursor::new(input));
     decoder.set_transformations(png::Transformations::normalize_to_color8());

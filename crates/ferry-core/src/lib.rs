@@ -2,6 +2,7 @@
 //! module is unit-tested on macOS, Windows and Linux.
 
 pub mod backup;
+pub mod bitmap;
 pub mod cancel;
 pub mod fsutil;
 pub mod geometry;
