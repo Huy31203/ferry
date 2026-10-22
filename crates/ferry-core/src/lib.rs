@@ -5,6 +5,7 @@ pub mod backup;
 pub mod bitmap;
 pub mod cancel;
 pub mod color;
+pub mod edit;
 pub mod fsutil;
 pub mod geometry;
 pub mod glyph;

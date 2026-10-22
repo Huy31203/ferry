@@ -8,10 +8,14 @@ pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{cancel::CancelToken, sniff::Format};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Level {
+    #[default]
     Normal,
     Aggressive,
 }
