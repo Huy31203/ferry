@@ -15,7 +15,11 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'es2022',
     rolldownOptions: {
-      input: { stack: page('stack.html'), settings: page('settings.html') },
+      input: {
+        stack: page('stack.html'),
+        settings: page('settings.html'),
+        compare: page('compare.html'),
+      },
     },
   },
   test: { include: ['**/*.test.ts'] },
