@@ -163,3 +163,70 @@ pub fn animated_webp() -> Vec<u8> {
     out.extend_from_slice(&body);
     out
 }
+
+/// Extra segments for `jpeg`.
+#[derive(Default)]
+pub struct JpegExtras {
+    /// A complete APP1 payload (`Exif\0\0` + TIFF).
+    pub exif: Option<Vec<u8>>,
+    /// A complete APP2 payload (`ICC_PROFILE\0` + sequence bytes + profile).
+    pub icc: Option<Vec<u8>>,
+    pub dpi: Option<u16>,
+}
+
+/// A baseline RGB JPEG of `screenshot_rgba`.
+pub fn jpeg(w: u32, h: u32, quality: u8, extras: &JpegExtras) -> Vec<u8> {
+    let rgb: Vec<u8> = screenshot_rgba(w, h)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    let mut enc = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_RGB);
+    enc.set_size(w as usize, h as usize);
+    enc.set_quality(f32::from(quality));
+    if let Some(dpi) = extras.dpi {
+        enc.set_pixel_density(mozjpeg::PixelDensity {
+            unit: mozjpeg::PixelDensityUnit::Inches,
+            x: dpi,
+            y: dpi,
+        });
+    }
+    let mut enc = enc.start_compress(Vec::new()).unwrap();
+    if let Some(icc) = &extras.icc {
+        enc.write_marker(mozjpeg::Marker::APP(2), icc);
+    }
+    if let Some(exif) = &extras.exif {
+        enc.write_marker(mozjpeg::Marker::APP(1), exif);
+    }
+    enc.write_scanlines(&rgb).unwrap();
+    enc.finish().unwrap()
+}
+
+/// A grayscale JPEG of the red channel of `screenshot_rgba`.
+pub fn jpeg_gray(w: u32, h: u32, quality: u8) -> Vec<u8> {
+    let gray: Vec<u8> = screenshot_rgba(w, h)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| p[0])
+        .collect();
+    let mut enc = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_GRAYSCALE);
+    enc.set_size(w as usize, h as usize);
+    enc.set_quality(f32::from(quality));
+    let mut enc = enc.start_compress(Vec::new()).unwrap();
+    enc.write_scanlines(&gray).unwrap();
+    enc.finish().unwrap()
+}
+
+/// A little-endian EXIF APP1 payload: an Orientation entry plus `padding`
+/// bytes of junk, standing in for a camera's large EXIF block.
+pub fn exif_with_orientation(orientation: u16, padding: usize) -> Vec<u8> {
+    let mut out = b"Exif\0\0II\x2A\0\x08\0\0\0".to_vec();
+    out.extend_from_slice(&[1, 0]); // one entry
+    out.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0]);
+    out.extend_from_slice(&orientation.to_le_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    out.extend(std::iter::repeat_n(0xAB, padding));
+    out
+}

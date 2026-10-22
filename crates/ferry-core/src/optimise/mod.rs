@@ -2,6 +2,7 @@
 //! the caller keeps the original unless the result is `Smaller`.
 
 mod png;
+mod jpeg;
 
 use std::{fmt, path::PathBuf};
 
