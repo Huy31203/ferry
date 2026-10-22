@@ -92,19 +92,7 @@ impl Job {
         let id = JobId::generate();
         let ext = format.extension();
         let dims = sniff::dimensions(&bytes, format);
-        let date = now.format("%Y-%m-%d").to_string();
-        let time = now.format("%H.%M.%S").to_string();
-        let stem = tf("clipboard.name", &[("date", &date), ("time", &time)]);
-        let (width, height) = dims.unwrap_or_default();
-        let ctx = template::Ctx {
-            stem: &stem,
-            ext,
-            width,
-            height,
-            parent: &t("clipboard.folder"),
-            date: now.date(),
-        };
-        let name = template::safe_file_name(&template::render(file_template, &ctx));
+        let name = template::clipboard_name(file_template, ext, dims.unwrap_or_default(), now);
         let output = work_dir
             .join("clipboard")
             .join(id.as_str())

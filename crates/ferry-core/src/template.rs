@@ -3,7 +3,9 @@
 //! and `%%` for a literal percent sign. The Settings preview calls this too,
 //! through a Tauri command, so there is one implementation.
 
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
+
+use crate::i18n::{t, tf};
 
 pub struct Ctx<'a> {
     pub stem: &'a str,
@@ -95,9 +97,74 @@ pub fn safe_file_name(name: &str) -> String {
     }
 }
 
+/// The file name, without extension, that a clipboard image gets: `tpl` with
+/// the "Clipboard <date> at <time>" stem, made safe for the file system.
+pub fn clipboard_name(
+    tpl: &str,
+    ext: &str,
+    (width, height): (u32, u32),
+    now: NaiveDateTime,
+) -> String {
+    let date = now.format("%Y-%m-%d").to_string();
+    let time = now.format("%H.%M.%S").to_string();
+    let stem = tf("clipboard.name", &[("date", &date), ("time", &time)]);
+    let ctx = Ctx {
+        stem: &stem,
+        ext,
+        width,
+        height,
+        parent: &t("clipboard.folder"),
+        date: now.date(),
+    };
+    safe_file_name(&render(tpl, &ctx))
+}
+
+/// The Settings window's live example: `tpl` for a 1920×1080 PNG copied now.
+/// `Err` lists the unknown tokens, so the field can say what is wrong.
+pub fn preview(tpl: &str) -> Result<String, Vec<String>> {
+    validate(tpl)?;
+    let now = chrono::Local::now().naive_local();
+    Ok(format!(
+        "{}.png",
+        clipboard_name(tpl, "png", (1920, 1080), now)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at() -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 10, 22)
+            .unwrap()
+            .and_hms_opt(14, 23, 11)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_clipboard_image_is_named_like_a_macos_screenshot() {
+        assert_eq!(
+            clipboard_name("%f", "png", (1920, 1080), at()),
+            "Clipboard 2026-10-22 at 14.23.11"
+        );
+        assert_eq!(
+            clipboard_name("%P_%z", "png", (1920, 1080), at()),
+            "Clipboard_1920x1080"
+        );
+    }
+
+    #[test]
+    fn a_clipboard_name_is_safe_as_a_file_name() {
+        assert_eq!(clipboard_name("a/b", "png", (1, 1), at()), "a_b");
+    }
+
+    #[test]
+    fn the_preview_adds_the_extension_and_refuses_unknown_tokens() {
+        let example = preview("%f_%z").unwrap();
+        assert!(example.starts_with("Clipboard "), "{example}");
+        assert!(example.ends_with("_1920x1080.png"), "{example}");
+        assert_eq!(preview("%f_%q"), Err(vec!["%q".to_string()]));
+    }
 
     fn ctx() -> Ctx<'static> {
         Ctx {
