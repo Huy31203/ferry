@@ -12,6 +12,7 @@ pub mod glyph;
 pub mod i18n;
 pub mod job;
 pub mod optimise;
+pub mod output;
 pub mod pipeline;
 pub mod run_state;
 pub mod settings;
