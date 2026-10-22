@@ -1,4 +1,6 @@
+mod logging;
 mod platform;
+mod state;
 mod tray;
 mod windows;
 
