@@ -203,10 +203,12 @@ mod tests {
         let png = testutil::png(200, 200);
         let jpeg = testutil::jpeg(200, 200, 90, &testutil::JpegExtras::default());
         let webp = testutil::webp(200, 200, 90, &webp::Extras::default());
+        let gif = testutil::gif(2);
         for (format, valid) in [
             (Format::Png, png),
             (Format::Jpeg, jpeg),
             (Format::WebP, webp),
+            (Format::Gif, gif),
         ] {
             for broken in [
                 valid[..valid.len() / 2].to_vec(),
