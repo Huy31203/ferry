@@ -5,6 +5,7 @@ on:
     # release.yml builds tags; skipping them here avoids building every installer twice.
     tags-ignore: ['v*']
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
