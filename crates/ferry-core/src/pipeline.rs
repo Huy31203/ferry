@@ -8,6 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use chrono::{Local, NaiveDateTime};
+use serde::Serialize;
 
 use crate::backup::Backups;
 use crate::cancel::CancelToken;
@@ -118,6 +119,57 @@ struct Written {
     created: bool,
     /// The source was overwritten or trashed for it.
     source_changed: bool,
+}
+
+/// Why a rename was refused; the card shows `message()` inline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RenameError {
+    Empty,
+    /// Separators, characters Windows forbids, a trailing dot or space, or a
+    /// reserved device name. Refused on every OS so names travel.
+    Invalid,
+    Taken,
+    Gone,
+    Failed {
+        reason: String,
+    },
+}
+
+impl RenameError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Empty => t("rename.empty"),
+            Self::Invalid => t("rename.invalid"),
+            Self::Taken => t("rename.taken"),
+            Self::Gone => t("rename.gone"),
+            Self::Failed { reason } => reason.clone(),
+        }
+    }
+}
+
+/// A file stem every OS accepts.
+fn check_stem(stem: &str) -> Result<(), RenameError> {
+    if stem.trim().is_empty() {
+        return Err(RenameError::Empty);
+    }
+    let forbidden = |c: char| {
+        matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control()
+    };
+    let device = stem
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((device.starts_with("COM") || device.starts_with("LPT"))
+            && device.len() == 4
+            && device.as_bytes()[3].is_ascii_digit()
+            && device.as_bytes()[3] != b'0');
+    if stem.contains(forbidden) || stem.ends_with(['.', ' ']) || reserved {
+        return Err(RenameError::Invalid);
+    }
+    Ok(())
 }
 
 impl Job {
@@ -250,6 +302,38 @@ impl Job {
             note: if done { self.note.clone() } else { None },
             state,
         }
+    }
+
+    /// Rename the current result in its folder (a file job's real file, a
+    /// clipboard job's working file). Later runs keep the new stem.
+    pub fn rename(&mut self, stem: &str) -> Result<(), RenameError> {
+        check_stem(stem)?;
+        if !self.output.exists() {
+            return Err(RenameError::Gone);
+        }
+        let file = if self.ext.is_empty() {
+            stem.to_owned()
+        } else {
+            format!("{stem}.{}", self.ext)
+        };
+        let to = self.output.with_file_name(file);
+        // On a case-insensitive disk "Shot.png" exists because it is "shot.png".
+        let same_file = fs::canonicalize(&to).ok() == fs::canonicalize(&self.output).ok();
+        if to.exists() && !same_file {
+            return Err(RenameError::Taken);
+        }
+        fs::rename(&self.output, &to).map_err(|e| RenameError::Failed {
+            reason: describe(&e),
+        })?;
+        if self.source_path.as_ref() == Some(&self.output) {
+            self.source_path = Some(to.clone());
+        }
+        if let Some(last) = self.last.as_mut().filter(|w| w.path == self.output) {
+            last.path = to.clone();
+        }
+        self.output = to;
+        self.name = stem.to_owned();
+        Ok(())
     }
 
     /// Merge what the card asked for. Asking for the source format, or for
@@ -1440,5 +1524,79 @@ mod tests {
         assert_eq!(bytes_label(1_000_000), "1 MB");
         assert_eq!(bytes_label(1_500_000), "1.5 MB");
         assert_eq!(bytes_label(250_000), "250 KB");
+    }
+
+    fn done_file(env: &Env, name: &str) -> (Job, PathBuf) {
+        let path = env.file(name, &testutil::png(300, 200));
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        run(&mut job, Level::Normal, &options(), env);
+        (job, path)
+    }
+
+    #[test]
+    fn rename_moves_the_file_and_later_runs_keep_the_name() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        job.rename("hero").unwrap();
+        let hero = env.dir.path().join("hero.png");
+        assert!(hero.exists() && !path.exists());
+        assert_eq!(job.name, "hero");
+        job.edit(scale(50));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.output, Some(hero.clone()));
+        assert_eq!(
+            sniff::dimensions(&fs::read(&hero).unwrap(), Format::Png),
+            Some((150, 100))
+        );
+    }
+
+    #[test]
+    fn rename_refuses_bad_and_taken_names() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        env.file("taken.png", b"x");
+        assert_eq!(job.rename("  "), Err(RenameError::Empty));
+        for bad in ["a/b", "a\\b", "a:b", "x.", "x ", "CON", "lpt1", "nul.txt"] {
+            assert_eq!(job.rename(bad), Err(RenameError::Invalid), "{bad}");
+        }
+        assert_eq!(job.rename("taken"), Err(RenameError::Taken));
+        assert_eq!(RenameError::Taken.message(), "Name taken");
+    }
+
+    #[test]
+    fn a_case_only_rename_is_allowed() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        job.rename("Shot").unwrap();
+        let names: Vec<String> = fs::read_dir(env.dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"Shot.png".to_owned()), "{names:?}");
+    }
+
+    #[test]
+    fn renaming_a_vanished_file_says_so() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        fs::remove_file(path).unwrap();
+        assert_eq!(job.rename("hero"), Err(RenameError::Gone));
+        assert_eq!(job.name, "shot");
+    }
+
+    #[test]
+    fn a_clipboard_rename_renames_the_working_file() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        let first = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        job.rename("diagram").unwrap();
+        assert_eq!(job.output.file_name().unwrap(), "diagram.png");
+        assert!(job.output.exists() && !first.output.unwrap().exists());
     }
 }
