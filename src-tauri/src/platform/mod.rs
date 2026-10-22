@@ -7,7 +7,8 @@ pub mod clipboard;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{hide, make_non_activating, show_without_focus};
+#[allow(unused_imports)] // accent_rgb, app_identifier: used from Task 7
+pub use macos::{accent_rgb, app_identifier, hide, make_non_activating, show_without_focus};
 
 #[cfg(windows)]
 #[path = "windows_clipboard.rs"]
@@ -15,4 +16,6 @@ pub mod clipboard;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use self::windows::{hide, make_non_activating, show_without_focus};
+pub use self::windows::{
+    accent_rgb, app_identifier, hide, make_non_activating, show_without_focus,
+};

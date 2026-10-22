@@ -6,6 +6,8 @@
 //! instead (spec §12).
 #![allow(clippy::unused_unit)] // the panel_event! macro expands to `-> ()`
 
+use std::path::Path;
+
 use tauri::{Emitter, Manager, WebviewWindow};
 use tauri_nspanel::{
     CollectionBehavior, ManagerExt, PanelLevel, TrackingAreaOptions, WebviewWindowExt,
@@ -90,4 +92,27 @@ pub fn show_without_focus(window: &WebviewWindow) -> tauri::Result<()> {
 
 pub fn hide(window: &WebviewWindow) -> tauri::Result<()> {
     window.hide()
+}
+
+/// The user's accent colour (System Settings → Appearance), in sRGB.
+#[allow(dead_code)] // used from Task 7
+pub fn accent_rgb() -> Option<(u8, u8, u8)> {
+    use objc2_app_kit::{NSColor, NSColorSpace};
+    let color = NSColor::controlAccentColor();
+    let rgb = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Some((
+        byte(rgb.redComponent()),
+        byte(rgb.greenComponent()),
+        byte(rgb.blueComponent()),
+    ))
+}
+
+/// The bundle identifier of the `.app` at `path`, which is what the clipboard
+/// snapshot reports as its source app.
+#[allow(dead_code)] // used from Task 7
+pub fn app_identifier(path: &Path) -> Option<String> {
+    use objc2_foundation::{NSBundle, NSString};
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(path.to_str()?))?;
+    bundle.bundleIdentifier().map(|id| id.to_string())
 }

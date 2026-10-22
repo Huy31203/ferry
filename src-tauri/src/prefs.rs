@@ -1,0 +1,184 @@
+//! Changing settings while the app runs (spec §3, §5.7): sanitise, save,
+//! then apply what the change touches. Everything else, such as compression or
+//! the ignored apps, is read from `AppState` by the next job.
+
+use ferry_core::settings::{Settings, TrayStyle};
+use tauri::{AppHandle, Emitter, Manager};
+use tracing::warn;
+
+use crate::state::AppState;
+use crate::{tray, windows};
+
+/// What a change to the settings must do beyond being saved.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Effects {
+    /// Hide the stack from screenshots, or stop hiding it.
+    pub screenshots: bool,
+    /// Register or remove the login item.
+    pub autostart: bool,
+    /// Show or hide the Dock icon (macOS).
+    pub dock: bool,
+    /// Rebuild the tray menu and icon.
+    pub tray: bool,
+}
+
+impl Effects {
+    pub fn between(old: &Settings, new: &Settings) -> Self {
+        let (a, b) = (&old.general, &new.general);
+        let screenshots = a.show_in_screenshots != b.show_in_screenshots;
+        let style: fn(&Settings) -> TrayStyle = |s| s.general.tray_style;
+        Self {
+            screenshots,
+            autostart: a.launch_at_login != b.launch_at_login,
+            dock: a.show_dock_icon != b.show_dock_icon,
+            // The menu's "Show app UI in screenshots" tick follows the setting.
+            tray: screenshots || style(old) != style(new),
+        }
+    }
+}
+
+/// Change the settings: `change` edits a copy, which is sanitised, saved and
+/// applied. Every window learns of it through `settings:changed`. The write
+/// lock is held across the save so two changes cannot interleave.
+#[allow(dead_code)] // used from Task 7
+pub fn update(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
+    let state = app.state::<AppState>();
+    let (old, new) = {
+        let mut current = state.settings.write().unwrap();
+        let old = current.clone();
+        let mut next = old.clone();
+        change(&mut next);
+        let next = next.sanitised();
+        next.save(&state.settings_path).map_err(|e| e.to_string())?;
+        *current = next.clone();
+        (old, next)
+    };
+    apply(app, &old, &new);
+    let _ = app.emit("settings:changed", &new);
+    Ok(new)
+}
+
+fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
+    let effects = Effects::between(old, new);
+    if effects.screenshots {
+        windows::set_content_protected(app, !new.general.show_in_screenshots);
+    }
+    if effects.autostart {
+        sync_autostart(app, new.general.launch_at_login);
+    }
+    if effects.dock {
+        set_dock(app, new.general.show_dock_icon);
+    }
+    if effects.tray {
+        tray::rebuild(app);
+    }
+}
+
+/// Make the login item match `want`. Debug builds never touch it: the default
+/// is on, and a development run must not register `target/debug/ferry`.
+pub fn sync_autostart(app: &AppHandle, want: bool) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    use tauri_plugin_autostart::ManagerExt;
+    let launcher = app.autolaunch();
+    let result = match launcher.is_enabled() {
+        Ok(on) if on != want => {
+            if want {
+                launcher.enable()
+            } else {
+                launcher.disable()
+            }
+        }
+        Ok(_) => Ok(()),
+        Err(e) => Err(e),
+    };
+    if let Err(e) = result {
+        warn!("could not update the login item: {e}");
+    }
+}
+
+/// Show or hide the Dock icon. Ferry is a tray app, so it starts hidden.
+pub fn set_dock(app: &AppHandle, show: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if show {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(e) = app.set_activation_policy(policy) {
+            warn!("could not change the Dock icon: {e}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, show);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nothing_changes_nothing_happens() {
+        let s = Settings::default();
+        assert_eq!(Effects::between(&s, &s), Effects::default());
+    }
+
+    #[test]
+    fn each_change_touches_only_its_own_effects() {
+        let base = Settings::default();
+
+        let mut s = base.clone();
+        s.general.show_in_screenshots = !s.general.show_in_screenshots;
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                screenshots: true,
+                tray: true,
+                ..Effects::default()
+            }
+        );
+
+        let mut s = base.clone();
+        s.general.launch_at_login = !s.general.launch_at_login;
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                autostart: true,
+                ..Effects::default()
+            }
+        );
+
+        let mut s = base.clone();
+        s.general.show_dock_icon = !s.general.show_dock_icon;
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                dock: true,
+                ..Effects::default()
+            }
+        );
+
+        let mut s = base.clone();
+        s.general.tray_style = TrayStyle::Flat;
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                tray: true,
+                ..Effects::default()
+            }
+        );
+    }
+
+    #[test]
+    fn settings_read_on_every_job_need_no_effect() {
+        let base = Settings::default();
+        let mut s = base.clone();
+        s.images.compression = 40;
+        s.clipboard.ignored_apps.push("com.example.App".into());
+        s.floating.corner = ferry_core::settings::Corner::TopLeft;
+        s.backups.retention_days = 30;
+        assert_eq!(Effects::between(&base, &s), Effects::default());
+    }
+}
