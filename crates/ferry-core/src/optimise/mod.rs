@@ -1,6 +1,8 @@
 //! Optimise one image from memory (spec §4.2). Never worse than the input:
 //! the caller keeps the original unless the result is `Smaller`.
 
+mod png;
+
 use std::{fmt, path::PathBuf};
 
 use crate::cancel::CancelToken;
