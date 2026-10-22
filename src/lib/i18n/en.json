@@ -32,6 +32,8 @@
   "card.step.jpeg": "Encoding JPEG",
   "card.step.webp": "Encoding WebP",
   "card.step.gif": "Running gifsicle",
+  "card.step.edit": "Applying changes",
+  "card.note.fit_missed": "Couldn't reach {size} — try downscaling",
   "card.detail.aggressive": "aggressive",
   "card.detail.bitmap": "from bitmap",
   "error.backup": "Backup failed: {why}",

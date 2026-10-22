@@ -7,15 +7,17 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDateTime;
+use chrono::{Local, NaiveDateTime};
 
 use crate::backup::Backups;
 use crate::cancel::CancelToken;
+use crate::edit::{self, Edits, EditsPatch};
 use crate::fsutil::{self, Times};
 use crate::i18n::{t, tf};
 use crate::job::{JobId, JobState, JobUpdate, Source};
 use crate::optimise::{self, Level, OptimiseError, OptimiseOptions, Outcome};
-use crate::settings::{Settings, contract_home};
+use crate::output::{self, OutputKind};
+use crate::settings::{self as settings_model, Location, Settings, contract_home};
 use crate::sniff::{self, Format};
 use crate::template;
 use crate::trigger::{MB, Skip, is_ignored_extension, normalise_ext};
@@ -31,16 +33,33 @@ pub struct RunOptions {
     pub preserve_dates: bool,
     pub gifsicle: Option<PathBuf>,
     pub cancel: CancelToken,
+    pub output: settings_model::Output,
+    /// The working folder; Temporary results go in `files/<job id>/`.
+    pub work_dir: PathBuf,
+    pub home: PathBuf,
+    /// Moves a file Ferry made, or a converted-away source, to the Trash.
+    /// The app logs failures; here a failure only means the file stays.
+    pub trash: fn(&Path) -> io::Result<()>,
 }
 
 impl RunOptions {
-    pub fn new(settings: &Settings, gifsicle: Option<PathBuf>, cancel: CancelToken) -> Self {
+    pub fn new(
+        settings: &Settings,
+        gifsicle: Option<PathBuf>,
+        work_dir: PathBuf,
+        trash: fn(&Path) -> io::Result<()>,
+        cancel: CancelToken,
+    ) -> Self {
         Self {
             compression: settings.images.compression,
             strip_metadata: settings.images.strip_metadata,
             preserve_dates: settings.images.preserve_dates,
             gifsicle,
             cancel,
+            output: settings.images.output.clone(),
+            work_dir,
+            home: std::env::home_dir().unwrap_or_default(),
+            trash,
         }
     }
 }
@@ -58,23 +77,47 @@ pub struct Job {
     pub source: Source,
     /// Shown on the card: the rendered template, or the file's own stem.
     pub name: String,
+    /// The current result's extension: the source's own until a conversion.
     pub ext: String,
+    /// The current result's format.
     pub format: Format,
     pub before: u64,
+    /// The original's size as shown (JPEG orientation applied).
     pub dims: Option<(u32, u32)>,
     pub from_bitmap: bool,
-    /// The working file of a clipboard job, or the file itself.
+    /// The working file of a clipboard job, or the file job's current result.
     pub output: PathBuf,
     /// The level of the latest run; retry and re-optimise use it again.
     pub level: Level,
+    /// What the card asked for; every run applies all of it to the original.
+    pub edits: Edits,
+    source_format: Format,
+    source_ext: String,
+    animated: bool,
+    /// A file job's own location: where an in-place result goes.
+    source_path: Option<PathBuf>,
+    /// A file job's current result, so the next run can take it back.
+    last: Option<Written>,
+    dims_after: Option<(u32, u32)>,
+    note: Option<String>,
     /// The original, once stored. Every run starts from it (R§2.4).
     backup: Option<PathBuf>,
     /// A clipboard job's original until it is backed up.
     pending: Option<Vec<u8>>,
     /// A file job's times, read before its first write.
     times: Option<Times>,
-    /// `output` (and the clipboard) hold an optimised result, not the original.
+    /// `output` (and the clipboard) hold a result, not the original.
     changed: bool,
+}
+
+/// A file job's result on disk (spec §4.4: one result per job).
+#[derive(Debug, Clone)]
+struct Written {
+    path: PathBuf,
+    /// Ferry made this file; it is not the source.
+    created: bool,
+    /// The source was overwritten or trashed for it.
+    source_changed: bool,
 }
 
 impl Job {
@@ -91,7 +134,8 @@ impl Job {
     ) -> Job {
         let id = JobId::generate();
         let ext = format.extension();
-        let dims = sniff::dimensions(&bytes, format);
+        let dims = edit::raster::display_dims(&bytes, format);
+        let animated = sniff::is_animated(&bytes, format);
         let name = template::clipboard_name(file_template, ext, dims.unwrap_or_default(), now);
         let output = work_dir
             .join("clipboard")
@@ -108,6 +152,14 @@ impl Job {
             from_bitmap,
             output,
             level: Level::Normal,
+            edits: Edits::default(),
+            source_format: format,
+            source_ext: ext.into(),
+            animated,
+            source_path: None,
+            last: None,
+            dims_after: None,
+            note: None,
             backup: None,
             pending: Some(bytes),
             times: None,
@@ -150,13 +202,21 @@ impl Job {
             id: JobId::generate(),
             source: Source::File,
             name: stem,
+            source_ext: ext.clone(),
             ext,
             format,
             before: len,
-            dims: sniff::dimensions(&bytes, format),
+            dims: edit::raster::display_dims(&bytes, format),
             from_bitmap: false,
             output: path.to_owned(),
             level: Level::Normal,
+            edits: Edits::default(),
+            source_format: format,
+            animated: sniff::is_animated(&bytes, format),
+            source_path: Some(path.to_owned()),
+            last: None,
+            dims_after: None,
+            note: None,
             backup: None,
             pending: None,
             times: None,
@@ -167,12 +227,13 @@ impl Job {
     /// This job's card in `state`.
     pub fn update(&self, state: JobState, after: Option<u64>) -> JobUpdate {
         let done = state == JobState::Done;
+        let busy = matches!(state, JobState::Queued | JobState::Optimising { .. });
+        let editable = self.source_format == Format::Gif || !self.animated;
         JobUpdate {
             id: self.id.clone(),
             can_restore: done && self.backup.is_some(),
             can_retry: matches!(state, JobState::Error { .. }),
             detail: if done { self.detail() } else { String::new() },
-            state,
             name: self.name.clone(),
             ext: self.ext.clone(),
             before: self.before,
@@ -180,13 +241,74 @@ impl Job {
             thumb_path: self.backup.clone(),
             source: self.source,
             output: self.output.exists().then(|| self.output.clone()),
+            dims_before: self.dims,
+            dims_after: if done { self.dims_after } else { None },
+            format: Some(self.format),
+            converted: self.format != self.source_format,
+            can_edit: !busy && editable && self.backup.as_ref().is_some_and(|b| b.exists()),
+            edits: self.edits.clone(),
+            note: if done { self.note.clone() } else { None },
+            state,
         }
     }
 
-    /// Optimise the original at `level`, write the result and report each step.
-    /// `None` means the job was cancelled before anything was written. The
-    /// output always matches the card: a re-run that does not come out smaller
-    /// puts the original back.
+    /// Merge what the card asked for. Asking for the source format, or for
+    /// GIF, clears the conversion.
+    pub fn edit(&mut self, patch: EditsPatch) {
+        self.edits.merge(patch);
+        if matches!(self.edits.format, Some(f) if f == self.source_format || f == Format::Gif) {
+            self.edits.format = None;
+        }
+        self.level = self.edits.level;
+    }
+
+    /// A second job on the same original, for "Convert and keep both". It has
+    /// its own id, card and result; the backup is shared.
+    pub fn fork(&self) -> Job {
+        let id = JobId::generate();
+        let output = match self.source {
+            Source::Clipboard => self
+                .output
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or(Path::new(""))
+                .join(id.as_str())
+                .join(format!("{}.{}", self.name, self.source_ext)),
+            Source::File => self
+                .source_path
+                .clone()
+                .unwrap_or_else(|| self.output.clone()),
+        };
+        Job {
+            id,
+            source: self.source,
+            name: self.name.clone(),
+            ext: self.source_ext.clone(),
+            format: self.source_format,
+            before: self.before,
+            dims: self.dims,
+            from_bitmap: self.from_bitmap,
+            output,
+            level: self.level,
+            edits: self.edits.clone(),
+            source_format: self.source_format,
+            source_ext: self.source_ext.clone(),
+            animated: self.animated,
+            source_path: self.source_path.clone(),
+            last: None,
+            dims_after: None,
+            note: None,
+            backup: self.backup.clone(),
+            pending: self.pending.clone(),
+            times: self.times,
+            changed: false,
+        }
+    }
+
+    /// Apply the recipe at `level` to the original, write the result and
+    /// report each step. `None` means the job was cancelled before anything
+    /// was written. A plain run that does not come out smaller leaves the
+    /// original as the result (Cycle 1); an explicit edit always writes.
     pub fn run(
         &mut self,
         level: Level,
@@ -196,6 +318,7 @@ impl Job {
         deliver: Deliver,
     ) -> Option<Finished> {
         self.level = level;
+        self.edits.level = level;
         if o.cancel.is_cancelled() {
             return None;
         }
@@ -203,11 +326,13 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return Some(self.fail(tf("error.backup", &[("why", &describe(&e))]), e)),
         };
-        let step = t(match self.format {
-            Format::Png => "card.step.png",
-            Format::Jpeg => "card.step.jpeg",
-            Format::WebP => "card.step.webp",
-            Format::Gif => "card.step.gif",
+        let plain = self.edits.is_plain();
+        let step = t(match (plain, self.source_format) {
+            (false, _) => "card.step.edit",
+            (true, Format::Png) => "card.step.png",
+            (true, Format::Jpeg) => "card.step.jpeg",
+            (true, Format::WebP) => "card.step.webp",
+            (true, Format::Gif) => "card.step.gif",
         });
         emit(self.update(
             JobState::Optimising {
@@ -223,33 +348,62 @@ impl Job {
             gifsicle: o.gifsicle.clone(),
             cancel: o.cancel.clone(),
         };
-        let outcome = match optimise::optimise(&original, self.format, &options) {
-            Ok(outcome) => outcome,
-            Err(OptimiseError::Cancelled) => return None,
-            Err(e) => return Some(self.fail(self.reason(&e), e)),
+        // (state, Some((bytes, format, size after, fit target missed)))
+        let (state, result) = if plain {
+            match optimise::optimise(&original, self.source_format, &options) {
+                Ok(Outcome::Smaller { bytes }) => (
+                    JobState::Done,
+                    Some((bytes, self.source_format, None, false)),
+                ),
+                Ok(Outcome::AlreadyOptimal) => (JobState::AlreadyOptimal, None),
+                Ok(Outcome::Larger) => (JobState::Larger, None),
+                Err(OptimiseError::Cancelled) => return None,
+                Err(e) => return Some(self.fail(self.reason(&e), e)),
+            }
+        } else {
+            match edit::apply(&original, self.source_format, &self.edits, &options) {
+                Ok(a) => (
+                    JobState::Done,
+                    Some((a.bytes, a.format, Some(a.dims), a.missed_target)),
+                ),
+                Err(OptimiseError::Cancelled) => return None,
+                Err(e) => return Some(self.fail(self.reason(&e), e)),
+            }
         };
         // The last moment a cancel counts: after this the user's data changes.
         if o.cancel.is_cancelled() {
             return None;
         }
-        let (state, bytes, after) = match &outcome {
-            Outcome::Smaller { bytes } => (JobState::Done, bytes, Some(bytes.len() as u64)),
-            Outcome::AlreadyOptimal => (JobState::AlreadyOptimal, &original, None),
-            Outcome::Larger => (JobState::Larger, &original, None),
+        let written = match result {
+            Some((bytes, format, dims_after, missed)) => {
+                self.dims_after = dims_after.filter(|d| Some(*d) != self.dims);
+                self.note = missed.then(|| {
+                    let target = bytes_label(self.edits.fit_under.unwrap_or_default());
+                    tf("card.note.fit_missed", &[("size", &target)])
+                });
+                let after = bytes.len() as u64;
+                self.put(&bytes, format, &original, o, deliver)
+                    .map(|()| Some(after))
+            }
+            None => {
+                self.dims_after = None;
+                self.note = None;
+                let replace = self.changed;
+                self.put_back(&original, replace, o, deliver).map(|()| None)
+            }
         };
-        let optimised = state == JobState::Done;
-        if let Err((reason, cause)) = self.write(bytes, optimised || self.changed, o, deliver) {
-            return Some(self.fail(reason, cause));
-        }
-        self.changed = optimised;
-        Some(Finished {
-            update: self.update(state, after),
-            cause: None,
+        Some(match written {
+            Ok(after) => Finished {
+                update: self.update(state, after),
+                cause: None,
+            },
+            Err((reason, cause)) => self.fail(reason, cause),
         })
     }
 
-    /// Put the original back (§5.5): in place for a file; in the working file
-    /// and on the clipboard for a clipboard image.
+    /// Put the original back (§5.5) and clear the recipe: in place for a file
+    /// (and the conversion to the Trash); in the working file and on the
+    /// clipboard for a clipboard image.
     pub fn restore(&mut self, o: &RunOptions, deliver: Deliver) -> Finished {
         let read = self
             .backup
@@ -260,10 +414,12 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return self.fail(t("error.backup_missing"), e),
         };
-        if let Err((reason, cause)) = self.write(&original, true, o, deliver) {
+        self.edits = Edits::default();
+        self.dims_after = None;
+        self.note = None;
+        if let Err((reason, cause)) = self.put_back(&original, true, o, deliver) {
             return self.fail(reason, cause);
         }
-        self.changed = false;
         Finished {
             update: self.update(JobState::Restored, None),
             cause: None,
@@ -280,8 +436,12 @@ impl Job {
                     backups.store_bytes(self.id.as_str(), &name, bytes)?
                 }
                 Source::File => {
-                    self.times = fsutil::read_times(&self.output).ok();
-                    backups.store_file(self.id.as_str(), &self.output)?
+                    let source = self
+                        .source_path
+                        .clone()
+                        .unwrap_or_else(|| self.output.clone());
+                    self.times = fsutil::read_times(&source).ok();
+                    backups.store_file(self.id.as_str(), &source)?
                 }
             };
             self.backup = Some(stored);
@@ -290,42 +450,180 @@ impl Job {
         fs::read(self.backup.as_ref().expect("stored above"))
     }
 
-    /// Write `bytes` to the output. A clipboard job always refreshes its working
-    /// file (drag and reveal use it) and touches the clipboard only when
-    /// `replace`; a file job is only rewritten when `replace`.
-    fn write(
-        &self,
+    /// Make `bytes`, in `format`, the job's one result. A file job's result
+    /// goes where the output rules say; a previous result elsewhere is taken
+    /// back first (spec §4.4).
+    fn put(
+        &mut self,
         bytes: &[u8],
+        format: Format,
+        original: &[u8],
+        o: &RunOptions,
+        deliver: Deliver,
+    ) -> Result<(), (String, String)> {
+        let ext = if format == self.source_format {
+            self.source_ext.clone()
+        } else {
+            format.extension().to_owned()
+        };
+        match self.source {
+            Source::Clipboard => {
+                let path = self.output.with_file_name(format!("{}.{ext}", self.name));
+                self.write_work_file(&path, bytes)?;
+                deliver(format, bytes, &self.output)
+                    .map_err(|e| (t("error.clipboard_write"), e))?;
+            }
+            Source::File => {
+                let source = self
+                    .source_path
+                    .clone()
+                    .unwrap_or_else(|| self.output.clone());
+                let kind = if format == self.source_format {
+                    OutputKind::Optimised
+                } else {
+                    OutputKind::Converted
+                };
+                let dims = self.dims_after.or(self.dims).unwrap_or_default();
+                let target = output::Target {
+                    source: &source,
+                    job: self.id.as_str(),
+                    ext: &ext,
+                    dims,
+                    kind,
+                };
+                let wanted = output::resolve(
+                    &target,
+                    &o.output,
+                    &o.work_dir,
+                    &o.home,
+                    Local::now().date_naive(),
+                );
+                let own = self.last.as_ref().map(|w| w.path.clone());
+                let path = if wanted == source {
+                    wanted
+                } else {
+                    output::unique(&wanted, own.as_deref())
+                };
+                if let Some(last) = self.last.clone().filter(|w| w.path != path) {
+                    self.undo(&last, original, o)?;
+                    self.last = None;
+                }
+                self.write_file(&path, bytes, &source, o)?;
+                let trash_source = kind == OutputKind::Converted
+                    && o.output.converted.location == Location::InPlace
+                    && path != source;
+                if trash_source && source.exists() {
+                    let _ = (o.trash)(&source);
+                }
+                let source_changed = path == source
+                    || trash_source
+                    || self.last.as_ref().is_some_and(|w| w.source_changed);
+                self.last = Some(Written {
+                    path: path.clone(),
+                    created: path != source,
+                    source_changed,
+                });
+                self.output = path;
+            }
+        }
+        self.format = format;
+        self.ext = ext;
+        self.changed = true;
+        Ok(())
+    }
+
+    /// Leave the original as the result: a clipboard job's working file holds
+    /// it (on the clipboard too when `replace`); a file job's previous result
+    /// is taken back.
+    fn put_back(
+        &mut self,
+        original: &[u8],
         replace: bool,
         o: &RunOptions,
         deliver: Deliver,
     ) -> Result<(), (String, String)> {
-        let folder = self.output.parent().unwrap_or(Path::new(""));
-        let cant_write =
-            |e: io::Error| (tf("error.write", &[("dir", &shown(folder))]), e.to_string());
         match self.source {
             Source::Clipboard => {
-                fs::create_dir_all(folder)
-                    .and_then(|()| fs::write(&self.output, bytes))
-                    .map_err(cant_write)?;
+                let path = self
+                    .output
+                    .with_file_name(format!("{}.{}", self.name, self.source_ext));
+                self.write_work_file(&path, original)?;
                 if replace {
-                    deliver(self.format, bytes, &self.output)
+                    deliver(self.source_format, original, &self.output)
                         .map_err(|e| (t("error.clipboard_write"), e))?;
                 }
             }
-            Source::File if replace => {
-                fsutil::atomic_replace(&self.output, bytes).map_err(cant_write)?;
-                // Best effort: the content is safe; a lost tag or date is not worth an Error card.
-                if let Some(backup) = &self.backup {
-                    let _ = fsutil::copy_xattrs(backup, &self.output);
+            Source::File => {
+                if let Some(last) = self.last.clone() {
+                    self.undo(&last, original, o)?;
+                    self.last = None;
                 }
-                if o.preserve_dates
-                    && let Some(times) = &self.times
-                {
-                    let _ = fsutil::set_times(&self.output, times);
+                if let Some(source) = &self.source_path {
+                    self.output = source.clone();
                 }
             }
-            Source::File => {}
+        }
+        self.format = self.source_format;
+        self.ext = self.source_ext.clone();
+        self.changed = false;
+        Ok(())
+    }
+
+    /// Take a file job's result back: a file Ferry made goes to the Trash; a
+    /// source Ferry overwrote or trashed gets the original again.
+    fn undo(
+        &self,
+        last: &Written,
+        original: &[u8],
+        o: &RunOptions,
+    ) -> Result<(), (String, String)> {
+        if last.created && last.path.exists() {
+            let _ = (o.trash)(&last.path);
+        }
+        if last.source_changed
+            && let Some(source) = &self.source_path
+        {
+            self.write_file(source, original, source, o)?;
+        }
+        Ok(())
+    }
+
+    /// Write a file job's result atomically, with the original's extended
+    /// attributes, and its dates when it replaces the source.
+    fn write_file(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        source: &Path,
+        o: &RunOptions,
+    ) -> Result<(), (String, String)> {
+        let folder = path.parent().unwrap_or(Path::new(""));
+        fs::create_dir_all(folder)
+            .and_then(|()| fsutil::atomic_replace(path, bytes))
+            .map_err(|e| (tf("error.write", &[("dir", &shown(folder))]), e.to_string()))?;
+        // Best effort: the content is safe; a lost tag or date is not worth an Error card.
+        if let Some(backup) = &self.backup {
+            let _ = fsutil::copy_xattrs(backup, path);
+        }
+        if o.preserve_dates
+            && path == source
+            && let Some(times) = &self.times
+        {
+            let _ = fsutil::set_times(path, times);
+        }
+        Ok(())
+    }
+
+    /// A clipboard job's working file (drag and reveal use it), renamed when
+    /// the result's extension changes.
+    fn write_work_file(&mut self, path: &Path, bytes: &[u8]) -> Result<(), (String, String)> {
+        let folder = path.parent().unwrap_or(Path::new(""));
+        fs::create_dir_all(folder)
+            .and_then(|()| fs::write(path, bytes))
+            .map_err(|e| (tf("error.write", &[("dir", &shown(folder))]), e.to_string()))?;
+        if path != self.output {
+            let _ = fs::remove_file(&self.output);
+            self.output = path.to_owned();
         }
         Ok(())
     }
@@ -338,7 +636,7 @@ impl Job {
     }
 
     fn reason(&self, e: &OptimiseError) -> String {
-        let format = label(self.format);
+        let format = self.source_format.label();
         match e {
             OptimiseError::Decode(_) => tf("error.decode", &[("format", format)]),
             OptimiseError::Encode(_) => tf("error.encode", &[("format", format)]),
@@ -347,13 +645,16 @@ impl Job {
         }
     }
 
-    /// "2880×1800 · PNG", plus "aggressive" and "from bitmap" when they apply.
+    /// "2880×1800 · PNG" or "2880×1800 → 1440×900 · WebP", plus "aggressive"
+    /// and "from bitmap" when they apply.
     fn detail(&self) -> String {
         let mut parts = Vec::new();
-        if let Some((w, h)) = self.dims {
-            parts.push(format!("{w}×{h}"));
+        match (self.dims, self.dims_after) {
+            (Some((w, h)), Some((aw, ah))) => parts.push(format!("{w}×{h} → {aw}×{ah}")),
+            (Some((w, h)), None) => parts.push(format!("{w}×{h}")),
+            _ => {}
         }
-        parts.push(label(self.format).to_owned());
+        parts.push(self.format.label().to_owned());
         if self.level == Level::Aggressive {
             parts.push(t("card.detail.aggressive"));
         }
@@ -379,16 +680,31 @@ pub fn notice(reason: String) -> JobUpdate {
         can_restore: false,
         can_retry: false,
         output: None,
+        dims_before: None,
+        dims_after: None,
+        format: None,
+        converted: false,
+        can_edit: false,
+        edits: Edits::default(),
+        note: None,
     }
 }
 
-fn label(format: Format) -> &'static str {
-    match format {
-        Format::Png => "PNG",
-        Format::Jpeg => "JPEG",
-        Format::Gif => "GIF",
-        Format::WebP => "WebP",
+/// "1 MB", "250 KB", "1.5 MB": decimal units, like formatBytes in src/lib/format.ts.
+fn bytes_label(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let (mut value, mut unit) = (bytes as f64, 0);
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
     }
+    let text = if unit > 0 && value < 100.0 {
+        let one_decimal = format!("{value:.1}");
+        one_decimal.trim_end_matches(".0").to_owned()
+    } else {
+        format!("{value:.0}")
+    };
+    format!("{text} {}", UNITS[unit])
 }
 
 /// A short, plain reason: "disk full" rather than "No space left on device (os error 28)".
@@ -411,6 +727,8 @@ fn shown(folder: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::EditsPatch;
+    use crate::settings::Location;
     use crate::testutil;
     use chrono::NaiveDate;
     use std::cell::RefCell;
@@ -443,12 +761,50 @@ mod tests {
             .unwrap()
     }
 
-    fn options() -> RunOptions {
+    /// Stands in for the system Trash: moves the file into `.trash` beside it.
+    fn test_trash(path: &Path) -> io::Result<()> {
+        let bin = path.parent().unwrap().join(".trash");
+        fs::create_dir_all(&bin)?;
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let dest = (0..)
+            .map(|n| {
+                bin.join(if n == 0 {
+                    name.clone()
+                } else {
+                    format!("{n}-{name}")
+                })
+            })
+            .find(|p| !p.exists())
+            .unwrap();
+        fs::rename(path, dest)
+    }
+
+    fn options_with(settings: &Settings) -> RunOptions {
         RunOptions::new(
-            &Settings::default(),
+            settings,
             testutil::gifsicle(),
+            std::env::temp_dir().join("ferry-test-work"),
+            test_trash,
             CancelToken::new(),
         )
+    }
+
+    fn options() -> RunOptions {
+        options_with(&Settings::default())
+    }
+
+    fn scale(percent: u8) -> EditsPatch {
+        EditsPatch {
+            scale: Some(Some(percent)),
+            ..EditsPatch::default()
+        }
+    }
+
+    fn convert(format: Format) -> EditsPatch {
+        EditsPatch {
+            format: Some(Some(format)),
+            ..EditsPatch::default()
+        }
     }
 
     /// What a run emitted and delivered.
@@ -835,5 +1191,254 @@ mod tests {
         assert!(matches!(update.state, JobState::Error { .. }));
         assert!(!update.can_retry && !update.can_restore);
         assert!(update.output.is_none());
+    }
+
+    #[test]
+    fn a_downscale_re_encodes_from_the_original_and_never_compounds() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        let o = options();
+        run(&mut job, Level::Normal, &o, &env);
+        job.edit(scale(50));
+        let (first, seen) = run(&mut job, Level::Normal, &o, &env);
+        let first = first.unwrap().update;
+        assert_eq!(first.state, JobState::Done);
+        assert_eq!(first.dims_after, Some((150, 100)));
+        assert_eq!(first.detail, "300×200 → 150×100 · PNG");
+        assert_eq!(first.edits.scale, Some(50));
+        assert!(first.can_edit);
+        let delivered = &seen.delivered.last().unwrap().1;
+        assert_eq!(sniff::dimensions(delivered, Format::Png), Some((150, 100)));
+
+        job.edit(scale(50));
+        let (_, again) = run(&mut job, Level::Normal, &o, &env);
+        let delivered = &again.delivered.last().unwrap().1;
+        assert_eq!(
+            sniff::dimensions(delivered, Format::Png),
+            Some((150, 100)),
+            "not 75×50"
+        );
+    }
+
+    #[test]
+    fn convert_in_place_trashes_the_source_and_restore_brings_it_back() {
+        let env = Env::new();
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let o = options();
+        run(&mut job, Level::Normal, &o, &env);
+        job.edit(convert(Format::WebP));
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+
+        let webp = env.dir.path().join("shot.webp");
+        assert_eq!(update.output, Some(webp.clone()));
+        assert_eq!(sniff::sniff(&fs::read(&webp).unwrap()), Some(Format::WebP));
+        assert!(!path.exists(), "the source went to the Trash");
+        assert_eq!(
+            fs::read(env.dir.path().join(".trash/shot.png")).unwrap(),
+            input,
+            "the original, not the optimised file"
+        );
+        assert!(update.converted);
+        assert_eq!(
+            (update.ext.as_str(), update.format),
+            ("webp", Some(Format::WebP))
+        );
+
+        let restored = job.restore(&o, &mut |_, _, _| Ok(())).update;
+        assert_eq!(restored.state, JobState::Restored);
+        assert_eq!(fs::read(&path).unwrap(), input);
+        assert!(!webp.exists());
+        assert_eq!(restored.output, Some(path));
+        assert!(!restored.converted);
+        assert_eq!(restored.edits, Edits::default());
+    }
+
+    #[test]
+    fn switching_from_a_same_folder_result_to_an_in_place_conversion_leaves_one_file() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.output.optimised.location = Location::SameFolder;
+        let o = options_with(&settings);
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &settings, true).unwrap();
+
+        let first = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        let optimised = env.dir.path().join("shot_optimised.png");
+        assert_eq!(first.output, Some(optimised.clone()));
+        assert_eq!(fs::read(&path).unwrap(), input, "the source is untouched");
+
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &o, &env);
+        assert!(env.dir.path().join("shot.webp").exists());
+        assert!(!optimised.exists() && !path.exists());
+    }
+
+    #[test]
+    fn choosing_the_source_format_again_undoes_the_conversion() {
+        let env = Env::new();
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let o = options();
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &o, &env);
+        job.edit(convert(Format::Png));
+        assert_eq!(job.edits.format, None);
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        assert!(!env.dir.path().join("shot.webp").exists());
+        assert!(fs::metadata(&path).unwrap().len() < input.len() as u64);
+        assert!(!update.converted);
+    }
+
+    #[test]
+    fn an_explicit_edit_writes_its_result_even_when_larger() {
+        let env = Env::new();
+        let mut job = Job::clipboard(
+            Format::Png,
+            testutil::png(1, 1),
+            false,
+            "%f",
+            &env.work(),
+            now(),
+        );
+        job.edit(EditsPatch {
+            compression: Some(Some(100)),
+            ..EditsPatch::default()
+        });
+        let (finished, seen) = run(&mut job, Level::Normal, &options(), &env);
+        let update = finished.unwrap().update;
+        assert_eq!(update.state, JobState::Done);
+        assert!(update.after.is_some());
+        assert_eq!(seen.delivered.len(), 1);
+    }
+
+    #[test]
+    fn an_unreachable_fit_target_is_noted_on_the_card() {
+        let env = Env::new();
+        let jpeg = testutil::jpeg(400, 300, 90, &testutil::JpegExtras::default());
+        let mut job = Job::clipboard(Format::Jpeg, jpeg, false, "%f", &env.work(), now());
+        job.edit(EditsPatch {
+            fit_under: Some(Some(100)),
+            ..EditsPatch::default()
+        });
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.state, JobState::Done);
+        assert_eq!(
+            update.note.as_deref(),
+            Some("Couldn't reach 100 B — try downscaling")
+        );
+    }
+
+    #[test]
+    fn an_animated_webp_offers_no_edits() {
+        let env = Env::new();
+        let mut job = Job::clipboard(
+            Format::WebP,
+            testutil::animated_webp(),
+            false,
+            "%f",
+            &env.work(),
+            now(),
+        );
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert!(!update.can_edit);
+        let (mut png_job, _) = clipboard_png(&env, "%f");
+        assert!(
+            run(&mut png_job, Level::Normal, &options(), &env)
+                .0
+                .unwrap()
+                .update
+                .can_edit
+        );
+    }
+
+    #[test]
+    fn a_clipboard_conversion_renames_the_working_file_and_delivers_the_new_format() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        let o = options();
+        let first = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        job.edit(convert(Format::Jpeg));
+        let (finished, seen) = run(&mut job, Level::Normal, &o, &env);
+        let update = finished.unwrap().update;
+        let output = update.output.unwrap();
+        assert_eq!(output.extension().unwrap(), "jpg");
+        assert!(
+            !first.output.unwrap().exists(),
+            "the old working file is gone"
+        );
+        assert_eq!(seen.delivered.last().unwrap().0, Format::Jpeg);
+        assert_eq!(update.ext, "jpg");
+    }
+
+    #[test]
+    fn an_edit_after_the_source_vanished_still_writes_a_result() {
+        let env = Env::new();
+        let path = env.file("shot.png", &testutil::png(300, 200));
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let o = options();
+        run(&mut job, Level::Normal, &o, &env);
+        fs::remove_file(&path).unwrap();
+        job.edit(scale(50));
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        assert_eq!(update.state, JobState::Done);
+        assert_eq!(
+            sniff::dimensions(&fs::read(&path).unwrap(), Format::Png),
+            Some((150, 100))
+        );
+    }
+
+    #[test]
+    fn an_unwritable_output_folder_is_an_error_and_the_source_keeps_the_original() {
+        let env = Env::new();
+        let blocker = env.file("blocker", b"not a folder");
+        let mut settings = Settings::default();
+        settings.images.output.converted.location = Location::Folder;
+        settings.images.output.converted.folder =
+            blocker.join("sub").to_string_lossy().into_owned();
+        let o = options_with(&settings);
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        run(&mut job, Level::Normal, &o, &env);
+        job.edit(convert(Format::WebP));
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        assert!(
+            matches!(&update.state, JobState::Error { reason } if reason.starts_with("Can't write to"))
+        );
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn a_fork_shares_the_original_and_leaves_its_parent_alone() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        let o = options();
+        let parent = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        let mut twin = job.fork();
+        assert_ne!(twin.id, job.id);
+        twin.edit(convert(Format::WebP));
+        let child = run(&mut twin, Level::Normal, &o, &env).0.unwrap().update;
+        assert_eq!(child.thumb_path, parent.thumb_path, "same backup");
+        assert_ne!(child.output, parent.output);
+        assert!(parent.output.unwrap().exists());
+        assert_eq!(child.format, Some(Format::WebP));
+    }
+
+    #[test]
+    fn sizes_read_like_the_cards() {
+        assert_eq!(bytes_label(100), "100 B");
+        assert_eq!(bytes_label(1_000_000), "1 MB");
+        assert_eq!(bytes_label(1_500_000), "1.5 MB");
+        assert_eq!(bytes_label(250_000), "250 KB");
     }
 }
