@@ -259,7 +259,7 @@ impl Settings {
             Err(_) => return (Settings::default(), recover(path)),
         };
         match serde_json::from_slice::<Settings>(&bytes) {
-            Ok(settings) => (settings.clamped(), LoadStatus::Loaded),
+            Ok(settings) => (settings.sanitised(), LoadStatus::Loaded),
             Err(_) => (Settings::default(), recover(path)),
         }
     }
@@ -273,11 +273,24 @@ impl Settings {
         fsutil::atomic_replace(path, &json)
     }
 
-    /// A hand-edited file must not turn the encoders or the size limit into nonsense.
-    fn clamped(mut self) -> Self {
+    /// A hand-edited file, or a typo in the Settings window, must not turn the
+    /// encoders, the size limits or the housekeeping into nonsense.
+    pub fn sanitised(mut self) -> Self {
         self.images.compression = self.images.compression.clamp(5, 100);
         self.images.max_size_mb = self.images.max_size_mb.max(1);
         self.clipboard.max_size_mb = self.clipboard.max_size_mb.max(1);
+        self.floating.auto_hide_secs = self.floating.auto_hide_secs.min(3600);
+        self.backups.retention_days = self.backups.retention_days.clamp(1, 3650);
+        for list in [
+            &mut self.images.ignored_extensions,
+            &mut self.clipboard.ignored_apps,
+        ] {
+            *list = list
+                .iter()
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect();
+        }
         self
     }
 }
@@ -506,5 +519,27 @@ mod tests {
             Path::new("/Volumes/Photos")
         );
         assert_eq!(expand_home("~other/x", home), Path::new("~other/x"));
+    }
+
+    #[test]
+    fn out_of_range_values_are_clamped_and_blank_list_entries_dropped() {
+        let mut s = Settings::default();
+        s.images.compression = 0;
+        s.images.max_size_mb = 0;
+        s.clipboard.max_size_mb = 0;
+        s.floating.auto_hide_secs = 99_999_999;
+        s.backups.retention_days = 0;
+        s.images.ignored_extensions = vec![" png ".into(), "".into(), "  ".into()];
+        s.clipboard.ignored_apps = vec!["".into(), "com.example.App".into()];
+        let s = s.sanitised();
+        assert_eq!(s.images.compression, 5);
+        assert_eq!((s.images.max_size_mb, s.clipboard.max_size_mb), (1, 1));
+        assert_eq!(s.floating.auto_hide_secs, 3600);
+        assert_eq!(s.backups.retention_days, 1);
+        assert_eq!(s.images.ignored_extensions, vec!["png".to_string()]);
+        assert_eq!(
+            s.clipboard.ignored_apps,
+            vec!["com.example.App".to_string()]
+        );
     }
 }
