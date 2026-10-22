@@ -7,5 +7,13 @@
   "settings.window_title": "Ferry Settings",
   "settings.placeholder_title": "Settings",
   "settings.placeholder_body": "Settings panes arrive in the next milestone.",
-  "card.aria": "{name}, {state}"
+  "card.aria": "{name}, {state}",
+  "tray.test_card": "Show test card",
+  "stack.window_title": "Ferry results",
+  "card.state.done": "optimised",
+  "card.copy": "Copy optimised file",
+  "card.reveal.mac": "Show in Finder",
+  "card.reveal.windows": "Show in Explorer",
+  "card.aggressive": "Optimise aggressively",
+  "card.close": "Close"
 }
