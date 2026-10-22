@@ -8,6 +8,7 @@ pub mod geometry;
 pub mod optimise;
 pub mod sidecar;
 pub mod sniff;
+pub mod template;
 
 #[cfg(test)]
 mod testutil;
