@@ -3,7 +3,7 @@
 
 mod gif;
 mod jpeg;
-mod png;
+pub(crate) mod png;
 pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
