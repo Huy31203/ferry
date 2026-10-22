@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "ferry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "clipboard-win",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "ferry-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "imagequant",
