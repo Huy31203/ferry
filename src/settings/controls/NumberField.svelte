@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { commitNumber } from '../../lib/number';
+
   let {
     value,
     min,
@@ -18,14 +20,10 @@
   } = $props();
 
   function commit(input: HTMLInputElement) {
-    const typed = Number(input.value);
-    if (!Number.isFinite(typed)) {
-      input.value = String(value);
-      return;
-    }
-    const clamped = Math.min(max, Math.max(min, Math.round(typed)));
-    input.value = String(clamped);
-    if (clamped !== value) onchange(clamped);
+    const next = commitNumber(input.value, input.validity.badInput, value, min, max);
+    // Show what is saved, or the old value when nothing is.
+    input.value = String(next ?? value);
+    if (next !== null) onchange(next);
   }
 </script>
 
