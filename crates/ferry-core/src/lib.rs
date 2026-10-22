@@ -4,3 +4,6 @@
 pub mod cancel;
 pub mod geometry;
 pub mod sniff;
+
+#[cfg(test)]
+mod testutil;
