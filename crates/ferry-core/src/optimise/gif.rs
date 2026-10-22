@@ -2,6 +2,7 @@
 //! so animated GIFs stay animated with the same frame count.
 
 use super::{OptimiseError, OptimiseOptions, quality};
+use crate::edit::geometry::Rect;
 use crate::sidecar::{self, DEFAULT_TIMEOUT, SidecarError};
 use crate::sniff::gif_is_complete;
 
@@ -11,6 +12,17 @@ fn lossy(q: u8) -> u32 {
 }
 
 pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    edit(input, None, None, o)
+}
+
+/// Crop, then resize, every frame, then optimise as usual. gifsicle applies
+/// `--crop` before `--resize`, and keeps the frame count and timing.
+pub fn edit(
+    input: &[u8],
+    crop: Option<Rect>,
+    size: Option<(u32, u32)>,
+    o: &OptimiseOptions,
+) -> Result<Vec<u8>, OptimiseError> {
     if !gif_is_complete(input) {
         return Err(OptimiseError::Decode("the GIF is incomplete".into()));
     }
@@ -19,13 +31,19 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
             "gifsicle missing — reinstall Ferry".into(),
         ));
     };
-    let lossy = format!("--lossy={}", lossy(quality(o)));
-    let mut args = vec!["-O3", lossy.as_str(), "--colors", "256"];
+    let mut args = edit_args(crop, size);
+    args.extend([
+        "-O3".into(),
+        format!("--lossy={}", lossy(quality(o))),
+        "--colors".into(),
+        "256".into(),
+    ]);
     if o.strip_metadata {
         // gifsicle keeps comments and unknown extensions by default; the loop
         // count survives both flags.
-        args.extend(["--no-comments", "--no-extensions"]);
+        args.extend(["--no-comments".into(), "--no-extensions".into()]);
     }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     sidecar::run(gifsicle, &args, input, DEFAULT_TIMEOUT, &o.cancel).map_err(|e| match e {
         SidecarError::Cancelled => OptimiseError::Cancelled,
         SidecarError::Spawn(e) => {
@@ -33,6 +51,17 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
         }
         other => OptimiseError::Encode(other.to_string()),
     })
+}
+
+fn edit_args(crop: Option<Rect>, size: Option<(u32, u32)>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(c) = crop {
+        args.push(format!("--crop={},{}+{}x{}", c.x, c.y, c.width, c.height));
+    }
+    if let Some((w, h)) = size {
+        args.push(format!("--resize={w}x{h}"));
+    }
+    args
 }
 
 #[cfg(test)]
@@ -160,5 +189,40 @@ mod tests {
                 "cut at {cut}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn crop_comes_before_resize_in_the_arguments() {
+        let crop = Rect {
+            x: 8,
+            y: 4,
+            width: 32,
+            height: 24,
+        };
+        assert_eq!(
+            edit_args(Some(crop), Some((16, 12))),
+            ["--crop=8,4+32x24", "--resize=16x12"]
+        );
+        assert!(edit_args(None, None).is_empty());
+    }
+
+    #[test]
+    fn an_animated_gif_is_cropped_and_resized_frame_by_frame() {
+        let Some(o) = with_gifsicle(OptimiseOptions::default()) else {
+            return;
+        };
+        let input = testutil::gif(3);
+        let crop = Rect {
+            x: 8,
+            y: 8,
+            width: 32,
+            height: 24,
+        };
+        let out = edit(&input, Some(crop), Some((16, 12)), &o).unwrap();
+        assert_eq!(gif_frame_count(&out), 3);
+        assert_eq!(
+            crate::sniff::dimensions(&out, crate::sniff::Format::Gif),
+            Some((16, 12))
+        );
     }
 }
