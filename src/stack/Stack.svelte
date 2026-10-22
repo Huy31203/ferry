@@ -52,9 +52,19 @@
   :global(html),
   :global(body) {
     background: transparent;
+    height: 100%;
     overflow: hidden;
   }
+  /* Bottom-anchored: when Rust clamps the window below the stack's height, the
+     oldest cards are clipped at the top and the newest stay visible. */
+  :global(#app) {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 100%;
+  }
   .stack {
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;

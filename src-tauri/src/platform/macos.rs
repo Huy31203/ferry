@@ -45,3 +45,7 @@ pub fn show_without_focus(window: &WebviewWindow) -> tauri::Result<()> {
         Err(_) => window.show(),
     }
 }
+
+pub fn hide(window: &WebviewWindow) -> tauri::Result<()> {
+    window.hide()
+}

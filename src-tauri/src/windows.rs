@@ -3,7 +3,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ferry_core::geometry::{Corner, Rect, place};
+use ferry_core::geometry::{Corner, Rect, fit, place};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::{i18n::t, platform};
@@ -44,19 +44,29 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         return Ok(());
     };
     if width < 1.0 || height < 1.0 {
-        return stack.hide().map_err(|e| e.to_string());
+        return platform::hide(&stack).map_err(|e| e.to_string());
     }
     let monitor = app
         .cursor_position()
         .ok()
-        .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
+        .and_then(|p| {
+            // tao reports the macOS cursor as points × the main display's scale,
+            // while monitor_from_point compares against points.
+            #[cfg(target_os = "macos")]
+            let main_scale = app
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .map_or(1.0, |m| m.scale_factor());
+            #[cfg(not(target_os = "macos"))]
+            let main_scale = 1.0;
+            app.monitor_from_point(p.x / main_scale, p.y / main_scale)
+                .ok()
+                .flatten()
+        })
         .or_else(|| app.primary_monitor().ok().flatten())
         .ok_or("no monitor found")?;
     let scale = monitor.scale_factor();
-    let size = (
-        (width * scale).ceil() as u32,
-        (height * scale).ceil() as u32,
-    );
     let work = monitor.work_area();
     let area = Rect {
         x: work.position.x,
@@ -64,12 +74,18 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         width: work.size.width,
         height: work.size.height,
     };
-    let (x, y) = place(
+    let margin = (STACK_MARGIN * scale).round() as u32;
+    // A stack taller than the work area keeps its newest cards (the page anchors
+    // them to the bottom) instead of running under the taskbar.
+    let size = fit(
         area,
-        size,
-        Corner::BottomRight,
-        (STACK_MARGIN * scale).round() as u32,
+        (
+            (width * scale).ceil() as u32,
+            (height * scale).ceil() as u32,
+        ),
+        margin,
     );
+    let (x, y) = place(area, size, Corner::BottomRight, margin);
 
     // macOS positions windows in points; converting with the *target* monitor's
     // scale keeps mixed-DPI setups right. Windows uses physical pixels directly.
@@ -77,7 +93,10 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
     {
         use tauri::{LogicalPosition, LogicalSize};
         stack
-            .set_size(LogicalSize::new(width, height))
+            .set_size(LogicalSize::new(
+                f64::from(size.0) / scale,
+                f64::from(size.1) / scale,
+            ))
             .map_err(|e| e.to_string())?;
         stack
             .set_position(LogicalPosition::new(
@@ -89,6 +108,11 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
     #[cfg(not(target_os = "macos"))]
     {
         use tauri::{PhysicalPosition, PhysicalSize};
+        // Move first so the window is on the target monitor before it is sized;
+        // otherwise a DPI change rescales the new size a second time.
+        stack
+            .set_position(PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
         stack
             .set_size(PhysicalSize::new(size.0, size.1))
             .map_err(|e| e.to_string())?;
@@ -133,7 +157,11 @@ pub fn open_settings(app: &AppHandle) {
         .min_inner_size(720.0, 480.0)
         .center()
         .build();
-    if let Err(e) = built {
-        eprintln!("ferry: could not open settings: {e}");
+    match built {
+        // A tray app is never frontmost, so a new window opens behind other apps without this.
+        Ok(window) => {
+            let _ = window.set_focus();
+        }
+        Err(e) => eprintln!("ferry: could not open settings: {e}"),
     }
 }
