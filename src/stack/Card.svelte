@@ -466,7 +466,8 @@
     border: 1px solid rgba(255, 255, 255, 0.45);
     font-size: 11px;
     font-weight: 600;
-    padding: 0 7px;
+    /* The font's line box sits low in a 1-line-height pill; 3px below lifts the x-height onto the centre. */
+    padding: 0 7px 3px;
   }
   .line {
     display: flex;
