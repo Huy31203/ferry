@@ -1,4 +1,4 @@
-//! Where the results stack window goes on screen.
+//! Where Ferry's windows go on screen: the results stack and the compare window.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Corner {
@@ -41,6 +41,42 @@ pub fn place(area: Rect, size: (u32, u32), corner: Corner, margin: u32) -> (i32,
 pub fn fit(area: Rect, size: (u32, u32), margin: u32) -> (u32, u32) {
     let room = |extent: u32| extent.saturating_sub(margin.saturating_mul(2));
     (size.0.min(room(area.width)), size.1.min(room(area.height)))
+}
+
+/// The size of a window that shows an image of `image` pixels at 1:1 plus
+/// `chrome` (its toolbars, in pixels). A larger image is shrunk, keeping its
+/// shape, until the window takes at most `share` of `area` each way. The
+/// window is never smaller than `min`, nor larger than `area`.
+pub fn fit_image(
+    area: Rect,
+    image: (u32, u32),
+    chrome: (u32, u32),
+    share: f64,
+    min: (u32, u32),
+) -> (u32, u32) {
+    let most = |extent: u32| (f64::from(extent) * share).floor();
+    let (most_w, most_h) = (most(area.width), most(area.height));
+    let (w, h) = (f64::from(image.0.max(1)), f64::from(image.1.max(1)));
+    let room_w = (most_w - f64::from(chrome.0)).max(1.0);
+    let room_h = (most_h - f64::from(chrome.1)).max(1.0);
+    let k = (room_w / w).min(room_h / h).min(1.0);
+    let side = |pixels: f64, chrome: u32, min: u32, extent: u32| {
+        ((pixels * k).round() as u32 + chrome).max(min).min(extent)
+    };
+    (
+        side(w, chrome.0, min.0, area.width),
+        side(h, chrome.1, min.1, area.height),
+    )
+}
+
+/// Top-left position that centres a window of `size` in `area`; a window
+/// larger than the area starts at its top-left corner.
+pub fn center(area: Rect, size: (u32, u32)) -> (i32, i32) {
+    let gap = |extent: u32, side: u32| i64::from(extent.saturating_sub(side) / 2);
+    (
+        (i64::from(area.x) + gap(area.width, size.0)) as i32,
+        (i64::from(area.y) + gap(area.height, size.1)) as i32,
+    )
 }
 
 #[cfg(test)]
@@ -131,5 +167,56 @@ mod tests {
         };
         assert_eq!(fit(FULL_HD, (2000, 200), 16), (1888, 200));
         assert_eq!(fit(tiny, (300, 200), 16), (0, 0));
+    }
+
+    const CHROME: (u32, u32) = (0, 80);
+    const MIN: (u32, u32) = (520, 360);
+
+    #[test]
+    fn a_small_image_is_shown_at_its_own_size() {
+        assert_eq!(fit_image(FULL_HD, (800, 600), CHROME, 0.8, MIN), (800, 680));
+    }
+
+    #[test]
+    fn a_large_image_shrinks_to_eighty_percent_keeping_its_shape() {
+        // 80% of 1080 is 864; 784 px are left for the image under the bars.
+        assert_eq!(
+            fit_image(FULL_HD, (2880, 1800), CHROME, 0.8, MIN),
+            (1254, 864)
+        );
+    }
+
+    #[test]
+    fn a_tiny_or_thin_image_still_gets_a_usable_window() {
+        assert_eq!(fit_image(FULL_HD, (16, 16), CHROME, 0.8, MIN), (520, 360));
+        assert_eq!(
+            fit_image(FULL_HD, (100, 5000), CHROME, 0.8, MIN),
+            (520, 864)
+        );
+        assert_eq!(fit_image(FULL_HD, (0, 0), CHROME, 0.8, MIN), (520, 360));
+    }
+
+    #[test]
+    fn the_minimum_never_outgrows_a_small_screen() {
+        let small = Rect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        };
+        assert_eq!(fit_image(small, (16, 16), CHROME, 0.8, MIN), (400, 300));
+    }
+
+    #[test]
+    fn center_puts_the_window_in_the_middle_of_its_monitor() {
+        assert_eq!(center(FULL_HD, (1254, 864)), (333, 108));
+        let left = Rect {
+            x: -1440,
+            y: 0,
+            width: 1440,
+            height: 900,
+        };
+        assert_eq!(center(left, (500, 300)), (-970, 300));
+        assert_eq!(center(FULL_HD, (2000, 1200)), (0, 0));
     }
 }
