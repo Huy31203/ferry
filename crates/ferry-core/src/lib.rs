@@ -5,6 +5,7 @@ pub mod backup;
 pub mod cancel;
 pub mod fsutil;
 pub mod geometry;
+pub mod i18n;
 pub mod job;
 pub mod optimise;
 pub mod settings;
