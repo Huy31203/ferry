@@ -40,7 +40,6 @@ impl Effects {
 /// Change the settings: `change` edits a copy, which is sanitised, saved and
 /// applied. Every window learns of it through `settings:changed`. The write
 /// lock is held across the save so two changes cannot interleave.
-#[allow(dead_code)] // used from Task 7
 pub fn update(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
     let state = app.state::<AppState>();
     let (old, new) = {

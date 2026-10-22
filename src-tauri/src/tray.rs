@@ -20,8 +20,7 @@ use crate::state::AppState;
 use crate::{jobs, windows};
 
 const TRAY: &str = "ferry";
-#[cfg(target_os = "macos")]
-const BASE_ICON: &[u8] = include_bytes!("../icons/tray/64x64.png");
+pub(crate) const BASE_ICON: &[u8] = include_bytes!("../icons/tray/64x64.png");
 
 pub fn build(app: &AppHandle) -> Result<()> {
     let mut tray = TrayIconBuilder::with_id(TRAY)
@@ -99,7 +98,8 @@ pub fn refresh(app: &AppHandle) {
     // Windows keeps its full-colour icon; the tooltip carries the state.
     #[cfg(target_os = "macos")]
     if let Ok(base) = tauri::image::Image::from_bytes(BASE_ICON) {
-        let rgba = glyph::render(base.rgba(), base.width(), glyph);
+        let style = state.settings.read().unwrap().general.tray_style;
+        let rgba = glyph::render_styled(base.rgba(), base.width(), glyph, style);
         let _ = tray.set_icon(Some(tauri::image::Image::new_owned(
             rgba,
             base.width(),
@@ -195,6 +195,13 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
         None::<&str>,
     )?;
     let work = MenuItem::with_id(app, "open_work", t("tray.open_work"), true, None::<&str>)?;
+    let force_clean = MenuItem::with_id(
+        app,
+        "force_clean",
+        t("tray.force_clean"),
+        true,
+        None::<&str>,
+    )?;
     let show = CheckMenuItem::with_id(
         app,
         "screenshots",
@@ -226,6 +233,7 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &backups,
             &work,
+            &force_clean,
             &PredefinedMenuItem::separator(app)?,
             &show,
             &PredefinedMenuItem::separator(app)?,
@@ -278,16 +286,19 @@ fn on_menu(app: &AppHandle, id: &str) {
         "open_backups" => open_folder(&state.backups_dir),
         "open_work" => open_folder(&state.work_dir),
         "screenshots" => {
-            let show = {
-                let mut settings = state.settings.write().unwrap();
-                settings.general.show_in_screenshots = !settings.general.show_in_screenshots;
-                if let Err(e) = settings.save(&state.settings_path) {
-                    warn!("could not save settings: {e}");
+            if let Err(e) = crate::prefs::update(app, |s| {
+                s.general.show_in_screenshots = !s.general.show_in_screenshots;
+            }) {
+                warn!("could not save settings: {e}");
+            }
+        }
+        "force_clean" => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = jobs::force_clean(&app) {
+                    warn!("could not clean the working directory: {e}");
                 }
-                settings.general.show_in_screenshots
-            };
-            windows::set_content_protected(app, !show);
-            rebuild(app);
+            });
         }
         "settings" => windows::open_settings(app),
         "quit" => app.exit(0),
@@ -308,7 +319,7 @@ fn on_menu(app: &AppHandle, id: &str) {
     }
 }
 
-fn open_folder(path: &std::path::Path) {
+pub(crate) fn open_folder(path: &std::path::Path) {
     if let Err(e) = std::fs::create_dir_all(path)
         .map_err(|e| e.to_string())
         .and_then(|()| {
