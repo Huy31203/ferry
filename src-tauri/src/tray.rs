@@ -3,7 +3,9 @@
 
 use std::sync::atomic::Ordering;
 
-use ferry_core::glyph::{self, TrayGlyph};
+#[cfg(target_os = "macos")]
+use ferry_core::glyph;
+use ferry_core::glyph::TrayGlyph;
 use ferry_core::i18n::{t, tf};
 use ferry_core::job::JobState;
 use ferry_core::optimise::Level;
