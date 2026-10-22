@@ -15,7 +15,8 @@
     "windows": [],
     "security": {
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
-      "devCsp": null
+      "devCsp": null,
+      "assetProtocol": { "enable": true, "scope": ["$APPDATA/backups/**"] }
     }
   },
   "bundle": {

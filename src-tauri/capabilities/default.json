@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Permissions for Ferry's own windows; no remote content is ever loaded.",
   "windows": ["stack", "settings"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "drag:default"]
 }
