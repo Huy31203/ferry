@@ -267,3 +267,41 @@ pub fn with_gif_comment(gif: &[u8], text: &str) -> Vec<u8> {
     out.extend_from_slice(&gif[at..]);
     out
 }
+
+/// Set an extended attribute (macOS tests).
+#[cfg(target_os = "macos")]
+pub fn set_xattr(path: &std::path::Path, name: &std::ffi::CStr, value: &[u8]) {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let rc = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            0,
+        )
+    };
+    assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+}
+
+#[cfg(target_os = "macos")]
+pub fn get_xattr(path: &std::path::Path, name: &std::ffi::CStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let mut buf = vec![0u8; 256];
+    let len = unsafe {
+        libc::getxattr(
+            path.as_ptr(),
+            name.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            0,
+            0,
+        )
+    };
+    assert!(len >= 0, "{}", std::io::Error::last_os_error());
+    buf.truncate(len as usize);
+    buf
+}

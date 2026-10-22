@@ -1,6 +1,7 @@
 //! Ferry's platform-independent core. No Tauri or OS UI dependencies, so every
 //! module is unit-tested on macOS, Windows and Linux.
 
+pub mod backup;
 pub mod cancel;
 pub mod geometry;
 pub mod optimise;
