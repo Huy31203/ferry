@@ -7,12 +7,15 @@
   let {
     cards,
     hotAction = null,
+    above = false,
     onclear,
     ondrag,
   }: {
     /** The finished cards whose files "Drag all" carries. */
     cards: JobUpdate[];
     hotAction?: string | null;
+    /** Put tooltips above the bar, for a bar at the bottom of the stack. */
+    above?: boolean;
     onclear: () => void;
     ondrag: (active: boolean) => void;
   } = $props();
@@ -107,7 +110,7 @@
     {t('stack.clear_all')}
   </button>
   {#if hotAction === 'drag' || hotAction === 'clear'}
-    <div class="tip" role="tooltip" class:end={hotAction === 'clear'}>{tips[hotAction]}</div>
+    <div class="tip" role="tooltip" class:above class:end={hotAction === 'clear'}>{tips[hotAction]}</div>
   {/if}
 </div>
 
@@ -165,6 +168,10 @@
     white-space: nowrap;
     pointer-events: none;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.15);
+  }
+  .tip.above {
+    top: auto;
+    bottom: calc(100% + 6px);
   }
   .tip.end {
     left: auto;

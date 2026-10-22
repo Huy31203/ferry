@@ -123,10 +123,12 @@
   onpointermove={(event) => track(event.target as Element)}
   onpointerleave={leave}
 >
-  {#if cards.length > 1}
+  <!-- The bar sits at the screen-edge end of the stack, because an overflowing stack is clipped at the far end. -->
+  {#if cards.length > 1 && top}
     <DragAllBar
       cards={draggable(cards)}
       hotAction={hot && hot.card === null ? hot.action : null}
+      above={!top}
       onclear={clearAll}
       ondrag={dragState}
     />
@@ -144,6 +146,15 @@
       ondrag={dragState}
     />
   {/each}
+  {#if cards.length > 1 && !top}
+    <DragAllBar
+      cards={draggable(cards)}
+      hotAction={hot && hot.card === null ? hot.action : null}
+      above={!top}
+      onclear={clearAll}
+      ondrag={dragState}
+    />
+  {/if}
 </div>
 
 <style>
