@@ -8,7 +8,6 @@
   "settings.placeholder_title": "Settings",
   "settings.placeholder_body": "Settings panes arrive in the next milestone.",
   "card.aria": "{name}, {state}",
-  "tray.test_card": "Show test card",
   "stack.window_title": "Ferry results",
   "card.state.done": "optimised",
   "card.copy": "Copy optimised file",
