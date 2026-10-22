@@ -8,6 +8,7 @@ pub mod geometry;
 pub mod i18n;
 pub mod job;
 pub mod optimise;
+pub mod pipeline;
 pub mod run_state;
 pub mod settings;
 pub mod sidecar;

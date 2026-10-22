@@ -62,6 +62,10 @@ pub struct JobUpdate {
     pub thumb_path: Option<PathBuf>,
     pub source: Source,
     pub can_restore: bool,
+    /// An Error card for a real job; notices such as "Nothing to optimise" have no retry.
+    pub can_retry: bool,
+    /// The file the card's copy, drag and reveal act on, once it exists.
+    pub output: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -117,6 +121,8 @@ mod tests {
             thumb_path: Some(PathBuf::from("/tmp/thumb.png")),
             source: Source::Clipboard,
             can_restore: true,
+            can_retry: false,
+            output: Some(PathBuf::from("/tmp/work/shot.png")),
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains(r#""source":"clipboard""#), "{json}");

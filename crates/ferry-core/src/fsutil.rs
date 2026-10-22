@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 #[cfg(any(target_os = "macos", test))]
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// How long extended attributes may take to copy (NFR-P4).
 pub const XATTR_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,24 +60,49 @@ fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-/// Give `to` the modified, accessed and (macOS, Windows) created times of `from`.
-pub fn copy_times(from: &Path, to: &Path) -> io::Result<()> {
-    let meta = fs::metadata(from)?;
+/// A file's times, captured before Ferry replaces it; std's `FileTimes` cannot
+/// be read back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Times {
+    pub accessed: SystemTime,
+    pub modified: SystemTime,
+    pub created: Option<SystemTime>,
+}
+
+pub fn read_times(path: &Path) -> io::Result<Times> {
+    let meta = fs::metadata(path)?;
+    Ok(Times {
+        accessed: meta.accessed()?,
+        modified: meta.modified()?,
+        created: meta.created().ok(),
+    })
+}
+
+/// Give `path` these times; the created time only on macOS and Windows.
+pub fn set_times(path: &Path, times: &Times) -> io::Result<()> {
     #[allow(unused_mut)]
-    let mut times = FileTimes::new()
-        .set_accessed(meta.accessed()?)
-        .set_modified(meta.modified()?);
+    let mut file_times = FileTimes::new()
+        .set_accessed(times.accessed)
+        .set_modified(times.modified);
     #[cfg(target_os = "macos")]
-    if let Ok(created) = meta.created() {
+    if let Some(created) = times.created {
         use std::os::macos::fs::FileTimesExt;
-        times = times.set_created(created);
+        file_times = file_times.set_created(created);
     }
     #[cfg(windows)]
-    if let Ok(created) = meta.created() {
+    if let Some(created) = times.created {
         use std::os::windows::fs::FileTimesExt;
-        times = times.set_created(created);
+        file_times = file_times.set_created(created);
     }
-    OpenOptions::new().write(true).open(to)?.set_times(times)
+    OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_times(file_times)
+}
+
+/// Give `to` the modified, accessed and (macOS, Windows) created times of `from`.
+pub fn copy_times(from: &Path, to: &Path) -> io::Result<()> {
+    set_times(to, &read_times(from)?)
 }
 
 /// Copy every extended attribute from `from` to `to`, including
