@@ -39,10 +39,14 @@ fn on_change(app: &AppHandle, seq: u64) {
     if state.clipboard.lock().unwrap().is_own(seq) {
         return;
     }
+    let settings = state.settings.read().unwrap().clone();
+    let run_state = *state.run_state.lock().unwrap();
+    if !trigger::wants_read(&settings, run_state) {
+        return;
+    }
     let Some(snap) = read() else {
         return; // automatic triggers never show a card for a failed read (§6)
     };
-    let settings = state.settings.read().unwrap().clone();
     let was_paused = *state.run_state.lock().unwrap() == ferry_core::run_state::RunState::Paused;
     let decision = trigger::automatic(
         &snap,
@@ -74,13 +78,13 @@ pub fn optimise_now(app: &AppHandle, level: Level) {
         HotkeyPlan::Image(_) => start_clipboard_job(app, snap, level),
         HotkeyPlan::Files(paths) => {
             for path in paths {
-                if jobs::is_busy_path(app, &path) {
-                    let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    jobs::notice(app, tf("error.busy", &[("name", &name)]));
-                    continue;
-                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
                 match Job::file(&path, &settings, state.gifsicle.is_some()) {
-                    Ok(job) => jobs::start(app, job, level, None),
+                    Ok(job) => {
+                        if !jobs::start(app, job, level, None) {
+                            jobs::notice(app, tf("error.busy", &[("name", &name)]));
+                        }
+                    }
                     Err(reason) => jobs::notice(app, reason),
                 }
             }

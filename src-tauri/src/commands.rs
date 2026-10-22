@@ -53,8 +53,8 @@ pub async fn card_restore(app: AppHandle, id: JobId) -> Result<(), String> {
 
 /// Retry, re-optimise (`aggressive: false`) or "Try aggressive".
 #[tauri::command]
-pub fn card_rerun(app: AppHandle, id: JobId, aggressive: bool) -> Result<(), String> {
-    jobs::rerun(&app, &id, aggressive)
+pub async fn card_rerun(app: AppHandle, id: JobId, aggressive: bool) -> Result<(), String> {
+    blocking(app, move |app| jobs::rerun(app, &id, aggressive)).await
 }
 
 #[tauri::command]

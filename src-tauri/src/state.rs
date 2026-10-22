@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use ferry_core::backup::Backups;
 use ferry_core::cancel::CancelToken;
@@ -91,15 +91,56 @@ pub struct Entry {
     pub source_seq: Mutex<Option<u64>>,
     pub cancel: Mutex<CancelToken>,
     pub last: Mutex<JobUpdate>,
+    /// The final card a re-run replaced, for when the re-run is cancelled.
+    previous: Mutex<Option<JobUpdate>>,
 }
 
 impl Entry {
+    pub fn new(job: Job, source_seq: Option<u64>, last: JobUpdate) -> Self {
+        Self {
+            output: job.output.clone(),
+            source_seq: Mutex::new(source_seq),
+            job: Mutex::new(job),
+            cancel: Mutex::new(CancelToken::new()),
+            last: Mutex::new(last),
+            previous: Mutex::new(None),
+        }
+    }
+
     pub fn is_busy(&self) -> bool {
         matches!(
             self.last.lock().unwrap().state,
             JobState::Queued | JobState::Optimising { .. }
         )
     }
+
+    /// Show `queued` for a re-run, remembering the card it replaces.
+    pub fn begin_rerun(&self, queued: JobUpdate) {
+        let mut last = self.last.lock().unwrap();
+        *self.previous.lock().unwrap() = Some(std::mem::replace(&mut *last, queued));
+    }
+
+    /// Cancelling a re-run leaves the file as the earlier run made it, so the
+    /// card goes back to that run's result. `None` for a first run, whose card
+    /// simply goes away.
+    pub fn cancel_back(&self) -> Option<JobUpdate> {
+        let previous = self.previous.lock().unwrap().take()?;
+        *self.last.lock().unwrap() = previous.clone();
+        Some(previous)
+    }
+}
+
+/// Lock a mutex even if a panic poisoned it: an encoder that panicked must not
+/// take the app down when its card is retried (spec §6).
+pub fn relock<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether another queued or running job writes the same file as `entry`; two
+/// writers would share one temporary file.
+pub fn output_busy(jobs: &HashMap<JobId, Arc<Entry>>, entry: &Arc<Entry>) -> bool {
+    jobs.values()
+        .any(|e| !Arc::ptr_eq(e, entry) && e.is_busy() && e.output == entry.output)
 }
 
 /// Clipboard changes Ferry made itself, and the files "accumulate results" has
@@ -226,5 +267,69 @@ mod tests {
         assert_eq!(recent.len(), RECENT);
         assert_eq!(recent[0].id, updates[11].id);
         assert_eq!(recent[1].id, updates[10].id);
+    }
+
+    fn entry(output: &str, last: JobState) -> Arc<Entry> {
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 22)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let mut job = Job::clipboard(
+            ferry_core::sniff::Format::Png,
+            vec![0],
+            false,
+            "%f",
+            &std::env::temp_dir(),
+            now,
+        );
+        job.output = PathBuf::from(output);
+        let update = job.update(last, None);
+        Arc::new(Entry::new(job, None, update))
+    }
+
+    #[test]
+    fn a_poisoned_lock_is_still_usable() {
+        let lock = Arc::new(Mutex::new(7));
+        let held = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("an encoder panicked");
+        })
+        .join();
+        assert_eq!(*relock(&lock), 7);
+    }
+
+    #[test]
+    fn a_cancelled_re_run_returns_to_the_card_it_came_from() {
+        let e = entry("/w/a.png", JobState::Done);
+        let done = e.last.lock().unwrap().clone();
+        e.begin_rerun(e.job.lock().unwrap().update(JobState::Queued, None));
+        assert!(e.is_busy());
+        assert_eq!(e.cancel_back(), Some(done.clone()));
+        assert!(!e.is_busy());
+        assert_eq!(*e.last.lock().unwrap(), done);
+    }
+
+    #[test]
+    fn a_cancelled_first_run_has_no_card_to_return_to() {
+        let e = entry("/w/a.png", JobState::Queued);
+        assert_eq!(e.cancel_back(), None);
+    }
+
+    #[test]
+    fn two_jobs_never_write_the_same_file() {
+        let mut jobs = HashMap::new();
+        let busy = entry("/w/a.png", JobState::Queued);
+        let idle = entry("/w/a.png", JobState::Done);
+        let other = entry("/w/b.png", JobState::Queued);
+        for e in [&busy, &idle, &other] {
+            let id = e.job.lock().unwrap().id.clone();
+            jobs.insert(id, e.clone());
+        }
+        // The idle card's re-run would collide with the busy job on a.png.
+        assert!(output_busy(&jobs, &idle));
+        // A busy job does not collide with itself, nor with a different file.
+        assert!(!output_busy(&jobs, &busy));
+        assert!(!output_busy(&jobs, &other));
     }
 }

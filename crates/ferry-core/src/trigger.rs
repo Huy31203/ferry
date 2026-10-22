@@ -117,6 +117,13 @@ pub fn check_image(
     Ok(*format)
 }
 
+/// Whether an automatic trigger could do anything, so the clipboard need not
+/// be read (and held open) for nothing. Paused still reads: it spends its skip
+/// on an image.
+pub fn wants_read(settings: &Settings, state: RunState) -> bool {
+    settings.clipboard.enabled && state != RunState::Stopped
+}
+
 /// An automatic trigger (§5.2). The run state is asked last, so Paused is spent
 /// on an image Ferry would really have optimised, not on copied text.
 pub fn automatic(
@@ -201,6 +208,16 @@ mod tests {
             auto(&png_snapshot(), &settings, &mut state),
             Ok(Format::Png)
         );
+    }
+
+    #[test]
+    fn nothing_is_read_when_automatic_work_is_off() {
+        let mut settings = Settings::default();
+        assert!(wants_read(&settings, RunState::Running));
+        assert!(wants_read(&settings, RunState::Paused));
+        assert!(!wants_read(&settings, RunState::Stopped));
+        settings.clipboard.enabled = false;
+        assert!(!wants_read(&settings, RunState::Running));
     }
 
     #[test]

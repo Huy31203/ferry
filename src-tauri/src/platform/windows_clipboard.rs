@@ -78,16 +78,19 @@ pub fn read() -> Result<Snapshot, String> {
             return Ok(snap);
         }
     }
+    // Copy the bitmaps out and let go of the clipboard before the slow PNG
+    // encode, so a paste in another app is not blocked meanwhile.
+    let mut dibs = Vec::new();
     for id in [formats::CF_DIBV5, formats::CF_DIB] {
         let mut dib = Vec::new();
-        if raw::is_format_avail(id)
-            && raw::get_vec(id, &mut dib).is_ok()
-            && let Ok(png) = bitmap::dib_to_png(&dib)
-        {
-            snap.image = Some((Format::Png, png));
-            snap.from_bitmap = true;
-            break;
+        if raw::is_format_avail(id) && raw::get_vec(id, &mut dib).is_ok() {
+            dibs.push(dib);
         }
+    }
+    drop(_open);
+    if let Some(png) = dibs.iter().find_map(|dib| bitmap::dib_to_png(dib).ok()) {
+        snap.image = Some((Format::Png, png));
+        snap.from_bitmap = true;
     }
     Ok(snap)
 }
