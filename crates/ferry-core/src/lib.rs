@@ -6,6 +6,7 @@ pub mod bitmap;
 pub mod cancel;
 pub mod fsutil;
 pub mod geometry;
+pub mod glyph;
 pub mod i18n;
 pub mod job;
 pub mod optimise;
