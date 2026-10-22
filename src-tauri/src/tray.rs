@@ -1,4 +1,4 @@
-//! Tray icon and menu (R§4.1–4.2, M1 subset).
+//! Tray icon and menu (R§4.1–4.2, M1 subset plus a debug test-card item).
 
 use tauri::{
     AppHandle, Result,
@@ -9,6 +9,7 @@ use tauri::{
 use crate::{i18n::t, windows};
 
 pub fn build(app: &AppHandle) -> Result<()> {
+    let test_card = MenuItem::with_id(app, "test_card", t("tray.test_card"), true, None::<&str>)?;
     let settings = MenuItem::with_id(
         app,
         "settings",
@@ -21,6 +22,8 @@ pub fn build(app: &AppHandle) -> Result<()> {
     let menu = Menu::with_items(
         app,
         &[
+            &test_card,
+            &PredefinedMenuItem::separator(app)?,
             &settings,
             &PredefinedMenuItem::separator(app)?,
             &about,
@@ -33,6 +36,7 @@ pub fn build(app: &AppHandle) -> Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
+            "test_card" => windows::show_test_card(app),
             "settings" => windows::open_settings(app),
             "quit" => app.exit(0),
             _ => {}
