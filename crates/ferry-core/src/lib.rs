@@ -3,6 +3,7 @@
 
 pub mod backup;
 pub mod cancel;
+pub mod fsutil;
 pub mod geometry;
 pub mod optimise;
 pub mod sidecar;
