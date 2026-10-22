@@ -10,9 +10,14 @@ use super::{OptimiseError, OptimiseOptions, quality};
 /// Chunks that change how the picture looks, kept whatever the metadata setting.
 const RENDERING: [[u8; 4]; 5] = [*b"iCCP", *b"sRGB", *b"gAMA", *b"cHRM", *b"pHYs"];
 /// Chunks that describe the old pixel data or file layout; invalid after re-encoding.
-const REBUILT: [[u8; 4]; 7] = [
-    *b"IHDR", *b"PLTE", *b"IDAT", *b"IEND", *b"tRNS", *b"bKGD", *b"hIST",
+/// `iDOT` (Apple's IDAT offsets) and `caBX` (a C2PA hash of the old pixels) are
+/// ancillary but wrong after re-encoding, and Apple's decoders trust `iDOT`.
+const REBUILT: [[u8; 4]; 9] = [
+    *b"IHDR", *b"PLTE", *b"IDAT", *b"IEND", *b"tRNS", *b"bKGD", *b"hIST", *b"iDOT", *b"caBX",
 ];
+/// The largest picture decoded to RGBA (about 600 MB). A header can claim far
+/// more than its data holds, and the decode buffer is allocated from the claim.
+const MAX_PIXELS: u64 = 150_000_000;
 
 pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     let (width, height, rgba) = decode(input)?;
@@ -74,6 +79,12 @@ fn decode(input: &[u8]) -> Result<(u32, u32, Vec<RGBA>), OptimiseError> {
     let mut decoder = png::Decoder::new(Cursor::new(input));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().map_err(decode_err)?;
+    let (width, height) = reader.info().size();
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(OptimiseError::Unsupported(format!(
+            "{width} x {height} pixels is too large to optimise"
+        )));
+    }
     let size = reader
         .output_buffer_size()
         .ok_or_else(|| OptimiseError::Decode("image is too large".into()))?;
@@ -192,6 +203,34 @@ mod tests {
         assert!(matches!(
             optimise(b"\x89PNG\r\n\x1a\nnot really", &OptimiseOptions::default()),
             Err(OptimiseError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn apple_idot_and_c2pa_chunks_are_dropped_even_when_metadata_is_kept() {
+        // iDOT holds IDAT offsets and caBX a hash of the old pixels; both are
+        // wrong after re-encoding, and Apple's decoders trust iDOT.
+        let input = testutil::with_png_chunk(&testutil::png(64, 64), b"iDOT", &[0; 28]);
+        let input = testutil::with_png_chunk(&input, b"caBX", b"manifest");
+        let input = testutil::with_png_chunk(&input, b"tEXt", b"Comment\0hello");
+        let o = OptimiseOptions {
+            strip_metadata: false,
+            ..OptimiseOptions::default()
+        };
+        let names = testutil::png_chunk_names(&optimise(&input, &o).unwrap());
+        assert!(names.contains(&"tEXt".to_string()), "{names:?}");
+        for stale in ["iDOT", "caBX"] {
+            assert!(!names.contains(&stale.to_string()), "{stale}: {names:?}");
+        }
+    }
+
+    #[test]
+    fn a_png_declaring_an_enormous_size_is_refused_before_allocating() {
+        // About 100 bytes that claim 65535 x 65535 pixels would otherwise ask for 17 GB.
+        let input = testutil::png_claiming_size(65535, 65535);
+        assert!(matches!(
+            optimise(&input, &OptimiseOptions::default()),
+            Err(OptimiseError::Unsupported(_))
         ));
     }
 }
