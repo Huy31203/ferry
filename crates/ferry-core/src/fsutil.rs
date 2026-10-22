@@ -16,13 +16,21 @@ pub const XATTR_TIMEOUT: Duration = Duration::from_secs(5);
 /// Replace `target` with `bytes`: write `<target>.ferry-tmp` beside it, `fsync`
 /// it, then rename it over the target. If anything fails the original is untouched
 /// and the temporary file is removed. A symlink target is followed, so the link
-/// survives and its destination is the file that changes.
+/// survives and its destination is the file that changes. A read-only target is
+/// refused with `PermissionDenied`, the same on every OS: a rename would replace
+/// it on macOS and Linux, and the user marked it read-only to keep it as it is.
 pub fn atomic_replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
     let target = if fs::symlink_metadata(target).is_ok_and(|m| m.is_symlink()) {
         fs::canonicalize(target)?
     } else {
         target.to_owned()
     };
+    if fs::metadata(&target).is_ok_and(|m| m.permissions().readonly()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the file is read-only",
+        ));
+    }
     let tmp = temp_path(&target)?;
     let result = write_synced(&tmp, bytes)
         .and_then(|()| match fs::metadata(&target) {
@@ -324,5 +332,21 @@ mod tests {
         let to = dir.path().join("to.png");
         fs::write(&to, b"b").unwrap();
         assert!(copy_xattrs(&dir.path().join("missing.png"), &to).is_err());
+    }
+
+    #[test]
+    fn a_read_only_file_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("locked.png");
+        fs::write(&target, b"old").unwrap();
+        let mut perms = fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&target, perms).unwrap();
+
+        let err = atomic_replace(&target, b"new").unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(!dir.path().join("locked.png.ferry-tmp").exists());
     }
 }
