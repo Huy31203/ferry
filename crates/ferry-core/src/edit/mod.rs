@@ -2,6 +2,7 @@
 //! applies to the backed-up original, so edits never compound or lose quality.
 
 pub mod geometry;
+pub mod smart;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
