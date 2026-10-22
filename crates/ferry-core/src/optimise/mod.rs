@@ -3,6 +3,7 @@
 
 mod png;
 mod jpeg;
+pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
 

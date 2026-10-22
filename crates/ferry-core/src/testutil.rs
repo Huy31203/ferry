@@ -230,3 +230,21 @@ pub fn exif_with_orientation(orientation: u16, padding: usize) -> Vec<u8> {
     out.extend(std::iter::repeat_n(0xAB, padding));
     out
 }
+
+/// A lossy WebP of `screenshot_rgba`, wrapped with `extras` when given.
+pub fn webp(w: u32, h: u32, quality: u8, extras: &crate::optimise::webp::Extras) -> Vec<u8> {
+    let rgba = screenshot_rgba(w, h);
+    let encoded = webp::Encoder::from_rgba(&rgba, w, h).encode(f32::from(quality));
+    crate::optimise::webp::assemble(&encoded, w, h, false, extras)
+}
+
+/// A lossy WebP whose top-left quadrant is fully transparent.
+pub fn webp_with_transparent_corner(w: u32, h: u32) -> Vec<u8> {
+    let mut rgba = screenshot_rgba(w, h);
+    for y in 0..h / 2 {
+        for x in 0..w / 2 {
+            rgba[((y * w + x) * 4 + 3) as usize] = 0;
+        }
+    }
+    webp::Encoder::from_rgba(&rgba, w, h).encode(95.0).to_vec()
+}
