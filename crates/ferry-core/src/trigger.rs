@@ -1,0 +1,353 @@
+//! What Ferry does with the clipboard (spec §5.2, §5.3). Pure decisions over a
+//! snapshot; the app reads the clipboard and starts the jobs.
+
+use std::path::PathBuf;
+
+use crate::i18n::{t, tf};
+use crate::run_state::RunState;
+use crate::settings::Settings;
+use crate::sniff::Format;
+
+/// The clipboard at one moment. Image bytes are not read for concealed content.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Snapshot {
+    /// The clipboard's change count (macOS) or sequence number (Windows).
+    pub seq: u64,
+    pub image: Option<(Format, Vec<u8>)>,
+    /// Windows: the image was only a bitmap and `image` is a lossless PNG of it.
+    pub from_bitmap: bool,
+    pub files: Vec<PathBuf>,
+    pub concealed: bool,
+    /// macOS bundle id or Windows executable name of the app that copied.
+    pub source_app: Option<String>,
+}
+
+/// Why the clipboard was left alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Skip {
+    Disabled,
+    NotRunning,
+    Concealed,
+    IgnoredApp,
+    NoImage,
+    MultipleFiles,
+    TooLarge { limit_mb: u32 },
+    IgnoredExtension(String),
+    NeedsGifsicle,
+}
+
+impl Skip {
+    /// The Error-card text when the user asked with a hotkey.
+    pub fn reason(&self) -> String {
+        match self {
+            Skip::Concealed => t("error.concealed"),
+            Skip::MultipleFiles => t("error.multiple_files"),
+            Skip::TooLarge { limit_mb } => {
+                tf("error.too_large", &[("limit", &limit_mb.to_string())])
+            }
+            Skip::IgnoredExtension(ext) => tf("error.ignored_extension", &[("ext", ext)]),
+            Skip::NeedsGifsicle => t("error.gifsicle_missing"),
+            Skip::Disabled | Skip::NotRunning | Skip::IgnoredApp | Skip::NoImage => {
+                t("error.nothing_to_optimise")
+            }
+        }
+    }
+}
+
+/// What the optimise hotkeys act on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HotkeyPlan {
+    Image(Format),
+    Files(Vec<PathBuf>),
+    Nothing(Skip),
+}
+
+/// Bytes in a settings megabyte; sizes are shown in decimal units too.
+pub const MB: u64 = 1_000_000;
+
+/// Lower-case, no leading dot, and `jpeg` / `jpe` count as `jpg`.
+pub fn normalise_ext(ext: &str) -> String {
+    let ext = ext.trim().trim_start_matches('.').to_lowercase();
+    match ext.as_str() {
+        "jpeg" | "jpe" => "jpg".into(),
+        _ => ext,
+    }
+}
+
+pub fn is_ignored_extension(ignored: &[String], ext: &str) -> bool {
+    let ext = normalise_ext(ext);
+    ignored.iter().any(|i| normalise_ext(i) == ext)
+}
+
+/// The content rules every clipboard image must pass, whoever asked. Copied
+/// files win over image data: Finder and Explorer put the file's icon beside them.
+pub fn check_image(
+    snap: &Snapshot,
+    settings: &Settings,
+    has_gifsicle: bool,
+) -> Result<Format, Skip> {
+    if snap.concealed {
+        return Err(Skip::Concealed);
+    }
+    if let Some(app) = &snap.source_app
+        && settings
+            .clipboard
+            .ignored_apps
+            .iter()
+            .any(|i| i.eq_ignore_ascii_case(app))
+    {
+        return Err(Skip::IgnoredApp);
+    }
+    let Some((format, bytes)) = &snap.image else {
+        return Err(Skip::NoImage);
+    };
+    if !snap.files.is_empty() {
+        return Err(Skip::NoImage);
+    }
+    let limit_mb = settings.clipboard.max_size_mb;
+    if bytes.len() as u64 > u64::from(limit_mb) * MB {
+        return Err(Skip::TooLarge { limit_mb });
+    }
+    if is_ignored_extension(&settings.images.ignored_extensions, format.extension()) {
+        return Err(Skip::IgnoredExtension(format.extension().into()));
+    }
+    if *format == Format::Gif && !has_gifsicle {
+        return Err(Skip::NeedsGifsicle);
+    }
+    Ok(*format)
+}
+
+/// An automatic trigger (§5.2). The run state is asked last, so Paused is spent
+/// on an image Ferry would really have optimised, not on copied text.
+pub fn automatic(
+    snap: &Snapshot,
+    settings: &Settings,
+    has_gifsicle: bool,
+    state: &mut RunState,
+) -> Result<Format, Skip> {
+    if !settings.clipboard.enabled {
+        return Err(Skip::Disabled);
+    }
+    let format = check_image(snap, settings, has_gifsicle)?;
+    if !state.take_automatic() {
+        return Err(Skip::NotRunning);
+    }
+    Ok(format)
+}
+
+/// The optimise hotkeys (§5.3): they run whatever the run state, and act on
+/// copied files when there are any.
+pub fn hotkey(snap: &Snapshot, settings: &Settings, has_gifsicle: bool) -> HotkeyPlan {
+    if snap.concealed {
+        return HotkeyPlan::Nothing(Skip::Concealed);
+    }
+    if !snap.files.is_empty() {
+        if settings.clipboard.skip_multiple_files && snap.files.len() > 1 {
+            return HotkeyPlan::Nothing(Skip::MultipleFiles);
+        }
+        return HotkeyPlan::Files(snap.files.clone());
+    }
+    match check_image(snap, settings, has_gifsicle) {
+        Ok(format) => HotkeyPlan::Image(format),
+        Err(skip) => HotkeyPlan::Nothing(skip),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+    fn png_snapshot() -> Snapshot {
+        Snapshot {
+            image: Some((Format::Png, PNG.to_vec())),
+            source_app: Some("com.apple.screencaptureui".into()),
+            ..Snapshot::default()
+        }
+    }
+
+    fn auto(snap: &Snapshot, settings: &Settings, state: &mut RunState) -> Result<Format, Skip> {
+        automatic(snap, settings, true, state)
+    }
+
+    #[test]
+    fn a_copied_image_is_optimised_while_running() {
+        let mut state = RunState::Running;
+        assert_eq!(
+            auto(&png_snapshot(), &Settings::default(), &mut state),
+            Ok(Format::Png)
+        );
+    }
+
+    #[test]
+    fn paused_is_spent_on_an_image_not_on_text() {
+        let settings = Settings::default();
+        let mut state = RunState::Paused;
+        assert_eq!(
+            auto(&Snapshot::default(), &settings, &mut state),
+            Err(Skip::NoImage)
+        );
+        assert_eq!(
+            state,
+            RunState::Paused,
+            "copied text must not use up the pause"
+        );
+        assert_eq!(
+            auto(&png_snapshot(), &settings, &mut state),
+            Err(Skip::NotRunning)
+        );
+        assert_eq!(
+            auto(&png_snapshot(), &settings, &mut state),
+            Ok(Format::Png)
+        );
+    }
+
+    #[test]
+    fn the_clipboard_switch_turns_automatic_work_off() {
+        let mut settings = Settings::default();
+        settings.clipboard.enabled = false;
+        let mut state = RunState::Running;
+        assert_eq!(
+            auto(&png_snapshot(), &settings, &mut state),
+            Err(Skip::Disabled)
+        );
+    }
+
+    #[test]
+    fn concealed_content_is_never_touched() {
+        let snap = Snapshot {
+            concealed: true,
+            ..png_snapshot()
+        };
+        let mut state = RunState::Running;
+        assert_eq!(
+            auto(&snap, &Settings::default(), &mut state),
+            Err(Skip::Concealed)
+        );
+        assert_eq!(
+            hotkey(&snap, &Settings::default(), true),
+            HotkeyPlan::Nothing(Skip::Concealed)
+        );
+    }
+
+    #[test]
+    fn an_ignored_app_matches_without_case() {
+        let mut settings = Settings::default();
+        settings.clipboard.ignored_apps = vec!["COM.Apple.ScreenCaptureUI".into()];
+        let mut state = RunState::Running;
+        assert_eq!(
+            auto(&png_snapshot(), &settings, &mut state),
+            Err(Skip::IgnoredApp)
+        );
+    }
+
+    #[test]
+    fn the_size_limit_is_in_decimal_megabytes() {
+        let mut settings = Settings::default();
+        settings.clipboard.max_size_mb = 1;
+        let mut bytes = PNG.to_vec();
+        bytes.resize(1_000_000, 0);
+        let mut snap = Snapshot {
+            image: Some((Format::Png, bytes.clone())),
+            ..png_snapshot()
+        };
+        assert_eq!(check_image(&snap, &settings, true), Ok(Format::Png));
+        bytes.push(0);
+        snap.image = Some((Format::Png, bytes));
+        assert_eq!(
+            check_image(&snap, &settings, true),
+            Err(Skip::TooLarge { limit_mb: 1 })
+        );
+    }
+
+    #[test]
+    fn ignored_extensions_match_jpg_and_jpeg_in_any_case_with_or_without_a_dot() {
+        let mut settings = Settings::default();
+        settings.images.ignored_extensions = vec![".JPEG".into()];
+        let snap = Snapshot {
+            image: Some((Format::Jpeg, vec![0xFF, 0xD8, 0xFF])),
+            ..png_snapshot()
+        };
+        assert_eq!(
+            check_image(&snap, &settings, true),
+            Err(Skip::IgnoredExtension("jpg".into()))
+        );
+        assert!(is_ignored_extension(
+            &["jpg".into()],
+            "Photo.JPE".rsplit('.').next().unwrap()
+        ));
+        assert!(!is_ignored_extension(&["png".into()], "jpg"));
+    }
+
+    #[test]
+    fn a_gif_needs_the_sidecar() {
+        let snap = Snapshot {
+            image: Some((Format::Gif, b"GIF89a".to_vec())),
+            ..png_snapshot()
+        };
+        assert_eq!(
+            check_image(&snap, &Settings::default(), false),
+            Err(Skip::NeedsGifsicle)
+        );
+        assert_eq!(
+            check_image(&snap, &Settings::default(), true),
+            Ok(Format::Gif)
+        );
+    }
+
+    #[test]
+    fn copied_files_are_left_alone_automatically_but_taken_by_the_hotkey() {
+        let files = vec![PathBuf::from("/tmp/a.png")];
+        let snap = Snapshot {
+            files: files.clone(),
+            ..png_snapshot()
+        };
+        let mut state = RunState::Running;
+        assert_eq!(
+            auto(&snap, &Settings::default(), &mut state),
+            Err(Skip::NoImage)
+        );
+        assert_eq!(
+            hotkey(&snap, &Settings::default(), true),
+            HotkeyPlan::Files(files)
+        );
+    }
+
+    #[test]
+    fn more_than_one_file_is_refused_unless_allowed() {
+        let files = vec![PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.png")];
+        let snap = Snapshot {
+            files: files.clone(),
+            ..Snapshot::default()
+        };
+        let mut settings = Settings::default();
+        assert_eq!(
+            hotkey(&snap, &settings, true),
+            HotkeyPlan::Nothing(Skip::MultipleFiles)
+        );
+        settings.clipboard.skip_multiple_files = false;
+        assert_eq!(hotkey(&snap, &settings, true), HotkeyPlan::Files(files));
+    }
+
+    #[test]
+    fn the_hotkey_ignores_the_run_state_and_the_clipboard_switch() {
+        let mut settings = Settings::default();
+        settings.clipboard.enabled = false;
+        assert_eq!(
+            hotkey(&png_snapshot(), &settings, true),
+            HotkeyPlan::Image(Format::Png)
+        );
+    }
+
+    #[test]
+    fn an_empty_clipboard_tells_the_hotkey_user_why() {
+        let plan = hotkey(&Snapshot::default(), &Settings::default(), true);
+        assert_eq!(plan, HotkeyPlan::Nothing(Skip::NoImage));
+        assert_eq!(
+            Skip::NoImage.reason(),
+            "Nothing to optimise on the clipboard"
+        );
+        assert_eq!(Skip::MultipleFiles.reason(), "More than one file copied");
+    }
+}
