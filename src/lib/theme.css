@@ -39,6 +39,17 @@
   --card-radius: 8px;
 }
 
+/* A custom accent (macOS) also colours accent text; in dark mode it is lightened so it reads on dark. */
+:root[data-accent] {
+  --accent-text: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent] {
+    --accent-text: color-mix(in srgb, var(--accent) 55%, white);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --motion-in: 0ms;

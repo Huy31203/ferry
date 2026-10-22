@@ -38,3 +38,12 @@ export const isMac = navigator.userAgent.includes('Mac');
 export function applyOsClass(): void {
   document.documentElement.classList.add(isMac ? 'os-mac' : 'os-windows');
 }
+
+/** On macOS, Rust answers with the user's accent colour, already adjusted for white text on top; Windows keeps the default (spec §7). */
+export async function applyAccent(): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const hex = await invoke<string | null>('accent_color');
+  if (!hex) return;
+  document.documentElement.style.setProperty('--accent', hex);
+  document.documentElement.dataset.accent = 'custom';
+}
