@@ -39,6 +39,7 @@ case "$TRIPLE" in
   x86_64-apple-darwin) ARCHS="-arch x86_64" ;;
   aarch64-apple-darwin) ARCHS="-arch arm64" ;;
   x86_64-pc-windows-msvc) ARCHS="" ;;
+  x86_64-unknown-linux-gnu) ARCHS="" ;;
   *) echo "unsupported target: $TRIPLE" >&2; exit 1 ;;
 esac
 
@@ -46,6 +47,12 @@ case "$TRIPLE" in
   *-apple-darwin)
     ./configure --disable-gifview --disable-gifdiff \
       CFLAGS="-O2 $ARCHS -mmacosx-version-min=13.0" >/dev/null
+    make -j4 >/dev/null
+    BIN="src/gifsicle"
+    EXT=""
+    ;;
+  x86_64-unknown-linux-gnu)
+    ./configure --disable-gifview --disable-gifdiff CFLAGS="-O2" >/dev/null
     make -j4 >/dev/null
     BIN="src/gifsicle"
     EXT=""
@@ -66,7 +73,7 @@ esac
 
 DEST="$OUT_DIR/gifsicle-${TRIPLE}${EXT}"
 cp "$BIN" "$DEST"
-case "$TRIPLE" in *-apple-darwin) strip "$DEST" ;; esac
+case "$TRIPLE" in *-apple-darwin|*-linux-gnu) strip "$DEST" ;; esac
 # A universal app is built as two per-arch cargo builds, and tauri-build checks
 # the sidecar for each arch, so the fat binary is copied under both names too.
 if [ "$TRIPLE" = universal-apple-darwin ]; then

@@ -29,4 +29,8 @@ pnpm tauri dev
 
 Checks: `pnpm check && pnpm test && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings`.
 
+GIF tests run the real sidecar when `FERRY_GIFSICLE` points at it, for example
+`export FERRY_GIFSICLE="$PWD/src-tauri/binaries/gifsicle-$(rustc -vV | sed -n 's/^host: //p')"`.
+Without it they skip; CI always sets it.
+
 Design: `docs/superpowers/specs/`. Requirements: `docs/requirements/`.
