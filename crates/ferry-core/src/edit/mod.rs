@@ -1,6 +1,8 @@
 //! What a card asks for after the fact (spec §4.2): a recipe that every run
 //! applies to the backed-up original, so edits never compound or lose quality.
 
+pub mod geometry;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::optimise::Level;
