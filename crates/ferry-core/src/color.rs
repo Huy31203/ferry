@@ -2,8 +2,8 @@
 //! on `--accent` fills (spec §7), and a yellow or light green accent would
 //! make it unreadable.
 
-/// WCAG's minimum contrast for user-interface components.
-const MIN_CONTRAST: f64 = 3.0;
+/// WCAG AA for normal text: the accent carries 13px white labels (selected pane).
+const MIN_CONTRAST: f64 = 4.5;
 
 fn linear(channel: u8) -> f64 {
     let c = f64::from(channel) / 255.0;
@@ -20,7 +20,7 @@ fn contrast_with_white((r, g, b): (u8, u8, u8)) -> f64 {
 }
 
 /// `rgb` as `#rrggbb`, darkened in 10% steps until white text on it has at
-/// least 3:1 contrast. Black always passes, so this ends.
+/// least 4.5:1 contrast. Black always passes, so this ends.
 pub fn accent_hex(mut rgb: (u8, u8, u8)) -> String {
     while contrast_with_white(rgb) < MIN_CONTRAST {
         let darker = |c: u8| (u16::from(c) * 9 / 10) as u8;
@@ -49,7 +49,27 @@ mod tests {
         for rgb in [(255, 204, 0), (152, 255, 152), (255, 255, 255)] {
             let fixed = parse(&accent_hex(rgb));
             assert!(
-                contrast_with_white(fixed) >= 3.0,
+                contrast_with_white(fixed) >= 4.5,
+                "{rgb:?} became {fixed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_standard_macos_accents_all_carry_white_text() {
+        for rgb in [
+            (0, 122, 255),
+            (166, 61, 191),
+            (247, 79, 158),
+            (255, 82, 87),
+            (247, 130, 27),
+            (255, 198, 10),
+            (98, 186, 70),
+            (140, 140, 140),
+        ] {
+            let fixed = parse(&accent_hex(rgb));
+            assert!(
+                contrast_with_white(fixed) >= 4.5,
                 "{rgb:?} became {fixed:?}"
             );
         }

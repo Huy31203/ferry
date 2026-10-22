@@ -31,18 +31,27 @@
   const labelId = $derived(`label-${setting.id}`);
   const control = $derived(setting.control);
   let outcome = $state<string | null>(null);
+  let running = $state(false);
 
   async function run(action: 'open_backups' | 'open_work' | 'force_clean') {
+    if (running) return;
     outcome = null;
+    running = true;
     try {
       if (action === 'force_clean') {
-        const done = await invoke<{ files: number; bytes: number }>('force_clean');
-        outcome = t('settings.cleaned', { files: done.files, size: formatBytes(done.bytes) });
+        const done = await invoke<{ files: number; bytes: number; failed: number }>('force_clean');
+        const size = formatBytes(done.bytes);
+        outcome =
+          done.failed > 0
+            ? t('settings.cleaned_partial', { files: done.files, size, failed: done.failed })
+            : t('settings.cleaned', { files: done.files, size });
       } else {
         await invoke(action);
       }
     } catch (e) {
       outcome = t('settings.failed', { why: String(e) });
+    } finally {
+      running = false;
     }
   }
 
@@ -120,7 +129,13 @@
     {:else if control.kind === 'tray_style'}
       <TrayStyle value={value as string} labelledby={labelId} {onchange} />
     {:else if control.kind === 'action'}
-      <button type="button" class="action" aria-labelledby={labelId} onclick={() => run(control.action)}>
+      <button
+        type="button"
+        class="action"
+        disabled={running}
+        aria-labelledby={labelId}
+        onclick={() => run(control.action)}
+      >
         {t(control.button as StringKey)}
       </button>
     {/if}
@@ -165,6 +180,10 @@
     border: 1px solid var(--rail-line);
     border-radius: 6px;
     cursor: pointer;
+  }
+  .action:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
   .action:focus-visible {
     outline: 2px solid var(--accent-text);

@@ -85,6 +85,7 @@
   "settings.extension_placeholder": "png",
   "settings.remove": "Remove {name}",
   "settings.cleaned": "Removed {files} files ({size})",
+  "settings.cleaned_partial": "Removed {files} files ({size}); {failed} could not be removed because another program is using them",
   "settings.failed": "That didn't work: {why}",
   "group.storage": "Storage",
   "unit.mb": "MB",

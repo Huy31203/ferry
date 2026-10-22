@@ -160,10 +160,10 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
         keys.aggressive.as_deref(),
     )?;
 
-    let recent_items: Vec<MenuItem<Wry>> = state
-        .recent
-        .lock()
-        .unwrap()
+    // Copy the list so the lock is not held while items are built: off the main
+    // thread each `with_id` waits for the main thread, which may want this lock.
+    let recent_updates: Vec<_> = state.recent.lock().unwrap().iter().cloned().collect();
+    let recent_items: Vec<MenuItem<Wry>> = recent_updates
         .iter()
         .map(|u| {
             MenuItem::with_id(

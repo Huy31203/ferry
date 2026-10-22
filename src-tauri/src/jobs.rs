@@ -153,13 +153,18 @@ pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, 
         .unwrap()
         .accumulated
         .retain(|f| keep.contains(f));
-    let report = ferry_core::workdir::clean(&state.work_dir, &keep).map_err(|e| e.to_string())?;
-    info!(
-        files = report.files,
-        bytes = report.bytes,
-        "working directory cleaned"
-    );
-    // Empty the stack, then put back the cards of the jobs that carry on.
+    let result = ferry_core::workdir::clean(&state.work_dir, &keep);
+    match &result {
+        Ok(report) => info!(
+            files = report.files,
+            bytes = report.bytes,
+            failed = report.failed,
+            "working directory cleaned"
+        ),
+        Err(e) => warn!("could not clean the working directory: {e}"),
+    }
+    // The jobs are already forgotten, so the stack and the menu reset even if
+    // some file could not be removed. Put back the cards of jobs that carry on.
     state.stack.lock().unwrap().pending.clear();
     if let Err(e) = app.emit_to(STACK, "stack:clear", ()) {
         warn!("could not clear the stack: {e}");
@@ -168,7 +173,7 @@ pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, 
         show(app, card);
     }
     tray::rebuild(app);
-    Ok(report)
+    result.map_err(|e| e.to_string())
 }
 
 /// Send a card to the stack, or hold it until the stack page is listening.

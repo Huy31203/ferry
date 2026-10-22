@@ -99,7 +99,7 @@ pub fn settings_get(app: AppHandle) -> Settings {
 
 /// Apply a change from the Settings page. The answer is what was saved, which
 /// may differ from what was sent (values are clamped).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_set(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     prefs::update(&app, |current| *current = settings)
 }
@@ -181,6 +181,7 @@ pub fn open_work(app: AppHandle) {
 pub struct CleanDone {
     files: u32,
     bytes: u64,
+    failed: u32,
 }
 
 #[tauri::command]
@@ -189,6 +190,7 @@ pub async fn force_clean(app: AppHandle) -> Result<CleanDone, String> {
         jobs::force_clean(app).map(|r| CleanDone {
             files: r.files,
             bytes: r.bytes,
+            failed: r.failed,
         })
     })
     .await
