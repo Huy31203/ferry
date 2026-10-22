@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "sidecar-fixture"
+path = "tests/support/sidecar_fixture.rs"
+test = false
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 imagequant = "4.4"
