@@ -1,6 +1,9 @@
 //! Detect an image format from its content, never from the file extension (R§2.4).
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Png,
     Jpeg,
@@ -16,6 +19,16 @@ impl Format {
             Format::Jpeg => "jpg",
             Format::Gif => "gif",
             Format::WebP => "webp",
+        }
+    }
+
+    /// The name shown on cards: "PNG", "JPEG", "GIF", "WebP".
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Png => "PNG",
+            Format::Jpeg => "JPEG",
+            Format::Gif => "GIF",
+            Format::WebP => "WebP",
         }
     }
 }
