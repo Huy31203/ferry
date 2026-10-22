@@ -65,13 +65,21 @@ pub fn run(
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Result<Vec<u8>, SidecarError> {
-    let mut child = Command::new(path)
+    let mut command = Command::new(path);
+    command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(SidecarError::Spawn)?;
+        .stderr(Stdio::piped());
+    // Ferry is a GUI app, so Windows would open (and focus) a console window for
+    // every console child, even with all three handles piped.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn().map_err(SidecarError::Spawn)?;
     let mut to_child = child.stdin.take().expect("stdin is piped");
     let mut from_child = child.stdout.take().expect("stdout is piped");
     let mut errors = child.stderr.take().expect("stderr is piped");
