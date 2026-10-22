@@ -63,8 +63,6 @@ The app turns any media file that enters the user's workflow into a smaller, com
 | FR-T8 | Batch window | Opens automatically above a file-count threshold or when a folder is dropped (recursing into subfolders); can also be opened from the menu |
 | FR-T9 | OS file integration | "Open with" target for images, videos and PDFs; context-menu action "Optimise with Ferry" in Finder / Explorer |
 | FR-T10 | URL input | Download an image or video from a copied link, then optimise it |
-| FR-T11 | Command-line tool | `optimise`, `crop`, `convert`, `downscale`, `strip-exif`, `crop-pdf`, `uncrop-pdf`, `pipeline list/run`, `settings`; flags for output template, JSON output, type filters, aggressive mode, copy result |
-| FR-T12 | Local SDK / IPC | Other apps send file paths plus options (crop, downscale, speed) over a local channel and optionally wait for results |
 | FR-T13 | Photo library copy | macOS only: images copied from Photos are optimised and downscaled to a set size, then copied back |
 
 ### 2.3 Supported formats
@@ -121,7 +119,7 @@ The app turns any media file that enters the user's workflow into a smaller, com
 A pipeline is an ordered list of steps that is the single model behind every action, preset and automation, so a file is encoded only once however many steps change it.
 
 - **Steps:** `optimise(compression, dpi, encoder, location)`, `convert(to, location)`, `downscale`, `crop(width, height, aspectRatio, smartCrop, longEdge)`, `changeSpeed(factor, frames)`, `removeAudio`, `stripExif`, `copy(to: template)`, `copyLinkForSending`, `extractPagesAsImages`, `runScript(code)`, run OS automation (Shortcuts on macOS, PowerShell on Windows), `fork`, `if(nameContains: …)` and a `hideResult` flag.
-- **Triggers:** copied to clipboard, arriving in a folder, dropped on the drop zone, a preset zone, a result-card button or the CLI.
+- **Triggers:** copied to clipboard, arriving in a folder, dropped on the drop zone, a preset zone or a result-card button.
 - **Library:** create, edit with live preview, duplicate, delete, assign to any trigger, see where each is assigned, jump from a zone or result to its pipeline.
 - **Result behaviour:** one card per pipeline run updates in place step by step; `fork` adds a second draggable file while the pipeline continues.
 
@@ -135,7 +133,7 @@ A pipeline is an ordered list of steps that is the single model behind every act
 
 - **States:** Running, Paused (skips the next event then resumes), Stopped (no automatic work until resumed), cycled by a global hotkey and shown in the tray icon.
 - **Updates:** background check, subtle "update available" button under the results, release notes.
-- **Settings:** fuzzy search, import/export and optional sync, launch at login, reopen Settings when launched twice, toggle whether app UI appears in screenshots, logs viewer, onboarding on first run, CLI install button.
+- **Settings:** fuzzy search, import/export and optional sync, launch at login, reopen Settings when launched twice, toggle whether app UI appears in screenshots, logs viewer, onboarding on first run.
 
 ### 2.10 Hotkeys
 
@@ -375,7 +373,6 @@ Items, grouped: Open, Open with ▸, Edit with \<app> (⌘E / Ctrl+E), Show in F
   - **Pipelines:** library list (name, triggers it is assigned to, last run) with New, Duplicate, Delete; opens the editor (4.13).
   - **Sharing:** secure-send default expiry, Dropshare, shelf apps, edit-with app per type.
   - **Hotkeys:** table of actions with a recorder field, enable toggle and conflict warning.
-  - **CLI:** install CLI (shows path and installed state).
   - **Advanced:** log viewer (filter by level, copy, export), reset all settings, debug options.
   - **About and updates:** version, auto-update toggle, Check now, release notes.
 - **States per control:** default, changed (applies instantly, no Save button), invalid (red helper text, for example a template with an unknown token or a missing folder), dependent-disabled (greyed with a hint like "Enable clipboard optimisation first").
@@ -431,7 +428,6 @@ About 80% of the feature set maps cleanly to Tauri 2 plus small Rust modules per
 | Open With and context menu | Document types in Info.plist; Services menu item | File associations in the installer; Windows 11 top-level menu needs a packaged app with an Explorer command handler, otherwise it sits under "Show more options" | Bundler file associations; custom installer step | Medium |
 | Share and nearby send | Share picker, AirDrop | Share UI via WinRT (Nearby Share) | Small native module | Medium |
 | Launch at login, single instance, updates | Login item | Run key or startup task | Autostart, single-instance and updater plugins (signed updates) | Low |
-| CLI and SDK channel | Unix domain socket | Named pipe | CLI as a separate small Rust binary talking JSON to the app | Low |
 | Secure send | WebRTC data channel | Same | WebRTC in the webview or `webrtc-rs`; you must host a signalling server and the receiver page | Medium: ongoing server cost |
 | Encoders | Universal (arm64 + x86\_64) builds, each binary signed and notarised | x64 and ARM64 builds, each binary Authenticode-signed; Ghostscript is `gswin64c` | `externalBin` sidecars with target-triple names | Medium: build pipeline |
 
@@ -460,5 +456,5 @@ With every feature free, the simplest path is to release the app as GPL-3 open s
 1. **Core loop:** tray icon and menu, clipboard image optimisation (PNG, JPEG, GIF, WebP), floating result card with Done, Already optimal and Error states, drag out, restore original, backups, settings panes General, Clipboard, Images and Floating results. Gate: clipboard image under 1.5 s and cards never steal focus on either OS.
 2. **Video and recordings:** ffmpeg sidecar with hardware encoders, screenshot and recording watcher, watched folders, downscale, crop, convert and compression sliders on cards, compare window.
 3. **Drop and batch:** drop zone, compact list, batch window, PDF and audio optimisation, file-handling templates.
-4. **Automation:** pipeline engine and editor, preset zones, CLI and updater.
+4. **Automation:** pipeline engine and editor, preset zones and updater.
 5. **Integrations:** secure send, share sheets, Open With and Explorer / Finder context menus, external editors.

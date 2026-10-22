@@ -63,7 +63,7 @@ Windows desktop behaviour (focus, clipboard listener, tray, drag-out) is **built
 - **Media types:** video, audio, PDF, TIFF, HEIC, AVIF and animated-WebP optimisation.
 - **Card tools:** downscale, crop, convert, the compression slider, compare and quick preview.
 - **Card extras:** rename, the context menu and the format bar.
-- **Automation:** pipelines, CLI, SDK and MCP.
+- **Automation:** pipelines. (CLI, SDK and MCP were removed from the requirements on 2026-10-22.)
 - **App services:** the updater, secure send, sharing, onboarding, settings sync and the hotkey editor.
 - **Release and polish:** Vietnamese, code signing, notarisation and Windows ARM64.
 
