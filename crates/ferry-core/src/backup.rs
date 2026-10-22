@@ -1,7 +1,7 @@
 //! Originals are copied here before Ferry overwrites a file (R§2.4), under
 //! `<root>/<yyyy-mm-dd>/<job-id>/<name>`, with the date in local time.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -42,7 +42,7 @@ impl Backups {
     pub fn store_bytes(&self, job: &str, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
         let dest = self.destination(job, name)?;
         if !dest.exists() {
-            fs::write(&dest, bytes)?;
+            place(&dest, |part| fs::write(part, bytes))?;
         }
         Ok(dest)
     }
@@ -57,7 +57,7 @@ impl Backups {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
         let dest = self.destination(job, name)?;
         if !dest.exists() {
-            fs::copy(source, &dest)?;
+            place(&dest, |part| fs::copy(source, part).map(drop))?;
         }
         Ok(dest)
     }
@@ -102,6 +102,33 @@ impl Backups {
             .join(job);
         fs::create_dir_all(&dir)?;
         Ok(dir.join(name))
+    }
+}
+
+/// Write `dest` through `<dest>.part`: the final name appears only once the
+/// content is complete and flushed, so a full disk or a crash can never leave a
+/// truncated file that "first copy wins" would later trust as the original.
+fn place(dest: &Path, write: impl FnOnce(&Path) -> io::Result<()>) -> io::Result<()> {
+    let mut part = dest.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    // A leftover from an earlier crash is never a backup.
+    let _ = fs::remove_file(&part);
+    let result = write(&part)
+        .and_then(|()| flush(&part))
+        .and_then(|()| fs::rename(&part, dest));
+    if result.is_err() {
+        let _ = fs::remove_file(&part);
+    }
+    result
+}
+
+fn flush(path: &Path) -> io::Result<()> {
+    match OpenOptions::new().write(true).open(path) {
+        Ok(file) => file.sync_all(),
+        // A read-only original leaves a read-only copy; there is no handle to flush through.
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -232,5 +259,46 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let report = backups(&dir.path().join("never-created")).prune(1).unwrap();
         assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn a_failed_write_leaves_nothing_at_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("a.png");
+        let err = place(&dest, |part| {
+            fs::write(part, b"half")?;
+            Err(io::Error::other("disk full"))
+        })
+        .unwrap_err();
+        assert_eq!(err.to_string(), "disk full");
+        assert!(!dest.exists());
+        assert!(!dir.path().join("a.png.part").exists());
+    }
+
+    #[test]
+    fn a_part_file_left_by_a_crash_never_counts_as_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let job = dir.path().join("2026-10-22/job");
+        fs::create_dir_all(&job).unwrap();
+        fs::write(job.join("a.png.part"), b"half").unwrap();
+        let path = backups(dir.path())
+            .store_bytes("job", "a.png", b"original")
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert!(!job.join("a.png.part").exists());
+    }
+
+    #[test]
+    fn a_read_only_original_can_still_be_backed_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("locked.png");
+        fs::write(&source, b"pixels").unwrap();
+        let mut perms = fs::metadata(&source).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&source, perms).unwrap();
+        let path = backups(&dir.path().join("backups"))
+            .store_file("job", &source)
+            .unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"pixels");
     }
 }
