@@ -3,6 +3,7 @@
 
 use std::sync::Mutex;
 
+use tauri::AppHandle;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -44,3 +45,6 @@ pub fn give_back_focus() {
         }
     }
 }
+
+/// Windows has no Quick Look; the compare window follows the setting itself.
+pub fn set_protected(_app: &AppHandle, _protected: bool) {}
