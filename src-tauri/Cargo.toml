@@ -24,6 +24,7 @@ tauri-plugin-global-shortcut = "2.4.1"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-single-instance = "2.5"
 tokio = { version = "1", features = ["sync"] }
+trash = "5.2"
 tracing = "0.1"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }

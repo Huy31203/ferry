@@ -6,6 +6,7 @@ use imagequant::RGBA;
 use oxipng::{BitDepth, ColorType, Options, RGBA8, RawImage};
 
 use super::{OptimiseError, OptimiseOptions, quality};
+use crate::edit::raster::Raster;
 
 /// Chunks that change how the picture looks, kept whatever the metadata setting.
 const RENDERING: [[u8; 4]; 5] = [*b"iCCP", *b"sRGB", *b"gAMA", *b"cHRM", *b"pHYs"];
@@ -17,14 +18,60 @@ const REBUILT: [[u8; 4]; 9] = [
 ];
 /// The largest picture decoded to RGBA (about 600 MB). A header can claim far
 /// more than its data holds, and the decode buffer is allocated from the claim.
-const MAX_PIXELS: u64 = 150_000_000;
+pub(crate) const MAX_PIXELS: u64 = 150_000_000;
 
 pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     let (width, height, rgba) = decode(input)?;
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
     }
+    pack(
+        width,
+        height,
+        rgba,
+        kept_chunks(input, o.strip_metadata),
+        None,
+        o,
+    )
+}
 
+/// Any PNG as straight RGBA, with its ICC profile.
+pub(crate) fn decode_raster(input: &[u8]) -> Result<Raster, OptimiseError> {
+    let (width, height, pixels) = decode(input)?;
+    let icc = png::Decoder::new(Cursor::new(input))
+        .read_info()
+        .ok()
+        .and_then(|reader| reader.info().icc_profile.as_ref().map(|p| p.to_vec()));
+    let rgba = pixels.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+    Ok(Raster {
+        width,
+        height,
+        rgba,
+        icc,
+    })
+}
+
+/// Edited pixels as an optimised PNG.
+pub(crate) fn encode_raster(r: &Raster, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    let rgba = r
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| RGBA::new(p[0], p[1], p[2], p[3]))
+        .collect();
+    pack(r.width, r.height, rgba, Vec::new(), r.icc.as_deref(), o)
+}
+
+/// Quantise with imagequant, then write with oxipng, adding `chunks` and the ICC profile.
+fn pack(
+    width: u32,
+    height: u32,
+    rgba: Vec<RGBA>,
+    chunks: Vec<([u8; 4], Vec<u8>)>,
+    icc: Option<&[u8]>,
+    o: &OptimiseOptions,
+) -> Result<Vec<u8>, OptimiseError> {
     let mut attr = imagequant::new();
     let (speed, preset) = effort(o);
     attr.set_speed(speed).map_err(encode_err)?;
@@ -51,8 +98,11 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
         indexed,
     )
     .map_err(encode_err)?;
-    for (name, data) in kept_chunks(input, o.strip_metadata) {
+    for (name, data) in chunks {
         raw.add_png_chunk(name, data);
+    }
+    if let Some(icc) = icc {
+        raw.add_icc_profile(icc);
     }
     raw.create_optimized_png(&Options::from_preset(preset))
         .map_err(encode_err)

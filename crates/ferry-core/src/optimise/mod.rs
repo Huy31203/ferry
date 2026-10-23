@@ -1,17 +1,21 @@
 //! Optimise one image from memory (spec §4.2). Never worse than the input:
 //! the caller keeps the original unless the result is `Smaller`.
 
-mod gif;
-mod jpeg;
+pub(crate) mod gif;
+pub(crate) mod jpeg;
 pub(crate) mod png;
 pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{cancel::CancelToken, sniff::Format};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Level {
+    #[default]
     Normal,
     Aggressive,
 }
@@ -103,6 +107,16 @@ pub fn optimise(
     if crate::sniff::is_animated(input, format) && format != Format::Gif {
         return Ok(Outcome::AlreadyOptimal);
     }
+    let output = encode(input, format, o)?;
+    Ok(classify(input.len(), output))
+}
+
+/// The encoder's output for `input`, whatever its size; `optimise` grades it
+/// and an explicit edit keeps it.
+pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    if o.cancel.is_cancelled() {
+        return Err(OptimiseError::Cancelled);
+    }
     let output = match format {
         Format::Png => png::optimise(input, o)?,
         Format::Jpeg => jpeg::optimise(input, o)?,
@@ -112,7 +126,7 @@ pub fn optimise(
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
     }
-    Ok(classify(input.len(), output))
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -241,5 +255,13 @@ mod tests {
         println!("5 MB PNG optimised in {took:?}");
         assert!(matches!(outcome, Outcome::Smaller { .. }));
         assert!(took.as_millis() < 1500, "took {took:?}");
+    }
+
+    #[test]
+    fn encode_returns_the_output_even_when_it_is_larger() {
+        let tiny = testutil::png(1, 1);
+        let out = encode(&tiny, Format::Png, &OptimiseOptions::default()).unwrap();
+        assert!(out.len() > tiny.len());
+        assert_eq!(crate::sniff::sniff(&out), Some(Format::Png));
     }
 }
