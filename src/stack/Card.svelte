@@ -7,6 +7,7 @@
     QUALITY_STOPS,
     SCALE_STOPS,
     currentQuality,
+    formatChoices,
     nextQuality,
     nextScale,
     qualityLabel,
@@ -18,7 +19,8 @@
   } from '../lib/edits';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
-  import type { EditsPatch, JobUpdate } from '../lib/ipc';
+  import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
+  import FormatBar from './FormatBar.svelte';
   import Slider from './Slider.svelte';
 
   let {
@@ -67,6 +69,8 @@
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
   const rail = $derived(railActions(card, compact));
   const canRename = $derived(canDrag(card));
+  // The format bar replaces the detail line while the card is hovered (spec §5.4).
+  const showFormats = $derived(hovered && rail.length > 0 && card.state.kind !== 'restored');
   const stateLabel = $derived(t(`card.state.${card.state.kind}` as StringKey));
   const label = $derived(
     t('card.aria', { name: notice ? t('card.notice') : fileName, state: stateLabel }),
@@ -216,7 +220,21 @@
   }
 
 
+  function convert(format: Format, keepBoth: boolean) {
+    void act('card_convert', { format, keepBoth });
+  }
+
+  function formatTip(format: string): string {
+    if (!card.can_edit) return card.edit_hint ?? t('card.no_original');
+    const choice = formatChoices(card).find((c) => c.format === format);
+    if (!choice) return '';
+    if (choice.firstFrame) return t('card.first_frame');
+    return t(isMac ? 'format.tip.mac' : 'format.tip.windows', { format: choice.label });
+  }
+
+
   function tipText(action: string): string {
+    if (action.startsWith('format-')) return formatTip(action.slice('format-'.length));
     if (needsOriginal(action as RailAction) && !card.can_edit) return card.edit_hint ?? t('card.no_original');
     switch (action) {
       case 'downscale':
@@ -262,10 +280,12 @@
     }
     const box = cardEl.getBoundingClientRect();
     const rect = button.getBoundingClientRect();
+    // Under the button, or above it near the bottom edge (the format bar) so the card does not clip it.
+    const below = rect.bottom - box.top + 6;
     tip = {
       text: tipText(action),
       left: Math.max(8, rect.left - box.left),
-      top: rect.bottom - box.top + 6,
+      top: below + 24 > box.height ? rect.top - box.top - 28 : below,
     };
   });
 
@@ -460,6 +480,7 @@
           <span class="name">{card.name}</span>
         {/if}
         {#if card.ext}<span class="ext">{card.ext}</span>{/if}
+        {#if card.converted}<span class="converted">{t('card.converted')}</span>{/if}
       </div>
       {#if renameError}
         <span class="rename-error" role="alert">{renameError}</span>
@@ -503,6 +524,8 @@
       <div class="buttons">
         <button type="button" data-action="reoptimise" class:hot={hotAction === 'reoptimise'} onclick={() => act('card_rerun', { aggressive: false })}>{t('card.reoptimise')}</button>
       </div>
+    {:else if showFormats}
+      <FormatBar {card} {hotAction} onconvert={convert} />
     {:else if card.state.kind === 'done' && card.detail && !compact}
       <span class="detail">{card.detail}</span>
     {/if}
@@ -713,6 +736,10 @@
   }
   .name-field[aria-invalid='true'] {
     border-color: #ff453a;
+  }
+  .converted {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.82);
   }
   .rename-error {
     font-size: 11px;

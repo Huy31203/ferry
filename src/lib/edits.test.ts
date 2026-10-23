@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { card } from './card.fixture';
 import {
   QUALITY_STOPS,
+  convertRequest,
+  formatChoices,
   SCALE_STOPS,
   currentQuality,
   nextQuality,
@@ -89,5 +91,41 @@ describe('slider drag', () => {
     expect(stopIndex(SCALE_STOPS, 100)).toBe(0);
     expect(stopIndex(QUALITY_STOPS, 'extreme')).toBe(20);
     expect(stopIndex(QUALITY_STOPS, 82)).toBe(4);
+  });
+});
+
+describe('format bar', () => {
+  const pick = (choices: ReturnType<typeof formatChoices>) =>
+    choices.map((c) => [c.label, c.current, c.firstFrame]);
+
+  it('offers PNG, JPEG and WebP with the current one selected', () => {
+    expect(pick(formatChoices(card({ kind: 'done' })))).toEqual([
+      ['PNG', true, false],
+      ['JPEG', false, false],
+      ['WebP', false, false],
+    ]);
+  });
+
+  it('puts a GIF first and marks the others first frame only', () => {
+    const gif = card({ kind: 'done' }, { format: 'gif', source_format: 'gif', ext: 'gif' });
+    expect(pick(formatChoices(gif))).toEqual([
+      ['GIF', true, false],
+      ['PNG', false, true],
+      ['JPEG', false, true],
+      ['WebP', false, true],
+    ]);
+  });
+
+  it('keeps the GIF chip after a GIF was converted, so it can go back', () => {
+    const converted = card({ kind: 'done' }, { format: 'webp', source_format: 'gif', converted: true });
+    expect(formatChoices(converted).map((c) => c.format)).toEqual(['gif', 'png', 'jpeg', 'webp']);
+    expect(formatChoices(converted).find((c) => c.current)?.format).toBe('webp');
+  });
+
+  it('ignores a plain click on the current format but keeps both on ⌥-click', () => {
+    const png = card({ kind: 'done' });
+    expect(convertRequest(png, 'png', false)).toBeNull();
+    expect(convertRequest(png, 'webp', false)).toEqual({ format: 'webp', keepBoth: false });
+    expect(convertRequest(png, 'png', true)).toEqual({ format: 'png', keepBoth: true });
   });
 });
