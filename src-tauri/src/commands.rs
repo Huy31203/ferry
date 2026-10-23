@@ -1,9 +1,11 @@
 //! Commands the stack page calls (spec §5.5). File and clipboard work runs on
 //! a blocking worker, never on the main thread.
 
+use ferry_core::edit::EditsPatch;
 use ferry_core::i18n::t;
 use ferry_core::job::{JobId, JobUpdate};
 use ferry_core::settings::{CardSize, Corner, Settings, TrayStyle};
+use ferry_core::sniff::Format;
 use ferry_core::{color, glyph, template};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -26,19 +28,26 @@ pub struct StackConfig {
     corner: Corner,
     card_size: CardSize,
     auto_hide_secs: u32,
+    /// Where the Compression slider starts when a card has no quality of its own.
+    compression: u8,
+    crop_sizes: Vec<(u32, u32)>,
+    hover_hotkeys: bool,
 }
 
 /// The stack page is listening: hand it its settings and any cards sent before.
 #[tauri::command]
 pub fn stack_ready(app: AppHandle) -> (StackConfig, Vec<JobUpdate>) {
     let state = app.state::<AppState>();
-    let floating = state.settings.read().unwrap().floating.clone();
+    let settings = state.settings.read().unwrap().clone();
     let mut inbox = state.stack.lock().unwrap();
     inbox.ready = true;
     let config = StackConfig {
-        corner: floating.corner,
-        card_size: floating.card_size,
-        auto_hide_secs: floating.auto_hide_secs,
+        corner: settings.floating.corner,
+        card_size: settings.floating.card_size,
+        auto_hide_secs: settings.floating.auto_hide_secs,
+        compression: settings.images.compression,
+        crop_sizes: settings.images.crop_sizes,
+        hover_hotkeys: settings.floating.hover_hotkeys,
     };
     (config, std::mem::take(&mut inbox.pending))
 }
@@ -57,6 +66,29 @@ pub async fn card_restore(app: AppHandle, id: JobId) -> Result<(), String> {
 #[tauri::command]
 pub async fn card_rerun(app: AppHandle, id: JobId, aggressive: bool) -> Result<(), String> {
     blocking(app, move |app| jobs::rerun(app, &id, aggressive)).await
+}
+
+/// Merge `edits` into the card's recipe and run it again (spec §4.5).
+#[tauri::command]
+pub async fn card_edit(app: AppHandle, id: JobId, edits: EditsPatch) -> Result<(), String> {
+    blocking(app, move |app| jobs::edit(app, &id, edits)).await
+}
+
+/// The format bar: convert, or with `keep_both` (JS `keepBoth`) add a twin card.
+#[tauri::command]
+pub async fn card_convert(
+    app: AppHandle,
+    id: JobId,
+    format: Format,
+    keep_both: bool,
+) -> Result<(), String> {
+    blocking(app, move |app| jobs::convert(app, &id, format, keep_both)).await
+}
+
+/// `Err` is the inline message under the name field.
+#[tauri::command]
+pub async fn card_rename(app: AppHandle, id: JobId, stem: String) -> Result<(), String> {
+    blocking(app, move |app| jobs::rename(app, &id, &stem)).await
 }
 
 #[tauri::command]
