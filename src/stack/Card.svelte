@@ -67,7 +67,8 @@
   let cardEl = $state<HTMLElement>();
   let copied = $state<'ok' | 'failed' | null>(null);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
-  let tip = $state<{ text: string; left: number; top: number } | null>(null);
+  let tip = $state<{ text: string; left: number; top: number; room: number } | null>(null);
+  let tipWidth = $state(0);
   let renameError = $state<string | null>(null);
 
   const busy = $derived(isBusy(card.state));
@@ -304,6 +305,7 @@
       text: tipText(action),
       left: Math.max(8, rect.left - box.left),
       top: below + 24 > box.height ? rect.top - box.top - 28 : below,
+      room: box.width,
     };
   });
 
@@ -565,7 +567,13 @@
     {/if}
   </div>
   {#if tip && !slide?.moved}
-    <div class="tip" role="tooltip" style="left: {tip.left}px; top: {tip.top}px">{tip.text}</div>
+    <!-- Left edge on the button's, pulled left so the whole tip stays 6 px inside the card. -->
+    <div
+      class="tip"
+      role="tooltip"
+      style="left: {Math.max(6, Math.min(tip.left, tip.room - tipWidth - 6))}px; top: {tip.top}px"
+      bind:clientWidth={tipWidth}
+    >{tip.text}</div>
   {/if}
 </article>
 
