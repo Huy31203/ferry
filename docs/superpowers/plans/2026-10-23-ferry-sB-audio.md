@@ -17,7 +17,7 @@
 - `crates/ferry-core/src/ffmpeg.rs` with `pub fn locate() -> Result<PathBuf, FerryError>` and `pub fn run(args: &[OsString], cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<(), FerryError>` (progress 0.0..=1.0).
 - The `src-tauri/binaries/ffmpeg-<triple>` sidecar, and the env var A's tests use to find it (expected `FERRY_FFMPEG`; read `ffmpeg.rs` for the real name).
 
-**Contract gap, handled in Task 1.** `ffmpeg::run` returns `()`, so it gives no access to ffmpeg's log. Loudness measurement needs that log: `loudnorm` prints its pass-1 JSON to stderr, and ffmpeg has no option to write it to a file. Stream information (codec, bitrate, sample rate, cover) also comes only from the log. Task 1 therefore adds `ffmpeg::run_logged`, which returns stderr, to A's file unless A already provides an equivalent. The change refactors A's own runner. It is not a second runner.
+**ffmpeg's log.** `ffmpeg::run` returns `()`, but loudness measurement needs ffmpeg's log: `loudnorm` prints its pass-1 JSON to stderr, and ffmpeg has no option to write it to a file. Stream information (codec, bitrate, sample rate, cover) also comes only from the log. A's plan (`2026-10-23-ferry-sA-video.md`, Task 1) covers this with `pub fn exec(program: &Path, args: &[OsString], how: &Exec, cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<Captured, FerryError>`, where `Captured { code, stderr }` holds the last 1 MiB of stderr. B's production tool calls `ffmpeg::exec(&ffmpeg::locate()?, args, &Exec::default(), cancel, on_progress)` and returns `Captured::stderr`. B changes nothing in `ffmpeg.rs`. A's `exec` puts `-hide_banner -nostdin -y -nostats -progress pipe:1 -stats_period 0.5` before the caller's arguments, so **B's argument lists never contain those flags**. Its stall limit (`STALL`, 120 s without an output line) is never reached, because `-progress` prints every 0.5 s.
 
 ## Global Constraints
 
@@ -27,16 +27,16 @@
 
   | Need | ffmpeg component | Licence | Note |
   | --- | --- | --- | --- |
-  | MP3 out | `libmp3lame` encoder (LAME 3.100) | LGPL-2.0-or-later | ffmpeg has no native MP3 encoder. MP3 patents expired in 2017 |
+  | MP3 out | `libmp3lame` encoder (LAME 3.100, pinned by A) | LGPL-2.0-or-later | ffmpeg has no native MP3 encoder. MP3 patents expired in 2017 |
   | M4A out | native `aac` encoder | LGPL-2.1-or-later (part of FFmpeg) | **Flag:** AAC-LC may still carry patents in some jurisdictions (Via LA pool). `libfdk_aac` is **not** allowed: it needs `--enable-nonfree`, which makes the binary non-redistributable, and it is GPL-incompatible |
-  | Opus out | `libopus` encoder (libopus 1.5.2, or whatever A pins; ≥ 1.3) | BSD-3-Clause | Royalty-free. The native `opus` encoder is experimental, so do not use it |
+  | Opus out | `libopus` encoder (Opus 1.6.1, pinned by A) | BSD-3-Clause | Royalty-free. The native `opus` encoder is experimental, so do not use it |
   | WAV/FLAC out | `pcm_s16le`, `pcm_s24le`, `flac` encoders | LGPL-2.1-or-later | |
   | Inputs | demuxers `mp3 mov wav aiff flac ogg`; decoders `mp3float aac alac flac pcm_* vorbis opus` | LGPL-2.1-or-later | |
   | Muxers | `mp3 ipod flac opus wav image2 null` | LGPL-2.1-or-later | `ipod` is the `.m4a` flavour of the MP4 muxer |
   | Filters | `loudnorm`, `aresample` | LGPL-2.1-or-later | |
 
-  If A ships an LGPL build, LAME (LGPL) and libopus (BSD) keep it LGPL. Ferry itself stays GPL-3.0-or-later.
-- **Original is sacred (C1§3.3).** Back up first. Write to the working folder, then atomically replace or move into place. Never read a whole audio file into memory: audio is passed by path (`Payload::File`). Delete working files when the run ends.
+  A's build is FFmpeg 9.0.2 configured `--enable-gpl --enable-version3`, never `--enable-nonfree`, so the sidecar is **GPL-3.0-or-later**. That comes from x264/x265, which A needs for video. LAME (LGPL-2.0-or-later) and Opus (BSD-3-Clause) are linked into it, and both are compatible. Ferry itself is already GPL-3.0-or-later, so B adds no licence obligation. A's `THIRD-PARTY-NOTICES.md` and `licenses/` bundle already cover LAME and Opus.
+- **Original is sacred (C1§3.3).** Back up first. Write to the working folder, then atomically replace or move into place. Never read a whole audio file into memory: audio is passed by path (`Content::File`). Delete working files when the run ends.
 - **Never raise the bitrate above the original. Lossless targets show no bitrate** (R§2.3).
 - **Settings:** one new `[audio]` section (`#[serde(default)]`, `extra` map). `settings::VERSION` stays `2`.
 - **i18n:** every new string lives under `audio.*` in `src/lib/i18n/en.json`, a flat map. Rust reads strings with `t`/`tf`, Svelte with `t`. Existing non-audio keys may be reused but not changed.
@@ -63,7 +63,7 @@ The inputs and failures most likely to hurt a user that the spec does not spell 
 2. **Cancel, or an ffmpeg failure, in either pass.** The source stays byte-identical and no `out.*` or `.ferry-tmp` is left behind. A cancel puts the card back. A failure gives an Error card with Retry. Tests: Task 11 `a_cancel_during_the_encode_changes_nothing_and_leaves_no_temp_file`, `an_encoder_failure_is_an_error_with_retry_and_the_source_is_untouched`.
 3. **An already-efficient lossy file** (a 128 kbps MP3 when the setting says 192). It is never re-encoded upward and never re-encoded at all for no gain: the result is Already optimal, after one probe call and no encode. Tests: Task 7 `the_bitrate_never_rises_above_a_lossy_source`, Task 11 `a_low_bitrate_mp3_is_already_optimal_without_encoding`.
 4. **Things that look like audio but are not, and audio that looks like video.** An `ftyp isom`/`mp42` MP4 video, raw ADTS `.aac`, and AVI-in-RIFF must not become audio jobs. An `ftyp M4A ` file must become one, even when A's video sniffing also inspects `ftyp`. Tests: Task 2 `video_and_raw_streams_are_not_audio`, Task 10 `an_mp4_video_is_not_taken_for_audio`.
-5. **Awkward file names and big files:** spaces, non-ASCII, a name starting with `-` (`-intro.wav`), and hour-long WAVs. Every path handed to ffmpeg is absolute, so nothing is read as an option, and audio is never buffered in memory. Tests: Task 7 `every_path_argument_is_absolute`, Task 11 `a_source_named_like_an_option_is_passed_safely`, Task 9 `a_file_payload_is_copied_not_read_into_memory` (asserts the `Payload::File` path is used).
+5. **Awkward file names and big files:** spaces, non-ASCII, a name starting with `-` (`-intro.wav`), and hour-long WAVs. Every path handed to ffmpeg is absolute, so nothing is read as an option, and audio is never buffered in memory. Tests: Task 7 `every_path_argument_is_absolute`, Task 11 `a_source_named_like_an_option_is_passed_safely`, Task 9 `a_file_content_is_copied_not_read_into_memory` (asserts the `Content::File` path is used).
 
 ---
 
@@ -107,7 +107,7 @@ The inputs and failures most likely to hurt a user that the spec does not spell 
 
 - **Why LRA 20 for music and broadcast:** in pass 2, `loudnorm` stays in *linear* mode (pure gain, dynamics untouched) only if the measured LRA ≤ target LRA *and* the measured peak plus the gain stays ≤ target TP. Otherwise it falls back to *dynamic* mode, which compresses. 20 is the highest LRA every `loudnorm` version accepts (newer ones allow 50), so music keeps its dynamics. Podcast uses LRA 11, the value from the `loudnorm` documentation, so speech with wide swings gets gently levelled, which podcasts want.
 - **`dual_mono`:** a mono file played on two speakers sounds 3 dB louder than its mono measurement. `dual_mono=true` compensates for that, and it is the R 128-consistent way to reach "−19 LUFS mono" for consumer playback. Broadcast measures mono as mono.
-- **Pass 1 (measure):** `-hide_banner -nostdin -i <original> -map 0:a:0 -af loudnorm=I=…:TP=…:LRA=…[:dual_mono=true]:print_format=json -f null -`. The JSON is the `{…}` block after the last `[Parsed_loudnorm_` line of the log. It has `input_i`, `input_tp`, `input_lra`, `input_thresh` and `target_offset` as *strings*, which can be `"-inf"`.
+- **Pass 1 (measure):** `-i <original> -map 0:a:0 -af loudnorm=I=…:TP=…:LRA=…[:dual_mono=true]:print_format=json -f null -`. The JSON is the `{…}` block after the last `[Parsed_loudnorm_` line of the log. It has `input_i`, `input_tp`, `input_lra`, `input_thresh` and `target_offset` as *strings*, which can be `"-inf"`.
 - **Pass 2 (normalise):** `loudnorm=I=…:TP=…:LRA=…:measured_I=<input_i>:measured_TP=<input_tp>:measured_LRA=<max(input_lra,0.01)>:measured_thresh=<input_thresh>:offset=<target_offset>:linear=true[:dual_mono=true]:print_format=json`. `measured_LRA` is floored at 0.01 because `loudnorm` treats an exact 0 as "not measured" and would leave linear mode for a perfectly steady signal. Pass 2's JSON `normalization_type` reports `"dynamic"` when the limiter had to act, and the card then notes "Peaks limited to reach −14 LUFS".
 - **Not measurable:** when `input_i` is not finite or is ≤ −70, or `input_thresh` is not finite, loudness is skipped and the note says "Too quiet to measure — loudness left as it was".
 - **Progress across two passes:** pass 1 maps to 0.0–0.3 and pass 2 to 0.3–1.0 (`loudness::MEASURE_SHARE = 0.3`). Pass 1 only decodes and runs one filter, which is typically several times faster than encoding, so the bar moves at a roughly even pace. The step text is "Step 1 of 2 · Measuring loudness", then "Step 2 of 2 · Encoding MP3". Without loudness there is one pass over 0.0–1.0, labelled "Encoding MP3". Updates are throttled to 1 % steps.
@@ -149,10 +149,10 @@ The inputs and failures most likely to hurt a user that the spec does not spell 
 | --- | --- | --- |
 | `crates/ferry-core/src/lib.rs` | `pub mod audio;` in sorted position, trailing comment `// stream B` | module |
 | `crates/ferry-core/src/settings.rs` | field after `hotkeys` with comment `// stream B: audio`; `Default for Settings`; one line at the end of `sanitised` before `self.version = …` | `pub audio: crate::audio::settings::Audio` |
-| `crates/ferry-core/src/ffmpeg.rs` (A's) | `// ---- stream B: logged run ----` (only if needed, Task 1) | `run_logged` |
+| `crates/ferry-core/src/ffmpeg.rs` (A's) | — | **not touched** unless Task 1's fallback applies (`// ---- stream B: logged run ----`) |
 | `src/lib/i18n/en.json` | one contiguous block of `"audio.*"` keys just before the closing `}` | all strings (Task 1) |
 | `src/lib/ipc.ts` (the brief's "`src/lib/types.ts`" does not exist; `ipc.ts` holds the shared types) | `// ---- stream B: audio ----` | `Format` members, `Loudness`, `CoverPolicy`, `AudioCard`, `Edits`/`JobUpdate` fields |
-| `src/stack/Card.svelte` | comments `<!-- stream B: audio -->` / `// stream B: audio` at each edit | placeholder icon, compression-model calls, tooltips, percent |
+| `src/stack/Card.svelte` | comments `<!-- stream B: audio -->` / `// stream B: audio` at each edit | placeholder icon, compression-model calls, tooltips |
 | `src-tauri/src/lib.rs` | `mod audio; // stream B` (sorted); handler entries after `commands::pick_folder,` under `// stream B: audio` | 2 commands |
 | `src-tauri/src/menu.rs` | `// ---- stream B: audio ----` at the `Action` enum, `FORMATS`, `NAMED`, `key`/`parse`, `enabled`, `convert_formats`, `build`, `run` | audio menu |
 | `Cargo.lock`, `tauri.conf.json`, `capabilities/*`, `state.rs`, `commands.rs`, `tray.rs`, `windows.rs`, `platform/mod.rs`, `Stack.svelte` | — | **not touched** |
@@ -212,7 +212,7 @@ Audio jobs follow the existing `images.preserve_dates` and `backups.retention_da
 "audio.menu.cover": "Cover art",
 "audio.card.bitrate": "Bitrate",
 "audio.card.cover_downscale": "Downscale cover",
-"audio.card.percent": "{n} %",
+"audio.step.progress": "{step} · {n} %",
 "audio.slider.kbps": "{n} kbps",
 "audio.compare_unavailable": "Audio compare isn't available yet",
 "audio.pane": "Audio",
@@ -279,18 +279,16 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
 ### Task 1: ffmpeg log access, the `AudioTool` seam, test fixtures and strings
 
 **Files:**
-- Modify (only if needed): `crates/ferry-core/src/ffmpeg.rs` (A's), anchor `// ---- stream B: logged run ----`
+- Modify (fallback only, Step 2): `crates/ferry-core/src/ffmpeg.rs` (A's), anchor `// ---- stream B: logged run ----`
 - Create: `crates/ferry-core/src/audio/mod.rs` (only `pub mod tool;` for now), `crates/ferry-core/src/audio/tool.rs`
 - Modify: `crates/ferry-core/src/lib.rs` (`pub mod audio; // stream B`)
 - Modify: `crates/ferry-core/src/testutil.rs`, anchor `// ---- stream B: audio fixtures ----`
 - Modify: `src/lib/i18n/en.json` (the whole `audio.*` block above)
 
 **Interfaces:**
-- Consumes: `crate::ffmpeg::{locate, run}` and A's `FerryError` (any type that implements `Display`).
+- Consumes: `crate::ffmpeg::{locate, exec, Exec, Captured, FerryError}` (A's Task 1). `FerryError::Cancelled` exists, and every variant implements `Display`.
 - Produces:
   ```rust
-  // ffmpeg.rs (if A has no equivalent)
-  pub fn run_logged(args: &[OsString], cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<String, FerryError>;
   // audio/tool.rs
   pub trait AudioTool: Send + Sync + std::fmt::Debug {
       /// Run ffmpeg with `args`; Ok is ffmpeg's log (its stderr text).
@@ -307,14 +305,14 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   ```
   `FakeTool::run` records the arguments, then (when `cancel_on_call == Some(this call's index)`) cancels `cancel` and returns `Err(ToolError::Cancelled)`. Otherwise it calls `on_progress(0.5)` and `on_progress(1.0)`, pops the next step, and acts on it. `Write` writes `bytes` to the **last argument** as a path, unless that argument is `-`. `Fail` returns `Failed`. An empty script returns `Ok(String::new())`.
 
-- [ ] **Step 1: Check A's contract and build.** Run `grep -n "pub fn\|pub enum FerryError\|pub struct FerryError" crates/ferry-core/src/ffmpeg.rs crates/ferry-core/src/*.rs`. Expected: `locate`, `run` and A's `FerryError`. Then, with `F="$FERRY_FFMPEG"`, run:
+- [ ] **Step 1: Check A's contract and build.** Run `grep -n "pub fn\|pub struct\|pub enum" crates/ferry-core/src/ffmpeg.rs crates/ferry-core/src/error.rs`. Expected: `locate`, `run`, `exec`, `capture`, `Exec`, `Captured` and `FerryError`. Then, with `F="$FERRY_FFMPEG"`, run:
   ```bash
   "$F" -hide_banner -encoders | grep -E ' libmp3lame | aac | libopus | flac | pcm_s16le | pcm_s24le '
   "$F" -hide_banner -filters  | grep -E ' loudnorm | aresample '
   "$F" -hide_banner -muxers   | grep -E ' mp3 | ipod | opus | flac | wav | image2 | null '
   ```
   Expected: every name appears. If one is missing, **stop and report to the controller**. A's build must add it, because B cannot work around a missing encoder.
-- [ ] **Step 2: Decide on `run_logged`.** If `ffmpeg.rs` already has a public function that returns ffmpeg's stderr on success, under any name, use it in Step 5 and skip this step. Otherwise add `run_logged` at the anchor. Move the body of A's `run` into it so that it returns the stderr text `run` already collects, and make `run` a one-liner: `run_logged(args, cancel, on_progress).map(|_| ())`. The log level must be at least `info`, because `loudnorm` JSON and stream info print at `info`. If A's runner passes `-loglevel error` or quieter, `run_logged` passes `-loglevel info` instead. ffmpeg reads the *first* `-loglevel`, so callers cannot override it. If A's `run` does not collect stderr at all, stop and report. A's existing `ffmpeg` tests must still pass: `cargo test -p ferry-core ffmpeg`.
+- [ ] **Step 2: Fallback only.** If A's merged `ffmpeg.rs` has `exec` returning `Captured`, skip this step. If it does not, add `pub fn run_logged(args: &[OsString], cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<String, FerryError>` at the anchor. Move the body of A's `run` into it so that it returns the stderr text `run` already collects, and make `run` a one-liner: `run_logged(args, cancel, on_progress).map(|_| ())`. The log level must stay at least `info`, because `loudnorm` JSON and stream info print at `info`. If A's runner does not collect stderr at all, stop and report. A's existing `ffmpeg` tests must still pass: `cargo test -p ferry-core ffmpeg`.
 - [ ] **Step 3: Write the failing tests** in `audio/tool.rs`:
   ```rust
   #[test] fn a_cancelled_token_never_starts_ffmpeg() {
@@ -326,7 +324,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       let dir = tempfile::tempdir().unwrap();
       let wav = dir.path().join("tone.wav");
       std::fs::write(&wav, testutil::wav_tone(&[(0.5, 0.5)], 44100, 2)).unwrap();
-      let args: Vec<OsString> = ["-hide_banner", "-nostdin", "-i"].map(OsString::from).into_iter()
+      let args: Vec<OsString> = ["-i"].map(OsString::from).into_iter()
           .chain([wav.into_os_string()]).chain(["-f", "null", "-"].map(OsString::from)).collect();
       let log = tool.run(&args, &CancelToken::new(), &mut |_| {}).unwrap();
       assert!(log.contains("Input #0, wav"), "{log}");
@@ -334,7 +332,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   }
   #[test] fn a_failing_run_is_failed_with_ffmpegs_reason() {   // skipped without ffmpeg
       let Some(tool) = installed() else { return };
-      let args = ["-hide_banner", "-nostdin", "-i", "/no/such/file.wav", "-f", "null", "-"].map(OsString::from);
+      let args = ["-i", "/no/such/file.wav", "-f", "null", "-"].map(OsString::from);
       assert!(matches!(tool.run(&args, &CancelToken::new(), &mut |_| {}), Err(ToolError::Failed(m)) if !m.is_empty()));
   }
   ```
@@ -355,7 +353,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   }
   ```
 - [ ] **Step 4: Run them and confirm they fail:** `cargo test -p ferry-core audio::tool`. Expected: FAIL, because `Ffmpeg` and `installed` are not defined.
-- [ ] **Step 5: Implement.** `Ffmpeg::run` returns `Err(Cancelled)` when `cancel.is_cancelled()` before calling. It then calls `crate::ffmpeg::run_logged`, or A's equivalent. On `Err(e)` it returns `Cancelled` if the token is now cancelled, else `Failed(e.to_string())`. `wav_tone` writes a 44-byte canonical header (`fmt ` chunk PCM 1, `channels`, `rate`, 16 bits) followed by interleaved `i16` samples of `amp × sin(2π·440·t)`. Add the `audio.*` JSON block to `en.json`, keeping the file valid flat JSON.
+- [ ] **Step 5: Implement.** `Ffmpeg::run` returns `Err(Cancelled)` when `cancel.is_cancelled()` before calling. It then calls `crate::ffmpeg::exec(&ffmpeg::locate()?, args, &ffmpeg::Exec::default(), cancel, on_progress)` and returns `Captured::stderr` (or `run_logged` in the fallback). A `locate` error maps to `Failed`. On `Err(e)` it returns `Cancelled` for `FerryError::Cancelled` or when the token is now cancelled, else `Failed(e.to_string())`. `wav_tone` writes a 44-byte canonical header (`fmt ` chunk PCM 1, `channels`, `rate`, 16 bits) followed by interleaved `i16` samples of `amp × sin(2π·440·t)`. Add the `audio.*` JSON block to `en.json`, keeping the file valid flat JSON.
 - [ ] **Step 6: Run** `cargo test -p ferry-core audio::tool`, then `cargo test -p ferry-core testutil`, then `pnpm test -- i18n`. Expected: PASS. The two real-ffmpeg tests return early when ffmpeg is absent.
 - [ ] **Step 7: Commit** `feat(core): audio tool seam over the ffmpeg helper, with its log`.
 
@@ -473,7 +471,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   #[derive(Debug, Clone, PartialEq, Eq)] pub struct CoverInfo { pub codec: String, pub dims: (u32, u32) }
   impl AudioInfo { pub fn lossless(&self) -> bool; }   // codec is flac, alac, wavpack, ape, tta, or starts with "pcm_"
   #[derive(Debug, Clone, PartialEq, Eq)] pub enum ProbeError { NoAudio, Unreadable(String) }
-  pub fn args(input: &Path) -> Vec<OsString>;   // -hide_banner -nostdin -i <input> -map 0:a:0 -frames:a 1 -f null -
+  pub fn args(input: &Path) -> Vec<OsString>;   // -i <input> -map 0:a:0 -frames:a 1 -f null -   (exec adds the global flags)
   pub fn parse(log: &str) -> Result<AudioInfo, ProbeError>;
   #[cfg(test)] pub(crate) mod samples { pub const MP3_COVER: &str; pub const M4A_PNG: &str; pub const FLAC_MONO_24: &str; pub const WAV_51: &str; pub const WAV_STEREO: &str; pub const PNG_ONLY: &str; }
   ```
@@ -542,7 +540,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   }
   #[test] fn the_probe_names_the_input_and_reads_one_frame() {
       let a: Vec<String> = args(Path::new("/b/my song.wav")).iter().map(|s| s.to_string_lossy().into()).collect();
-      assert_eq!(a, ["-hide_banner", "-nostdin", "-i", "/b/my song.wav", "-map", "0:a:0", "-frames:a", "1", "-f", "null", "-"]);
+      assert_eq!(a, ["-i", "/b/my song.wav", "-map", "0:a:0", "-frames:a", "1", "-f", "null", "-"]);
   }
   ```
 - [ ] **Step 2: Run** `cargo test -p ferry-core audio::probe`. Expected: FAIL.
@@ -615,7 +613,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   #[test] fn pass_one_measures_the_first_audio_stream() {
       let a: Vec<String> = measure_args(Path::new("/b/x.wav"), &spec(Loudness::Podcast, 1).unwrap())
           .iter().map(|s| s.to_string_lossy().into()).collect();
-      assert_eq!(a, ["-hide_banner", "-nostdin", "-i", "/b/x.wav", "-map", "0:a:0", "-af",
+      assert_eq!(a, ["-i", "/b/x.wav", "-map", "0:a:0", "-af",
           "loudnorm=I=-16.0:TP=-1.0:LRA=11.0:dual_mono=true:print_format=json", "-f", "null", "-"]);
   }
   #[test] fn the_json_after_the_last_loudnorm_line_is_read() {
@@ -883,17 +881,17 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       let s = |v: Vec<OsString>| v.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
       let wav = resolve(&Inputs { info: &parse(samples::WAV_STEREO).unwrap(), source: Format::Wav, edits: &Edits::default(), level: Level::Normal, settings: &Audio::default() });
       assert_eq!(s(encode_args(&EncodeArgs { input: Path::new("/b/in.wav"), cover: CoverInput::None, plan: &wav, filter: None, output: Path::new("/w/out.mp3") })),
-          "-hide_banner -nostdin -y -i /b/in.wav -map 0:a:0 -map_metadata 0 -c:a libmp3lame -b:a 192k -ar 44100 -id3v2_version 3 -f mp3 /w/out.mp3");
+          "-i /b/in.wav -map 0:a:0 -map_metadata 0 -c:a libmp3lame -b:a 192k -ar 44100 -id3v2_version 3 -f mp3 /w/out.mp3");
       let flac = resolve(&Inputs { info: &AudioInfo { cover: Some(CoverInfo { codec: "mjpeg".into(), dims: (1200, 1200) }), ..parse(samples::FLAC_MONO_24).unwrap() },
           source: Format::Flac, edits: &Edits::default(), level: Level::Normal, settings: &Audio::default() });
       assert_eq!(s(encode_args(&EncodeArgs { input: Path::new("/b/in.flac"), cover: CoverInput::File(Path::new("/w/cover.jpg")), plan: &flac, filter: None, output: Path::new("/w/out.m4a") })),
-          "-hide_banner -nostdin -y -i /b/in.flac -i /w/cover.jpg -map 0:a:0 -map 1:v:0 -map_metadata 0 -c:a aac -b:a 192k -ar 48000 -c:v copy -disposition:v:0 attached_pic -f ipod /w/out.m4a");
+          "-i /b/in.flac -i /w/cover.jpg -map 0:a:0 -map 1:v:0 -map_metadata 0 -c:a aac -b:a 192k -ar 48000 -c:v copy -disposition:v:0 attached_pic -f ipod /w/out.m4a");
       let loud = AudioPlan { target: Format::Wav, kbps: None, pcm_bits: 24, sample_rate: 48000, ..wav.clone() };
       assert_eq!(s(encode_args(&EncodeArgs { input: Path::new("/b/in.wav"), cover: CoverInput::None, plan: &loud, filter: Some("loudnorm=I=-23.0"), output: Path::new("/w/out.wav") })),
-          "-hide_banner -nostdin -y -i /b/in.wav -map 0:a:0 -map_metadata 0 -af loudnorm=I=-23.0 -c:a pcm_s24le -ar 48000 -rf64 auto -f wav /w/out.wav");
+          "-i /b/in.wav -map 0:a:0 -map_metadata 0 -af loudnorm=I=-23.0 -c:a pcm_s24le -ar 48000 -rf64 auto -f wav /w/out.wav");
       let copy = AudioPlan { copy_audio: true, target: Format::Mp3, ..wav.clone() };
       assert_eq!(s(encode_args(&EncodeArgs { input: Path::new("/b/a.mp3"), cover: CoverInput::Source, plan: &copy, filter: None, output: Path::new("/w/out.mp3") })),
-          "-hide_banner -nostdin -y -i /b/a.mp3 -map 0:a:0 -map 0:v:0 -map_metadata 0 -c:a copy -c:v copy -disposition:v:0 attached_pic -id3v2_version 3 -f mp3 /w/out.mp3");
+          "-i /b/a.mp3 -map 0:a:0 -map 0:v:0 -map_metadata 0 -c:a copy -c:v copy -disposition:v:0 attached_pic -id3v2_version 3 -f mp3 /w/out.mp3");
   }
   #[test] fn every_path_argument_is_absolute() {                    // Review Focus 5
       let wav = resolve(&Inputs { info: &parse(samples::WAV_STEREO).unwrap(), source: Format::Wav, edits: &Edits::default(), level: Level::Normal, settings: &Audio::default() });
@@ -934,7 +932,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
 - Produces:
   ```rust
   pub fn file_ext(codec: &str) -> Option<&'static str>;           // "mjpeg" → "jpg", "png" → "png", else None
-  pub fn extract_args(input: &Path, out: &Path) -> Vec<OsString>; // -hide_banner -nostdin -y -i <in> -map 0:v:0 -c copy -frames:v 1 -f image2 <out>
+  pub fn extract_args(input: &Path, out: &Path) -> Vec<OsString>; // -i <in> -map 0:v:0 -c copy -frames:v 1 -f image2 <out>
   #[derive(Debug)] pub struct Processed { pub bytes: Vec<u8>, pub ext: &'static str, pub dims: (u32, u32) }
   pub fn process(bytes: &[u8], plan: CoverPlan, o: &OptimiseOptions) -> Result<Processed, OptimiseError>;
   ```
@@ -966,7 +964,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   }
   #[test] fn extraction_copies_the_first_picture() {
       let a: Vec<String> = extract_args(Path::new("/b/a.mp3"), Path::new("/w/cover-original.jpg")).iter().map(|s| s.to_string_lossy().into()).collect();
-      assert_eq!(a, ["-hide_banner", "-nostdin", "-y", "-i", "/b/a.mp3", "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "image2", "/w/cover-original.jpg"]);
+      assert_eq!(a, ["-i", "/b/a.mp3", "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "image2", "/w/cover-original.jpg"]);
   }
   ```
 - [ ] **Step 2: Run** `cargo test -p ferry-core audio::cover`. Expected: FAIL.
@@ -976,9 +974,9 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
 
 ---
 
-### Task 9: Results and originals written from a file (`Payload`)
+### Task 9: Results and originals written from a file (`Content`, same as A's Task 9)
 
-**Skip condition:** if stream A already merged a file-backed write path into `pipeline.rs` (search for `Payload`, `atomic_replace_from` or a `put` that takes a `&Path`), do not do this task. Use A's names wherever Tasks 11 and 13 say `Payload::File`/`backup_path`, and record the mapping in Task 11's commit message.
+**Skip condition:** this task is identical to stream A's Task 9 (same names: `Content`, `backup_path`, `atomic_replace_from`, `replace_with`). If A's Task 9 is already merged (`grep -n "enum Content\|atomic_replace_from" crates/ferry-core/src/pipeline.rs crates/ferry-core/src/fsutil.rs`), skip this task and only add the test below if it is missing. If it is not merged, do it exactly as specified here, so A's merge becomes a no-op.
 
 **Files:** Modify `crates/ferry-core/src/fsutil.rs`, `crates/ferry-core/src/pipeline.rs`.
 
@@ -988,26 +986,25 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   // fsutil.rs
   pub fn atomic_replace_from(target: &Path, from: &Path) -> io::Result<()>;   // same contract as atomic_replace, streaming by fs::copy
   // pipeline.rs
-  #[derive(Debug, Clone, Copy)] pub(crate) enum Payload<'a> { Bytes(&'a [u8]), File(&'a Path) }
-  impl Payload<'_> { pub(crate) fn bytes(&self) -> io::Result<Cow<'_, [u8]>>; }   // reads a File only when a clipboard write needs bytes
-  impl Job { pub(crate) fn backup_path(&mut self, backups: &Backups) -> io::Result<PathBuf>; }  // the first half of today's `original()`
+  #[derive(Clone, Copy)] enum Content<'a> { Bytes(&'a [u8]), File(&'a Path) }   // private; pipeline/audio.rs is a child module and sees it
+  impl Job { fn backup_path(&mut self, backups: &Backups) -> io::Result<PathBuf>; }  // today's `original()` without the read
   ```
-  `put`, `put_back`, `restore_source`, `write_file` and `write_work_file` take `Payload` where they take `&[u8]` today. `write_file` uses `atomic_replace` for `Bytes` and `atomic_replace_from` for `File`. `original()` becomes `backup_path()` followed by `fs::read`. The image `run_recipe` passes `Payload::Bytes`. `restore()` passes `Payload::File(backup)` after checking `backup.is_file()`, which keeps the `error.backup_missing` message.
+  `put(result: Content, format, original: Content, o, deliver)`, `put_back(original: Content, …)`, `restore_source(original: Content, o)` and `write_file(path, content: Content, source, o)` take `Content` where they take `&[u8]` today. `write_file` uses `atomic_replace` for `Bytes` and `atomic_replace_from` for `File`. `original()` becomes `fs::read(self.backup_path(backups)?)`. The image paths pass `Content::Bytes`. The Clipboard branches of `put` and `put_back` need `Bytes`; given a `File`, they return `Err((t("error.unexpected"), "a clipboard result must be in memory".into()))`. `restore()` is unchanged; audio jobs get their own restore in Task 11.
 
-- [ ] **Step 1: Write the failing tests.** In `fsutil.rs`, add `replacing_from_a_file_keeps_permissions_and_leaves_no_temp_file` and `replacing_from_a_file_refuses_a_read_only_target`, mirroring the two existing `atomic_replace` tests. In `pipeline.rs` tests, add:
+- [ ] **Step 1: Write the failing tests.** In `fsutil.rs`, add A's four tests: `replacing_from_a_file_copies_it_and_keeps_the_source_file`, `replacing_from_a_file_keeps_the_targets_permissions` (unix: 0o600 stays 0o600), `replacing_from_a_missing_file_leaves_the_target_and_no_temp` and `replacing_from_a_file_refuses_a_read_only_target`. In `pipeline.rs` tests, add:
   ```rust
-  #[test] fn a_file_payload_is_copied_not_read_into_memory() {       // Review Focus 5
+  #[test] fn a_file_content_is_copied_not_read_into_memory() {       // Review Focus 5
       let env = Env::new();
       let src = env.file("big.bin", &vec![7u8; 3_000_000]);
       let target = env.file("t.bin", b"old");
       let job = Job::file(&env.file("a.png", &testutil::png(8, 8)), &Settings::default(), true).unwrap();
-      job.write_file(&target, Payload::File(&src), &target, &options()).unwrap();
+      job.write_file(&target, Content::File(&src), &target, &options()).unwrap();
       assert_eq!(fs::read(&target).unwrap().len(), 3_000_000);
       assert!(!target.with_file_name("t.bin.ferry-tmp").exists());
   }
   ```
 - [ ] **Step 2: Run** `cargo test -p ferry-core fsutil`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Refactor `atomic_replace` so that both functions share one private `replace_with(target, write: impl FnOnce(&Path) -> io::Result<()>)`: symlink follow, read-only refusal, temp path, permission copy, rename, cleanup. `atomic_replace_from` writes with `fs::copy(from, tmp)` and then `File::open(tmp)?.sync_all()`. **Merge note for stream C:** C's `selfwrite::record` call belongs in `replace_with`, so both functions record. Then thread `Payload` through the five `Job` methods.
+- [ ] **Step 3: Implement.** Refactor `atomic_replace` so that both functions share one private `replace_with(target, write: impl FnOnce(&Path) -> io::Result<()>)`: symlink follow, read-only refusal, temp path, permission copy, rename, cleanup. `atomic_replace_from` writes with `fs::copy(from, tmp)` and then `File::open(tmp)?.sync_all()`. **Merge note for stream C:** C's `selfwrite::record` call belongs in `replace_with`, so both functions record. Then thread `Content` through the four `Job` methods.
 - [ ] **Step 4: Run** `cargo test -p ferry-core fsutil`, then `cargo test -p ferry-core pipeline`. Expected: PASS. All existing pipeline tests pass unchanged.
 - [ ] **Step 5: Commit** `refactor(core): write results and originals from a file as well as bytes`.
 
