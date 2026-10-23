@@ -18,3 +18,4 @@ One section per stream, added as each plan lands. Answer before implementation s
 4. Windows uses default `Videos\Captures`; follow a moved folder via registry? **Recommend: not this cycle (cannot test on the Mac).**
 5. A watched USB folder on Windows blocks "Safely remove" until paused. Acceptable? **Recommend: yes for now.**
 - Cross-stream: `src-tauri/src/watch/hooks.rs` has video/audio/PDF hooks (`VIDEO: bool = false`, `video_job(...) -> None`) for A/B/E to fill at merge.
+- **Decided (user accepted recommendations):** 1 default off; 2 keep name fallback until the manual check; 3 no; 4 no; 5 yes. The implementer must change the plan's on-by-default screenshot/recording watching to off.
