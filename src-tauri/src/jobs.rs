@@ -193,6 +193,13 @@ pub fn cancel(app: &AppHandle, id: &JobId) {
     };
     if let Some(card) = back {
         show(app, card);
+        // The card is idle again, so forget the request now rather than when a
+        // queued worker notices. A running job forgets it itself (no wait here).
+        if let Some(entry) = app.state::<AppState>().jobs.lock().unwrap().get(id)
+            && let Ok(mut job) = entry.job.try_lock()
+        {
+            job.cancel_recipe();
+        }
     }
     tray::refresh(app);
 }
@@ -307,6 +314,7 @@ fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
         };
         let cancel = entry.cancel.lock().unwrap().clone();
         if cancel.is_cancelled() {
+            relock(&entry.job).cancel_recipe();
             return;
         }
         let (worker_app, worker_entry) = (app.clone(), entry.clone());
