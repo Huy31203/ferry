@@ -83,6 +83,11 @@ pub struct JobUpdate {
     pub edits: Edits,
     /// An amber note, such as "Couldn't reach 1 MB — try downscaling".
     pub note: Option<String>,
+    /// The original's format: the format bar's GIF chip and "First frame only".
+    pub source_format: Option<Format>,
+    /// Why the edit tools are off, for their tooltip; `None` when they are on
+    /// or the job is busy.
+    pub edit_hint: Option<String>,
 }
 
 #[cfg(test)]
@@ -147,6 +152,8 @@ mod tests {
             can_edit: true,
             edits: Edits::default(),
             note: Some("Couldn't reach 1 MB".into()),
+            source_format: Some(Format::Png),
+            edit_hint: None,
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains(r#""source":"clipboard""#), "{json}");
