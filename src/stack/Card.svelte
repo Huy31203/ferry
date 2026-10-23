@@ -16,6 +16,7 @@
     scaleLabel,
     scalePatch,
     sliderIndex,
+    sliderTrack,
     stopIndex,
     type CropFrame,
   } from '../lib/edits';
@@ -144,8 +145,8 @@
     }
   }
 
-  /** The slider's track length in px; its panel (track plus 24 px padding) fits under the rail inside the card. */
-  const TRACK = $derived(compact ? 72 : 112);
+  /** The slider's track length in px: the longest that keeps its panel (live line, track, labels) under the rail and inside the card. */
+  const TRACK = $derived(sliderTrack(compact ? 150 : 200));
   /** Fallback switch (Task 11): false if drags never reach the panel; the buttons then only step. */
   const PRESS_AND_DRAG = true;
   type SliderKind = 'downscale' | 'compression';
@@ -164,6 +165,13 @@
       ? scaleLabel(SCALE_STOPS[slide.index], card.dims_before, card.edits)
       : qualityLabel(QUALITY_STOPS[slide.index]);
   });
+
+  /** Every stop's short value, such as "50 %" or "q 60", for the slider's labels. */
+  const slideStops = $derived(
+    slide?.kind === 'downscale'
+      ? SCALE_STOPS.map((scale) => scaleLabel(scale, null, card.edits))
+      : QUALITY_STOPS.map(qualityLabel),
+  );
 
   function edit(edits: EditsPatch) {
     void act('card_edit', { edits });
@@ -465,6 +473,7 @@
       index={slide.index}
       count={slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length}
       label={slideLabel}
+      stops={slideStops}
       left={slide.left}
       track={TRACK}
       width={compact ? 220 : 300}

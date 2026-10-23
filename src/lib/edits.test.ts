@@ -7,6 +7,8 @@ import {
   parseSize,
   sizeLabel,
   checkCrop,
+  labelledStops,
+  sliderTrack,
   convertRequest,
   cropForm,
   cropFrame,
@@ -103,6 +105,27 @@ describe('slider drag', () => {
     expect(stopIndex(SCALE_STOPS, 100)).toBe(0);
     expect(stopIndex(QUALITY_STOPS, 'extreme')).toBe(20);
     expect(stopIndex(QUALITY_STOPS, 82)).toBe(4);
+  });
+});
+
+describe('slider labels', () => {
+  it('sizes the track so the panel (46 px down, 42 px of chrome) ends 6 px above the card bottom', () => {
+    expect(sliderTrack(200)).toBe(106);
+    expect(sliderTrack(150)).toBe(56);
+  });
+
+  it('labels every stop where a stop is 14 px or more apart', () => {
+    expect(labelledStops(5, 56)).toEqual([0, 1, 2, 3, 4]);
+    expect(labelledStops(1, 56)).toEqual([0]);
+  });
+
+  it('labels every Nth stop, always the first and the last, and drops one too close to the last', () => {
+    // 18 stops over 106 px: 6.2 px apart, so every 3rd; stop 15 is only 2 stops from the last
+    expect(labelledStops(18, 106)).toEqual([0, 3, 6, 9, 12, 17]);
+    // 21 stops over 106 px: 5.3 px apart, so every 3rd; stop 18 is only 2 from the last
+    expect(labelledStops(21, 106)).toEqual([0, 3, 6, 9, 12, 15, 20]);
+    // 18 stops over 56 px: 3.3 px apart, so every 5th
+    expect(labelledStops(18, 56)).toEqual([0, 5, 10, 17]);
   });
 });
 
