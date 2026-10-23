@@ -150,7 +150,7 @@ Until D merges, the overlay opens from the editor's **Preview on screen** button
 | Consumer | Call |
 | --- | --- |
 | C (watched folders) | `crate::pipe_jobs::start_assigned(app, job, Trigger::Pipeline(id), Level::Normal, None)`, where `id: u32` is stored in C's own folder settings |
-| G (rail editor "+" slot) | `invoke('pipe_run', { id: <job id>, pipeline: <u32> })`, with the list from `invoke('settings_get')` → `.pipelines.library` |
+| G (rail editor "+" slot) | G's plan reserves rail tool ids `pipeline:<id>` (`svc_settings::is_tool_id` accepts them). A rail button with that id calls `invoke('pipe_run', { id: <job id>, pipeline: <u32> })`, and the picker lists `settings.pipelines.library`. Drawing these buttons needs G's `src/lib/rail.ts` and its `Card.svelte` block, so it is a post-merge integration edit, not a task here. Until then, pipelines run from the card menu's **Run pipeline ▸** |
 
 ### D10. Pipeline editor is its own window
 
@@ -2009,6 +2009,7 @@ pub fn hide(app: &AppHandle);
   2. Size it with `zones_size(zones.len() + 1 + preview as usize)`.
   3. Position it with `zones_origin`, using the monitor under the cursor, found the same way as in `windows::stack_resize` (copy the lookup, including the macOS `main_scale` correction). Convert the cursor and the work area to logical units with that monitor's scale.
   4. Emit `pipe:zones` (`ZonesView`) to the window, then `platform::show_without_focus`.
+  5. In `Mode::Drag` only, arm the D8 hide timers: 5 s with no drag `enter`, and 1.5 s after a `leave`. The page reports `enter` and `leave` through a command `pipe_zones_drag(entered: bool)`; add it to the command table. A `drag:tap` "control" while showing hides immediately, and so does `drag:ended`.
 - **Zones page (`Zones.svelte` and `ZoneGrid.svelte`):**
   - A grid of tiles, each with an icon from `zone-icons.ts` (inline Lucide paths), its name, its caption and a type badge. The last tile is "Edit presets…". In preview mode, "Done" comes after it.
   - `onDragDropEvent`:
@@ -2276,7 +2277,12 @@ Slash-separated rows are one key per item, in the same order as the texts. Write
 2. **`images.adaptive`.** Cycle 1 labelled it "Adaptive PNG/JPEG switching", while a separate `switch_png_jpeg` key also exists. This plan makes `adaptive` mean adaptive compression and `switch_png_jpeg` mean the format switch, and relabels the first. Confirm.
 3. **Adaptive targets.** SSIMULACRA2 80 (Normal) and 70 (Aggressive), quality range 30–95, at most 5 encodes. Tune after the manual check?
 4. **Encoder enum shared with stream A.** This plan defines `ferry_core::optimise::Encoder { Fast, Small, VisuallyLossless }` and `Edits.encoder`. Stream A's plan should reuse them for video rather than add a second enum. Please make sure A's plan agrees before both run in parallel.
-5. **Preset zones before D merges.** The overlay opens only from the editor's "Preview on screen". The real trigger (second modifier tap while dragging) arrives when D emits `drop:preset_zones_show` and `drop:preset_zones_hide`. Is this seam acceptable to D's plan?
+5. **The seam with stream D.** F listens to D's `drag:tap` and toggles the zones on `"control"`. Before or after D merges, the overlay also opens from the editor's "Preview on screen". Three small asks of D:
+   - **(a)** Also emit `drag:ended` (payload `null`) when a drag ends. Without it, F hides the overlay on timers.
+   - **(b)** After both merge, change the single `jobs::start` call in D's `drop_batch::intake::accept` to `pipe_jobs::start_assigned(…, Trigger::DropZone, …)`, so that the drop-zone pipeline assignment takes effect.
+   - **(c)** After both merge, draw F's `pipe.zones.hint_tap` in D's zone hint row.
+
+   Are these post-merge edits OK to make in D's files?
 6. **Watched folders.** The pipeline id for a watched folder lives in stream C's schema, and C calls `pipe_jobs::start_assigned(…, Trigger::Pipeline(id), …)`. Until then, the library's "Used by" does not list folders. C must also ignore files Ferry writes through the copy step, or a copy into a watched folder would loop. Confirm that C's plan covers this.
 7. **Text mode.** The syntax is line-based (`step key=value`), with suggestions rather than a full autocomplete popup. Is that enough for "text mode with autocomplete" (R§4.13)?
 8. **Fork on clipboard jobs.** The clipboard keeps the main (last) branch's result, and forks are cards only, through the `NEVER_ON_CLIPBOARD` sentinel. Is that the behaviour you want?
