@@ -1370,7 +1370,7 @@ Changes in `pipeline.rs` (each marked `// stream A: video`):
 - Test: `menu.rs` tests, `state.rs` test
 
 **Interfaces:**
-- Consumes: `Job::is_video`, `video::hardware::probe_hardware`, `ffmpeg::{kill_all, locate}`, `video::format_id`, `EditsPatch.mute`.
+- Consumes: `Job::is_video`, `video::hardware::probe_hardware`, `ffmpeg::{kill_all, locate}`, `video::format_id`, `EditsPatch.mute`, `VideoMeta.hevc_encoder`.
 - Produces:
   - `AppState::video_permits: Arc<Semaphore>` (1 permit).
   - `jobs::toggle_mute(app: &AppHandle, id: &JobId) -> Result<(), String>`: reads `relock(&entry.job).edits.mute` and calls `edit` with `mute: Some(!mute)`.
@@ -1450,7 +1450,7 @@ export function ringDash(progress: number): string;         // `${(p*RING).toFix
 ```
 
 UI rules:
-- **`formatChoices`:** for a card where `isVideo(card.source_format ?? card.format)`, the chips are `['mp4', 'hevc', 'av1', 'webm', 'gif']` with labels from `FORMAT_LABELS`, `current` = `card.format === f`, and `firstFrame: false`.
+- **`formatChoices`:** for a card where `isVideo(card.source_format ?? card.format)`, the chips are `['mp4', 'hevc', 'av1', 'webm', 'gif']` with labels from `FORMAT_LABELS`, `current` = `card.format === f`, and `firstFrame: false`. The `'hevc'` chip is left out unless `card.video?.hevc_encoder` is true or `card.format === 'hevc'` (HEVC is hardware only; a card already in HEVC still shows its current chip).
 - **`Card.svelte`:**
   - With no `thumb_path` on a video card, show a Lucide "film" outline icon instead of the image icon.
   - When `card.video` is set, a duration badge at the thumbnail's top-left: `formatDuration(card.video.duration_ms)`, 11 px tabular figures on the grey pill, with `aria-label` `t('video.card.duration', { time })`.
@@ -1477,8 +1477,14 @@ it('offers video targets and GIF on a video card', () => {
   ]);
 });
 it('names the codec beside the extension', () => {
-  expect(extLabel(card({ kind: 'done' }, { ext: 'mp4', video: { duration_ms: 1000, codec: 'HEVC', fps: 30, audio: true, original: '/b/a.mp4', original_duration_ms: 1000 } }))).toBe('mp4 · HEVC');
+  expect(extLabel(card({ kind: 'done' }, { ext: 'mp4', video: { duration_ms: 1000, codec: 'HEVC', fps: 30, audio: true, original: '/b/a.mp4', original_duration_ms: 1000, hevc_encoder: true } }))).toBe('mp4 · HEVC');
   expect(extLabel(card({ kind: 'done' }))).toBe('png');
+});
+it('hides HEVC without a hardware encoder', () => {
+  const meta = { duration_ms: 1000, codec: 'H.264', fps: 30, audio: true, original: '/b/a.mp4', original_duration_ms: 1000, hevc_encoder: false };
+  const c = card({ kind: 'done' }, { format: 'mp4', source_format: 'mp4', ext: 'mp4', video: meta });
+  expect(formatChoices(c).map((x) => x.format)).toEqual(['mp4', 'av1', 'webm', 'gif']);
+  expect(formatChoices({ ...c, video: { ...meta, hevc_encoder: true } }).map((x) => x.format)).toEqual(['mp4', 'hevc', 'av1', 'webm', 'gif']);
 });
 ```
 
@@ -1492,7 +1498,7 @@ it('names the codec beside the extension', () => {
   4. Drag Downscale to 50%: the detail reads "2880×1800 → 1440×900".
   5. Context menu → Change speed… → 2× → Apply: the duration badge halves and the detail adds "2×".
   6. Context menu → Remove audio: the detail adds "no audio" and the menu item now reads "Keep audio".
-  7. Click the format bar's GIF chip: a `.gif` replaces the `.mp4` and plays animated in Quick Look (Space).
+  7. The format bar shows MP4, HEVC, AV1, WebM and GIF (HEVC is there because VideoToolbox has an HEVC encoder). Click HEVC: the detail reads "HEVC" and the ext chip "mp4 · HEVC". Then click the GIF chip: a `.gif` replaces the `.mp4` and plays animated in Quick Look (Space).
   8. Restore: the `.mov` is back in Finder.
   9. Hovering the card and pressing `5` downscales to 50%.
 
