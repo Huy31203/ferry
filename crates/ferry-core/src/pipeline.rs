@@ -92,6 +92,8 @@ pub struct Job {
     pub level: Level,
     /// What the card asked for; every run applies all of it to the original.
     pub edits: Edits,
+    /// The recipe and level before the pending run's request, for a cancel.
+    prior: Option<(Edits, Level)>,
     source_format: Format,
     source_ext: String,
     animated: bool,
@@ -208,6 +210,7 @@ impl Job {
             output,
             level: Level::Normal,
             edits: Edits::default(),
+            prior: None,
             source_format: format,
             source_ext: ext.into(),
             animated,
@@ -267,6 +270,7 @@ impl Job {
             output: path.to_owned(),
             level: Level::Normal,
             edits: Edits::default(),
+            prior: None,
             source_format: format,
             animated: sniff::is_animated(&bytes, format),
             source_path: Some(path.to_owned()),
@@ -357,11 +361,22 @@ impl Job {
     /// Merge what the card asked for. Asking for the source format, or for
     /// GIF, clears the conversion.
     pub fn edit(&mut self, patch: EditsPatch) {
+        self.prior = Some((self.edits.clone(), self.level));
         self.edits.merge(patch);
         if matches!(self.edits.format, Some(f) if f == self.source_format || f == Format::Gif) {
             self.edits.format = None;
         }
         self.level = self.edits.level;
+    }
+
+    /// A cancelled run leaves the file as the earlier run made it, so the
+    /// request that started it is forgotten too. The app calls this for a job
+    /// cancelled before its worker started.
+    pub fn cancel_recipe(&mut self) {
+        if let Some((edits, level)) = self.prior.take() {
+            self.edits = edits;
+            self.level = level;
+        }
     }
 
     /// A second job on the same original, for "Convert and keep both". It has
@@ -393,6 +408,7 @@ impl Job {
             output,
             level: self.level,
             edits: self.edits.clone(),
+            prior: None,
             source_format: self.source_format,
             source_ext: self.source_ext.clone(),
             animated: self.animated,
@@ -413,6 +429,24 @@ impl Job {
     /// was written. A plain run that does not come out smaller leaves the
     /// original as the result (Cycle 1); an explicit edit always writes.
     pub fn run(
+        &mut self,
+        level: Level,
+        o: &RunOptions,
+        backups: &Backups,
+        emit: &mut dyn FnMut(JobUpdate),
+        deliver: Deliver,
+    ) -> Option<Finished> {
+        self.prior
+            .get_or_insert_with(|| (self.edits.clone(), self.level));
+        let finished = self.run_recipe(level, o, backups, emit, deliver);
+        match finished {
+            Some(_) => self.prior = None,
+            None => self.cancel_recipe(),
+        }
+        finished
+    }
+
+    fn run_recipe(
         &mut self,
         level: Level,
         o: &RunOptions,
@@ -1577,6 +1611,45 @@ mod tests {
             .update;
         assert_eq!(update.output, Some(env.dir.path().join("shot (2).png")));
         assert_eq!(fs::read(&path).unwrap(), parent);
+    }
+
+    #[test]
+    fn a_cancelled_edit_is_not_kept_in_the_recipe() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        job.edit(scale(50));
+        let o = options();
+        o.cancel.cancel();
+        assert!(run(&mut job, Level::Normal, &o, &env).0.is_none());
+        job.edit(convert(Format::WebP));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.dims_after, None, "the cancelled 50 % came back");
+    }
+
+    #[test]
+    fn an_edit_cancelled_before_it_started_is_not_kept_either() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        let before = (job.edits.clone(), job.level);
+        job.edit(EditsPatch {
+            level: Some(Level::Aggressive),
+            ..scale(50)
+        });
+        job.cancel_recipe();
+        assert_eq!((job.edits.clone(), job.level), before);
+    }
+
+    #[test]
+    fn a_finished_run_keeps_its_recipe() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        job.edit(scale(50));
+        run(&mut job, Level::Normal, &options(), &env);
+        job.cancel_recipe();
+        assert_eq!(job.edits.scale, Some(50));
     }
 
     #[test]
