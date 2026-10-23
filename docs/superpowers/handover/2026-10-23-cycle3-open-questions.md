@@ -19,3 +19,11 @@ One section per stream, added as each plan lands. Answer before implementation s
 5. A watched USB folder on Windows blocks "Safely remove" until paused. Acceptable? **Recommend: yes for now.**
 - Cross-stream: `src-tauri/src/watch/hooks.rs` has video/audio/PDF hooks (`VIDEO: bool = false`, `video_job(...) -> None`) for A/B/E to fill at merge.
 - **Decided (user accepted recommendations):** 1 default off; 2 keep name fallback until the manual check; 3 no; 4 no; 5 yes. The implementer must change the plan's on-by-default screenshot/recording watching to off.
+
+## H integrations (`plans/2026-10-23-ferry-sH-integrations.md`, 13 tasks; `windows` 0.62.2 + `windows-collections` 0.3.2 MIT/Apache, already in Cargo.lock; objc2 feature additions only)
+1. Which of Dropshare, Yoink, Dropover, Dockside are installed for the manual check? Bundle ids are guesses; detection falls back to the app name. **User to answer.**
+2. "Optimise with Ferry" sits under "Show more options" on Windows 11 (top-level needs a signed package). **Recommend: accept.**
+3. Register HEIC, TIFF, AVIF, MP4/MOV/M4V and PDF now? Until A and E merge they show the "isn't an image" card. **Recommend: register them; every stream merges into `feat/c3-all` before release, so the gap never ships.**
+4. macOS manual checks need the built `Ferry.app` in `/Applications`, replacing installed 0.2.0. **Recommend: OK; reinstall from the v0.2.0 release if needed.**
+5. With no editor chosen, Cmd+E opens the default app and the menu offers a one-click chooser. **Recommend: as planned.**
+- Known risks to accept: Windows hides the verb for >15 selected files; a cold start opening several files from Explorer can lose some to the single-instance race; macOS Services may need enabling in System Settings or `pbs -update`. **Recommend: accept for this cycle.**
