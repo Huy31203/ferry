@@ -1,5 +1,5 @@
 import { t } from './i18n';
-import type { Edits, EditsPatch, Format, JobUpdate } from './ipc';
+import type { Edits, EditsPatch, Format, JobUpdate, Size } from './ipc';
 
 /** A Compression stop: an encoder quality 5–100, or Extreme (aggressive at quality 5). */
 export type Quality = number | 'extreme';
@@ -102,4 +102,165 @@ export function convertRequest(
 ): { format: Format; keepBoth: boolean } | null {
   if (card.format === format && !keepBoth) return null;
   return { format, keepBoth };
+}
+
+/** The largest width, height or long edge a crop may ask for (`ferry_core::edit::MAX_SIDE`). */
+export const MAX_SIDE = 30_000;
+
+/** The crop popover's ratio chips; `null` is "Free" (no ratio crop, only the size fields). */
+export const ASPECTS: { label: string; ratio: [number, number] | null }[] = [
+  { label: '', ratio: null },
+  { label: '16:9', ratio: [16, 9] },
+  { label: '4:3', ratio: [4, 3] },
+  { label: '1:1', ratio: [1, 1] },
+  { label: '1.91:1', ratio: [191, 100] },
+  { label: '9:16', ratio: [9, 16] },
+];
+
+/** What the crop popover's fields hold, as typed. */
+export interface CropForm {
+  aspect: [number, number] | null;
+  mode: 'size' | 'long_edge';
+  width: string;
+  height: string;
+  edge: string;
+  framing: 'centre' | 'smart';
+}
+
+/** The popover's starting point: the card's current crop, if any. */
+export function cropForm(edits: Edits): CropForm {
+  const size = edits.size;
+  return {
+    aspect: edits.aspect,
+    mode: size?.kind === 'long_edge' ? 'long_edge' : 'size',
+    width: size?.kind === 'exact' || size?.kind === 'width' ? String(size.width) : '0',
+    height: size?.kind === 'exact' || size?.kind === 'height' ? String(size.height) : '0',
+    edge: size?.kind === 'long_edge' ? String(size.edge) : '0',
+    framing: edits.framing,
+  };
+}
+
+export type CropField = 'width' | 'height' | 'edge';
+
+export type CropCheck =
+  | { patch: EditsPatch; larger: boolean; error: null; field: null }
+  | { patch: null; larger: false; error: string; field: CropField | null };
+
+/** A field as a side: '' is 0; anything but digits, or more than MAX_SIDE, is an error. */
+function side(text: string): number | 'not_number' | 'too_large' {
+  const trimmed = text.trim();
+  if (trimmed === '') return 0;
+  if (!/^\d+$/.test(trimmed)) return 'not_number';
+  const value = Number(trimmed);
+  return value > MAX_SIDE ? 'too_large' : value;
+}
+
+/** Check the popover (spec §5.3) and build the `card_edit` patch: aspect, framing and size. */
+export function checkCrop(form: CropForm, dims: [number, number] | null): CropCheck {
+  const fields: CropField[] = form.mode === 'size' ? ['width', 'height'] : ['edge'];
+  const values: Record<CropField, number> = { width: 0, height: 0, edge: 0 };
+  for (const field of fields) {
+    const value = side(form[field]);
+    if (typeof value === 'string') {
+      const error = t(value === 'not_number' ? 'crop.not_number' : 'crop.too_large');
+      return { patch: null, larger: false, error, field };
+    }
+    values[field] = value;
+  }
+  const { width, height, edge } = values;
+  let size: Size | null = null;
+  if (form.mode === 'long_edge') {
+    if (edge > 0) size = { kind: 'long_edge', edge };
+  } else if (width > 0 && height > 0) {
+    size = { kind: 'exact', width, height };
+  } else if (width > 0) {
+    size = { kind: 'width', width };
+  } else if (height > 0) {
+    size = { kind: 'height', height };
+  }
+  if (size === null && form.aspect === null) {
+    return { patch: null, larger: false, error: t('crop.nothing'), field: null };
+  }
+  const larger =
+    dims !== null &&
+    (width > dims[0] || height > dims[1] || edge > Math.max(dims[0], dims[1]));
+  return {
+    patch: { aspect: form.aspect, framing: form.framing, size },
+    larger,
+    error: null,
+    field: null,
+  };
+}
+
+/** ×0.5 and ×2: every non-zero size field, rounded, kept within 1..MAX_SIDE; fields that are not numbers stay. */
+export function scaleForm(form: CropForm, factor: number): CropForm {
+  const scale = (text: string) => {
+    const value = side(text);
+    if (typeof value === 'string' || value === 0) return text;
+    return String(Math.min(MAX_SIDE, Math.max(1, Math.round(value * factor))));
+  };
+  return { ...form, width: scale(form.width), height: scale(form.height), edge: scale(form.edge) };
+}
+
+/** The largest window of `ratio` inside `dims`, rounded, at least 1×1 (mirrors `ferry_core::edit::geometry::fit_ratio`). */
+export function fitRatio([w, h]: [number, number], [rw, rh]: [number, number]): [number, number] {
+  if (w * rh > h * rw) {
+    return [Math.min(w, Math.max(1, Math.floor((h * rw + Math.floor(rh / 2)) / rh))), h];
+  }
+  return [w, Math.min(h, Math.max(1, Math.floor((w * rh + Math.floor(rw / 2)) / rw)))];
+}
+
+/** Where the crop cuts, as fractions of the original: centred (Smart framing is decided by Rust and not previewed). */
+export interface CropFrame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export function cropFrame(dims: [number, number] | null, form: CropForm): CropFrame | null {
+  if (dims === null) return null;
+  const check = checkCrop(form, dims);
+  const size = check.patch?.size;
+  const ratio: [number, number] | null =
+    size?.kind === 'exact' ? [size.width, size.height] : (check.patch?.aspect ?? null);
+  if (ratio === null) return null;
+  const [fw, fh] = fitRatio(dims, ratio);
+  return {
+    x: (dims[0] - fw) / 2 / dims[0],
+    y: (dims[1] - fh) / 2 / dims[1],
+    w: fw / dims[0],
+    h: fh / dims[1],
+  };
+}
+
+/** `frame` in card pixels, over a thumbnail drawn with `object-fit: contain` in a `box`-sized card. */
+export function frameBox(
+  frame: CropFrame,
+  dims: [number, number],
+  box: [number, number],
+): { left: number; top: number; width: number; height: number } {
+  const scale = Math.min(box[0] / dims[0], box[1] / dims[1]);
+  const [iw, ih] = [dims[0] * scale, dims[1] * scale];
+  const [ix, iy] = [(box[0] - iw) / 2, (box[1] - ih) / 2];
+  return { left: ix + frame.x * iw, top: iy + frame.y * ih, width: frame.w * iw, height: frame.h * ih };
+}
+
+/** Fit under size chips, in MB. */
+export const FIT_PRESETS_MB = [1, 5, 10, 25];
+
+/** The fit field in bytes (decimal units, like the cards), or null when it is not a size above 0. */
+export function fitBytes(text: string, unit: 'kb' | 'mb'): number | null {
+  const trimmed = text.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
+  const bytes = Math.round(Number(trimmed) * (unit === 'mb' ? 1_000_000 : 1_000));
+  return bytes > 0 ? bytes : null;
+}
+
+/** The fit field's starting text and unit: the card's current target, or empty in MB. */
+export function fitForm(fitUnder: number | null): { text: string; unit: 'kb' | 'mb' } {
+  if (fitUnder === null) return { text: '', unit: 'mb' };
+  return fitUnder % 1_000_000 === 0
+    ? { text: String(fitUnder / 1_000_000), unit: 'mb' }
+    : { text: String(Math.round(fitUnder / 1_000)), unit: 'kb' };
 }
