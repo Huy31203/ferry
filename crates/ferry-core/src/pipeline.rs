@@ -104,6 +104,8 @@ pub struct Job {
     last: Option<Written>,
     /// What became of the source file on disk.
     source_state: SourceState,
+    /// The name the user gave the result by renaming it; later results keep it.
+    stem: Option<String>,
     dims_after: Option<(u32, u32)>,
     note: Option<String>,
     /// The original, once stored. Every run starts from it (R§2.4).
@@ -247,6 +249,7 @@ impl Job {
             source_path: None,
             last: None,
             source_state: SourceState::Untouched,
+            stem: None,
             dims_after: None,
             note: None,
             backup: None,
@@ -307,6 +310,7 @@ impl Job {
             source_path: Some(path.to_owned()),
             last: None,
             source_state: SourceState::Untouched,
+            stem: None,
             dims_after: None,
             note: None,
             backup: None,
@@ -379,9 +383,21 @@ impl Job {
         fs::rename(&self.output, &to).map_err(|e| RenameError::Failed {
             reason: describe(&e),
         })?;
-        if self.source_path.as_ref() == Some(&self.output) {
-            self.source_path = Some(to.clone());
+        if !self.twin {
+            // The source follows its name: it is the very file that was renamed,
+            // or it is in the Trash and Restore will bring it back under this name.
+            if self.source_path.as_ref() == Some(&self.output) {
+                self.source_path = Some(to.clone());
+            } else if self.source_state == SourceState::Trashed {
+                let file = if self.source_ext.is_empty() {
+                    stem.to_owned()
+                } else {
+                    format!("{stem}.{}", self.source_ext)
+                };
+                self.source_path = Some(to.with_file_name(file));
+            }
         }
+        self.stem = Some(stem.to_owned());
         if let Some(last) = self.last.as_mut().filter(|w| w.path == self.output) {
             last.path = to.clone();
         }
@@ -444,6 +460,7 @@ impl Job {
             source_path: self.source_path.clone(),
             last: None,
             source_state: SourceState::Untouched,
+            stem: None,
             dims_after: None,
             note: None,
             backup: self.backup.clone(),
@@ -674,6 +691,7 @@ impl Job {
                     ext: &ext,
                     dims,
                     kind,
+                    stem: self.stem.as_deref(),
                 };
                 let wanted = output::resolve(
                     &target,
@@ -765,7 +783,13 @@ impl Job {
                 self.restore_source(original, o)?;
                 if let Some(source) = &self.source_path {
                     self.output = source.clone();
+                    // The original is back under the name it has now, and the
+                    // card says so.
+                    if let Some(stem) = source.file_stem() {
+                        self.name = stem.to_string_lossy().into_owned();
+                    }
                 }
+                self.stem = None;
             }
         }
         self.format = self.source_format;
@@ -2005,6 +2029,90 @@ mod tests {
         assert_eq!(update.state, JobState::Done);
         assert_eq!(update.output, Some(env.dir.path().join("photo (2).jpg")));
         assert_eq!(fs::read(&path).unwrap(), input, "the parent's file stays");
+    }
+
+    #[test]
+    fn a_rename_after_a_conversion_survives_the_next_edit() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        job.rename("hero").unwrap();
+        job.edit(scale(50));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.output, Some(env.dir.path().join("hero.webp")));
+        assert!(!env.dir.path().join("shot.webp").exists());
+    }
+
+    #[test]
+    fn a_rename_of_a_same_folder_result_survives_the_next_edit() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.output.optimised.location = Location::SameFolder;
+        let o = options_with(&settings);
+        let path = env.file("shot.png", &testutil::png(300, 200));
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        job.edit(scale(50));
+        run(&mut job, Level::Normal, &o, &env);
+        job.rename("hero").unwrap();
+        job.edit(scale(40));
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+        assert_eq!(update.output, Some(env.dir.path().join("hero.png")));
+        assert!(!env.dir.path().join("shot_optimised.png").exists());
+    }
+
+    #[test]
+    fn restore_after_a_rename_brings_the_original_back_under_the_new_name() {
+        let env = Env::new();
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        job.rename("hero").unwrap();
+
+        let restored = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+
+        let hero = env.dir.path().join("hero.png");
+        assert_eq!(restored.state, JobState::Restored);
+        assert_eq!(fs::read(&hero).unwrap(), input);
+        assert_eq!(restored.output, Some(hero));
+        assert_eq!(restored.name, "hero", "the card and the disk agree");
+        assert!(!path.exists());
+        assert!(!env.dir.path().join("hero.webp").exists());
+    }
+
+    #[test]
+    fn restore_after_renaming_a_beside_the_source_result_leaves_the_source_alone() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.output.optimised.location = Location::SameFolder;
+        let o = options_with(&settings);
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        run(&mut job, Level::Normal, &o, &env);
+        job.rename("hero").unwrap();
+
+        let restored = job.restore(&o, &mut |_, _, _| Ok(())).update;
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            input,
+            "the user's file keeps its name"
+        );
+        assert!(
+            !env.dir.path().join("hero.png").exists(),
+            "the result went to the Trash"
+        );
+        assert_eq!(restored.output, Some(path));
+        assert_eq!(
+            restored.name, "shot",
+            "the card shows the file that is there"
+        );
     }
 
     #[test]
