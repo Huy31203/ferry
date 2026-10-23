@@ -676,7 +676,9 @@ impl Job {
                 let path = if wanted == source && !self.twin && !source_taken {
                     wanted
                 } else {
-                    output::unique(&wanted, own.as_deref())
+                    // A twin's source is its parent's: free or not, never its result's.
+                    let reserved = self.twin.then_some(source.as_path());
+                    output::unique_except(&wanted, own.as_deref(), reserved)
                 };
                 if let Some(last) = self.last.clone().filter(|w| w.path != path) {
                     self.trash_result(&last, o);
@@ -1872,6 +1874,46 @@ mod tests {
 
         assert_eq!(fs::read(&path).unwrap(), FOREIGN);
         assert_eq!(update.output, Some(env.dir.path().join("shot (2).png")));
+    }
+
+    #[test]
+    fn a_parent_re_run_never_trashes_its_twins_file() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        assert!(!path.exists());
+        let mut twin = job.fork();
+        twin.edit(convert(Format::Png));
+        let t = run(&mut twin, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        let twin_file = t.output.unwrap();
+        job.edit(scale(50));
+        run(&mut job, Level::Normal, &options(), &env);
+        assert!(
+            twin_file.exists(),
+            "the twin's {twin_file:?} went to the Trash"
+        );
+    }
+
+    #[test]
+    fn a_twin_never_takes_its_parents_source_path_even_when_it_is_free() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        assert!(!path.exists(), "the parent trashed it");
+        let mut twin = job.fork();
+        twin.edit(convert(Format::Png));
+        twin.edit(scale(50));
+        let update = run(&mut twin, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.output, Some(env.dir.path().join("shot (2).png")));
+        assert!(!path.exists());
     }
 
     #[test]
