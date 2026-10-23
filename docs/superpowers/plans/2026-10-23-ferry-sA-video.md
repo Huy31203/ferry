@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ferry optimises, downscales, crops, converts, recompresses, speeds up, mutes and turns into GIF any MP4, MOV, MKV or WebM video, with hardware encoders where present and software fallback, from the same result cards, recipe, backups and compare window as images. It ships a pinned ffmpeg sidecar and the `ferry_core::ffmpeg` runner that streams B (audio) and F (pipelines) build on.
+**Goal:** Ferry optimises, downscales, crops, converts, recompresses, speeds up, mutes and turns into GIF any MP4, MOV, MKV or WebM video, with hardware encoders where present and software fallback (HEVC is written by hardware encoders only), from the same result cards, recipe, backups and compare window as images. It ships a pinned ffmpeg sidecar and the `ferry_core::ffmpeg` runner that streams B (audio) and F (pipelines) build on.
 
 **Architecture:** `ferry_core::ffmpeg` runs the bundled `ffmpeg` sidecar. It drains its output continuously, reports progress from `-progress pipe:1`, and kills it on cancel, on a stall or when the app quits. A new `ferry_core::video` module holds pure logic: a probe parser for `ffmpeg -i` output, hardware-encoder detection, and an encode planner that turns the Cycle 2 `Edits` recipe into ffmpeg arguments. `pipeline::Job` stays the single job model. A video is a file job whose `Format` is one of six new video variants. Its run goes through a child module, `pipeline/video_job.rs`, that works on files rather than bytes, and the result is still placed by the existing `put` / `put_back` / output rules. The UI reuses the card, rail, sliders, crop and fit popovers, format bar, context menu and compare window, and adds a speed popover and a two-player video compare.
 
-**Tech Stack:** Rust 2024 (`ferry-core`, `src-tauri`), Tauri 2.12, Svelte 5 + TypeScript, Vitest. New binary sidecar: FFmpeg 9.0.2, built from pinned sources with x264, x265, libvpx, SVT-AV1, dav1d, Opus and LAME (plus nv-codec-headers, AMF headers and libvpl on Windows). No new crates or npm packages, except that `windows-sys` 0.61, already in `Cargo.lock`, becomes a Windows-only dependency of `ferry-core`.
+**Tech Stack:** Rust 2024 (`ferry-core`, `src-tauri`), Tauri 2.12, Svelte 5 + TypeScript, Vitest. New binary sidecar: FFmpeg 9.0.2, built from pinned sources with x264, libvpx, SVT-AV1, dav1d, Opus and LAME (plus nv-codec-headers, AMF headers and libvpl on Windows). **No x265**: HEVC output uses the OS/GPU hardware encoders only (decided 2026-10-23). No new crates or npm packages, except that `windows-sys` 0.61, already in `Cargo.lock`, becomes a Windows-only dependency of `ferry-core`.
 
 **Spec:** [stream brief](../specs/2026-10-23-ferry-cycle3-streams.md) (binding; it wins over the requirements), [requirements](../../requirements/ferry-optimize-requirements.md) (R§; video parts: §1 toolchain, §2.3 Video row, §2.4, §2.5, §2.6, §3.1 NFR-P5/P6, §3.2 NFR-R3/R4, §3.3, §4.3, §4.7 speed popover, §4.11, §4.12 Videos pane, §5 hardware encode row), [Cycle 1 spec](../specs/2026-10-21-ferry-cycle1-foundation-phase1-design.md) (C1§), [Cycle 2 spec](../specs/2026-10-22-ferry-cycle2-card-tools-design.md) (C2§).
 
 ## Global Constraints
 
-- **Out of scope:** secure send, onboarding, Vietnamese, code signing and notarisation, Windows ARM64, CLI/SDK/MCP. Also: pipelines and step kinds (stream F), "Strip metadata" and "Re-optimise with encoder ▸" menu items (F), watchers (C), drop zone and batch (D), audio optimisation (B), automatic optimisation of copied video files (FR-T3; see Open questions).
+- **Out of scope:** secure send, onboarding, Vietnamese, code signing and notarisation, Windows ARM64, CLI/SDK/MCP. Also: pipelines and step kinds (stream F), "Strip metadata" and "Re-optimise with encoder ▸" menu items (F), watchers (C), drop zone and batch (D), audio optimisation (B), automatic optimisation of copied video files (FR-T3; an integration task on `feat/c3-all` after A and I merge).
 - **Shared files** (brief): add at the named anchor given in the "Shared-file edits" table; never reorder or reformat existing lines. In Rust and TS put a `// stream A: video` comment line above each block you add. In JSON, add one contiguous block (see i18n). Never hand-edit `Cargo.lock`; let cargo update it.
 - **New `Format` variants never fall into a wildcard.** Every `match` on `sniff::Format` lists the six video variants explicitly (`Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => …`), so stream E's new image variants still force their own decision.
 - **Original is sacred** (R§3.3): back up before any change; write results to a temp file and then atomically rename them into place; a failure leaves the source untouched. Every run starts from the backup and never compounds (R§2.4; "2× then 1.5×" gives 1.5×).
@@ -30,10 +30,11 @@
 ## Review Focus
 
 1. **Portrait phone clips (display-matrix rotation of ±90°)**: a person crops a vertical iPhone video to 9:16 and expects the crop in what they see, not in sensor orientation. Pinned in Task 6 (`a_rotated_stream_reports_display_dimensions`) and Task 10 (`a_portrait_clip_is_cropped_as_it_is_seen`).
-2. **10-bit HDR HEVC (iPhone HLG / Dolby Vision)**: a plain optimise keeps HEVC Main 10 with its colour tags. Converting to H.264, WebM or GIF writes the result and shows the amber note "HDR colours flattened to SDR". Pinned in Task 8 (`ten_bit_hdr_stays_main10_on_plain_hevc`, `hdr_to_h264_is_flagged_flattened`).
+2. **10-bit HDR HEVC (iPhone HLG / Dolby Vision)**: a plain optimise keeps HEVC Main 10 with its colour tags, through the hardware HEVC encoder (every mode: there is no software HEVC encoder). Converting to H.264, WebM or GIF writes the result and shows the amber note "HDR colours flattened to SDR". Pinned in Task 8 (`ten_bit_hdr_stays_main10_on_plain_hevc`, `hdr_to_h264_is_flagged_flattened`).
 3. **Odd frame sizes from a crop or scale** (50% of 1366×767, a 1.91:1 crop of 1080p): yuv420 encoders reject odd sizes, so a person expects a result, not an encoder error. Pinned in Task 8 (`frames_are_rounded_down_to_even_sizes`).
 4. **Disk full or a broken file mid-encode**: expected: an Error card with a plain reason ("Not enough disk space to encode" or "Couldn't encode the video — see Details"), the source unchanged, and no temp folder left behind (NFR-R4). Pinned in Task 1 (`a_failure_carries_the_code_and_the_end_of_stderr`) and Task 10 (`a_broken_video_is_an_error_and_leaves_no_temp_folder`).
 5. **Several audio tracks, no audio, or cover art in a video file**: every audio track survives. A silent clip gets no audio track invented. An attached cover picture is never taken as the video. Pinned in Task 6 (`an_attached_picture_is_not_the_video`), Task 8 (`every_audio_track_is_mapped_and_none_is_required`) and Task 10 (`two_audio_tracks_survive_an_optimise`).
+6. **No hardware HEVC encoder** (an older Windows GPU, a VM, the hardware HEVC encode failing, e.g. 10-bit on an older Intel Mac): the build has no x265, so a person must never get an encoder error or a silent downgrade. Expected: the HEVC chip and "Convert to ▸ HEVC" are not offered; a recipe that still asks for HEVC (a pipeline, a hardware attempt that failed) is written as H.264 with the note "Saved as H.264 — this computer has no HEVC encoder"; a **plain** optimise of an HEVC video leaves the file as it is ("already optimal") instead of turning it into larger, SDR H.264. Pinned in Task 8 (`hevc_without_a_hardware_encoder_is_written_as_h264`, `a_plain_hevc_optimise_never_becomes_h264`), Task 10 (`a_hevc_request_without_a_hevc_encoder_is_saved_as_h264`), Task 11 (`without_a_hevc_encoder_hevc_is_not_offered`) and Task 12 (`hides_hevc_without_a_hardware_encoder`).
 
 ---
 
@@ -44,20 +45,21 @@
 | Topic | Decision | Why |
 | --- | --- | --- |
 | Version | **FFmpeg 9.0.2** (git tag `n9.0.2`, commit `946fcce07b6dcd0331c8cc609192aeff5e1924f8`, 2026-09-18), the newest point release on 2026-10-23 | Newest stable release. Its `configure` accepts every library below (checked: SVT-AV1 ≥ 4.0 API, libvpl ≥ 2.6, AMF ≥ 1.5.2, ffnvcodec ≥ 12.1.14.0) |
-| Licence of the build | **GPL-3.0-or-later**: `--enable-gpl --enable-version3`, never `--enable-nonfree` | x264 and x265 are GPL-2.0-or-later, and FFmpeg's LICENSE.md says they force `--enable-gpl`. They are the only good software H.264/HEVC encoders, which the "Small" and "Visually lossless" modes need (R§2.4). Ferry is already GPL-3.0-or-later (imagequant, gifsicle; C1§2), so a GPL ffmpeg adds no new obligation in kind. `--enable-version3` matches Ferry's GPL-3 and keeps Apache-2.0 libraries possible later. Without `nonfree` the binary stays redistributable |
-| Hardware encoders | macOS: VideoToolbox (`h264_videotoolbox`, `hevc_videotoolbox`; system framework). Windows: NVENC (`*_nvenc`, nv-codec-headers, MIT, runtime from the NVIDIA driver), Quick Sync (`*_qsv`, libvpl, MIT), AMF (`*_amf`, headers MIT, runtime from the AMD driver) | NFR-P5. None of these forces GPL; they are LGPL-compatible. The GPL licence comes only from x264/x265 |
+| Licence of the build | **GPL-3.0-or-later**: `--enable-gpl --enable-version3`, never `--enable-nonfree` | x264 is GPL-2.0-or-later, and FFmpeg's LICENSE.md says it forces `--enable-gpl`. It is the only good software H.264 encoder, which the "Small" and "Visually lossless" modes need for H.264 (R§2.4). Ferry is already GPL-3.0-or-later (imagequant, gifsicle; C1§2), so a GPL ffmpeg adds no new obligation in kind. `--enable-version3` matches Ferry's GPL-3 and keeps Apache-2.0 libraries possible later. Without `nonfree` the binary stays redistributable |
+| Hardware encoders | macOS: VideoToolbox (`h264_videotoolbox`, `hevc_videotoolbox`; system framework). Windows: NVENC (`*_nvenc`, nv-codec-headers, MIT, runtime from the NVIDIA driver), Quick Sync (`*_qsv`, libvpl, MIT), AMF (`*_amf`, headers MIT, runtime from the AMD driver) | NFR-P5. None of these forces GPL; they are LGPL-compatible. The GPL licence comes only from x264 |
 | Media Foundation | **Not enabled** (`h264_mf` / `hevc_mf` are left out) | FFmpeg links `mfplat.dll` directly. Windows "N" editions lack it, so `ffmpeg.exe` would not even start there. NVENC/QSV/AMF cover the same GPUs and load their runtimes on demand |
-| Software encoders | libx264 (H.264), libx265 (HEVC 8+10-bit multilib), libsvtav1 (AV1), libvpx (VP9 for WebM) | R§2.3/§4.3 format bar: MP4, HEVC, AV1, WebM, GIF |
+| Software encoders | libx264 (H.264), libsvtav1 (AV1), libvpx (VP9 for WebM). **No libx265**: never fetch, build, link or `--enable-libx265` it | R§2.3/§4.3 format bar: MP4, HEVC, AV1, WebM, GIF. x265 dropped by the user's decision (patents: the HEVC pools are the more aggressive) |
+| HEVC output | **Hardware encoders only**: `hevc_videotoolbox` (macOS), `hevc_nvenc` / `hevc_qsv` / `hevc_amf` (Windows). Every encoder mode (Fast, Small, Visually lossless) uses the hardware HEVC encoder for HEVC. **Where no hardware HEVC encoder works, HEVC is not offered** (no HEVC chip, no "Convert to ▸ HEVC"), and anything that still needs HEVC **falls back to H.264** (libx264, or the hardware H.264 encoder in Fast) with the card note `video.note.hevc_as_h264`. One exception: a **plain** optimise of an HEVC video is never turned into H.264; with no hardware HEVC encoder it leaves the file as it is (`AlreadyOptimal`). Linux (CI only) has no hardware encoders, so HEVC always takes the fallback there | VideoToolbox, NVENC, Quick Sync and AMF cover HEVC on most current machines, and the OS or GPU vendor normally carries the HEVC patent licence. H.264 at the same quality is larger and 8-bit, so a plain optimise would only lose (size and HDR) |
 | Decoders | FFmpeg native, plus libdav1d (AV1) | Native AV1 decoding needs a hardware accelerator, and R§2.3 accepts AV1 input |
 | Audio | native `aac`, libopus (WebM/AV1 audio; B's Opus), libmp3lame (B's MP3); native FLAC/ALAC/PCM | Stream B consumes this build. No `libfdk_aac` (non-free) |
-| GIF export | ffmpeg `palettegen`/`paletteuse`, then the bundled gifsicle `-O3 --lossy` | R§1 names gifski (AGPL-3.0 or commercial). This route needs no new AGPL sidecar and reuses gifsicle. Open question 3 asks whether gifski is still wanted |
+| GIF export | ffmpeg `palettegen`/`paletteuse`, then the bundled gifsicle `-O3 --lossy` | R§1 names gifski (AGPL-3.0 or commercial). This route needs no new AGPL sidecar and reuses gifsicle. Decided 2026-10-23: no gifski |
 | Programs | `ffmpeg` only (`--disable-ffprobe --disable-ffplay`); probing parses `ffmpeg -i` stderr | Stays under NFR-R3 (installer < 120 MB). A second fully linked binary would roughly double the size |
 | Linking | Static external libraries. macOS links only system libraries and frameworks. Windows `ffmpeg.exe` is built with MSYS2 MINGW64 `-static` and depends on no `libwinpthread`, `libstdc++` or `libgcc` DLL | One self-contained file per triple, like gifsicle |
 | Integrity | Every git source is pinned by commit and verified with `git rev-parse`. LAME 3.100 is a tarball checked by SHA-256 | Same rule as `build-gifsicle.sh` (C1§9) |
 | Attribution | `THIRD-PARTY-NOTICES.md` (repo root) plus each component's licence files, shipped in the bundle under `licenses/`. It includes the IJG credit FFmpeg's LICENSE.md requires | GPL §4/§6, BSD/MIT notice clauses |
 | Corresponding source | `release.yml` attaches `ferry-<tag>-third-party-sources.tar.xz` (every pinned source plus `scripts/`) to each GitHub Release | GPL-3 §6(d): equivalent access from the same place as the binaries |
 
-**Patent-encumbered (flag for the user, Open question 1):** H.264 (Via LA AVC pool), HEVC (Access Advance, Via LA and independent licensors), AAC (Via LA AAC; core patents mostly expired). Shipping the x264/x265 software encoders makes Ferry a distributor of an encoder. With the OS or GPU hardware encoders, the OS or GPU vendor normally carries that licence. VP9, AV1 and Opus come with royalty-free grants (Google, AOM, Xiph), though third-party pools (Sisvel, Avanci Video) assert patents. MP3 patents have expired.
+**Patent-encumbered (decided 2026-10-23, option (b)):** H.264 (Via LA AVC pool), HEVC (Access Advance, Via LA and independent licensors), AAC (Via LA AAC; core patents mostly expired). Shipping a software encoder makes Ferry a distributor of an encoder; with the OS or GPU hardware encoders, the OS or GPU vendor normally carries that licence. So x265 is **not** shipped and HEVC is encoded by hardware only; x264 (H.264) and native AAC stay, with legal advice before 1.0. HEVC *decoding* (FFmpeg's native decoder) stays, so HEVC sources can still be read, converted and thumbnailed. VP9, AV1 and Opus come with royalty-free grants (Google, AOM, Xiph), though third-party pools (Sisvel, Avanci Video) assert patents. MP3 patents have expired.
 
 ### Pinned sources
 
@@ -65,7 +67,6 @@
 | --- | --- | --- | --- | --- |
 | FFmpeg | 9.0.2 | `https://github.com/FFmpeg/FFmpeg.git`, tag `n9.0.2` | `946fcce07b6dcd0331c8cc609192aeff5e1924f8` | GPL-3.0-or-later as configured (sources LGPL-2.1+/GPL-2+) |
 | x264 | stable branch | `https://code.videolan.org/videolan/x264.git` (mirror `https://github.com/mirror/x264.git`) | `31e19f92f00c7003fa115047ce50978bc98c3a0d` | GPL-2.0-or-later |
-| x265 | 4.2 | `https://bitbucket.org/multicoreware/x265_git.git`, tag `4.2` | `e444744c03978c1fb4e037168967020cf2648427` | GPL-2.0-or-later |
 | libvpx | 1.17.0 | `https://github.com/webmproject/libvpx.git`, tag `v1.17.0` | `6df3ec34557879fff673706f4a1d9fbd0f3a6f0e` | BSD-3-Clause + Google patent grant |
 | SVT-AV1 | 4.2.0 | `https://gitlab.com/AOMediaCodec/SVT-AV1.git`, tag `v4.2.0` | `9292ec8e32bce26f781f277ec8739b53426c4300` | BSD-3-Clause-Clear + AOM Patent License 1.0 |
 | dav1d | 1.5.4 | `https://code.videolan.org/videolan/dav1d.git` (mirror `https://github.com/videolan/dav1d.git`), tag `1.5.4` | `54706fc6bc0cdecab7e9593974a4039cc038fca7` | BSD-2-Clause |
@@ -84,31 +85,58 @@ If the LAME checksum does not match on first download, stop and ask. Do not over
 | Formats | `sniff::Format` gains `Mp4, Hevc, Av1, WebM, Mov, Mkv` (serde `mp4 hevc av1 webm mov mkv`; labels `MP4 HEVC AV1 WebM MOV MKV`; extensions `mp4 mp4 mkv webm mov mkv`). Sniffing by content gives the container (`Mp4`, `Mov`, `Mkv`, `WebM`). After the first probe, the job's source format is refined: MP4 + HEVC → `Hevc`, MP4/MKV + AV1 → `Av1` |
 | Convert targets (format bar, "Convert to ▸") | `Mp4` (H.264), `Hevc` (H.265 in MP4, tag `hvc1`), `Av1` (AV1 in MKV, R§2.3), `WebM` (VP9 + Opus), `Gif` (video to GIF). `Mov`/`Mkv` are never targets |
 | Plain optimise target | Same as the source format, except a `Mov` with `video.convert_mov` on becomes `Hevc` (HEVC source) or `Mp4`: a Converted result that, In place, replaces the `.mov` (R§2.3). A target equal to the source keeps the source's own extension (`.m4v` stays `.m4v`) |
-| Recipe | Cycle 2 `Edits` plus `speed: Option<Speed>`, `mute: bool`, `encoder: Option<VideoEncoder>`. Crop, downscale, compression, fit-under and format reuse the image fields and geometry |
-| Encoder modes | `video.encoder`: **Fast** (default; hardware H.264/HEVC, else software at fast presets), **Small** (software, slow presets), **Visually lossless** (software, fixed high quality; ignored when the recipe sets compression or fit-under) |
-| Hardware detection | A 1-second test encode per candidate, run once on a background thread at startup (R§5), cached for the session. A hardware encode that fails is retried once in software (NFR-P5) |
-| Concurrency | At most one video job encodes at a time (`AppState::video_permits`, 1 permit), on top of the per-CPU permits. This respects consumer GPU session limits (NFR-P6), and x264/x265/SVT use every core themselves |
+| Recipe | Cycle 2 `Edits` plus `speed: Option<Speed>`, `mute: bool` (stream A), and stream F's `encoder: Option<optimise::Encoder>` (see "Encoder choice" below). Crop, downscale, compression, fit-under and format reuse the image fields and geometry |
+| Encoder modes | `video.encoder` (type `optimise::Encoder`): **Fast** (default; hardware H.264/HEVC, else software at fast presets), **Small** (software, slow presets), **Visually lossless** (software, fixed high quality; ignored when the recipe sets compression or fit-under). **HEVC is the exception:** it has no software encoder, so every mode uses the hardware HEVC encoder (Visually lossless aims its bitrate at quality 95); see "HEVC output" above |
+| Hardware detection | A 1-second test encode per candidate, run once on a background thread at startup (R§5), cached for the session. A video job waits for that probe to finish before planning, so a clip copied right after launch still finds the HEVC encoder. `Hardware.hevc == None` means this machine cannot write HEVC. A hardware H.264 encode that fails is retried once in software (NFR-P5); a hardware HEVC encode that fails is retried once as software H.264 (or, for a plain optimise of an HEVC source, the file is left as it is) |
+| Concurrency | At most one video job encodes at a time (`AppState::video_permits`, 1 permit), on top of the per-CPU permits. This respects consumer GPU session limits (NFR-P6), and x264/SVT use every core themselves |
 | Thumbnail | First frame, at most 600 px wide, JPEG, stored as `.ferry-thumb.jpg` in the job's backup folder (already inside the asset-protocol scope and pruned with the backup) |
 | Speed | `setpts=PTS*100/P` and `atempo=P/100`, with P = percent 50..=400. "Keep frames" leaves every frame (`-fps_mode passthrough`). "Drop frames" adds `fps=<source fps>` |
 | GIF | 15 fps, long edge capped at 800 px unless the recipe sets a size or scale, `palettegen=stats_mode=diff`, `paletteuse=dither=sierra2_4a:diff_mode=rectangle`, `-loop 0`, then gifsicle at the recipe's quality |
 | Subtitles, data tracks | Subtitles are copied only when the result keeps the source's container; otherwise dropped. Timecode/data tracks are dropped |
 | Metadata | `-map_metadata 0`. MP4/MOV get `-movflags +faststart+use_metadata_tags`. Extended attributes (screen-recording marker) and, with `video.preserve_dates`, dates are carried by the existing `write_file` |
 
+### Encoder choice (shared with stream F)
+
+Stream F (pipelines, plan `2026-10-23-ferry-sF-pipelines.md`, its Task 1) owns the encoder choice. A **does not define its own encoder enum**; it uses F's, for the `video.encoder` setting and for the recipe:
+
+```rust
+// crates/ferry-core/src/optimise/mod.rs (F's definition, exactly)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Encoder { Fast, Small, VisuallyLossless }        // serde: "fast", "small", "visually_lossless"
+
+// crates/ferry-core/src/edit/mod.rs (F's fields, exactly)
+pub struct Edits { …, pub encoder: Option<Encoder> }                          // None: the settings' choice
+pub struct EditsPatch { …, #[serde(deserialize_with = "present")] pub encoder: Option<Option<Encoder>> }
+// merge: `if let Some(encoder) = patch.encoder { self.encoder = encoder; }` (set or clear)
+// is_plain(): NOT affected by `encoder` (F's rule: a plain run with an encoder still follows never-worse)
+```
+
+```ts
+// src/lib/ipc.ts, interface Edits (F's field, exactly)
+encoder: 'fast' | 'small' | 'visually_lossless' | null;
+```
+
+**A and F are built in parallel worktrees from `main`, so F's definition may not be on A's branch yet.** Check first: `grep -n "pub enum Encoder" crates/ferry-core/src/optimise/mod.rs` and `grep -n "pub encoder" crates/ferry-core/src/edit/mod.rs`.
+- **Present** (F merged first): use it as it is. Add nothing, rename nothing.
+- **Absent:** A adds it **verbatim as above**, in the same files, with the same names, derives and serde, and nothing else of F's (no `OptimiseOptions.encoder`/`adaptive`, no `strip_metadata`, no `from_recipe`, no image-encoder mapping; F's Task 1 owns those). Put the enum right after `pub enum Level` in `optimise/mod.rs`, and the `Edits`/`EditsPatch`/`merge` lines at the end of each, under a `// stream F: pipelines (encoder; added early by stream A, identical to F's Task 1)` comment line, where F's Task 1 puts them. The enum gets **no** `Default` derive (F's has none); `Video::default()` names `Encoder::Fast` itself.
+
+Whichever stream lands second then has nothing to change: the two copies are identical, so the integrator keeps one copy of each line and drops the other. Do not add a `VideoEncoder` type or any second encoder enum.
+
 ### Hooks for other streams
 
 - **B (audio)** may start once Task 1 is merged. It uses `ferry_core::ffmpeg::{run, run_expecting, capture, FerryError}`. `capture` returns the full stderr, which holds the `loudnorm` JSON. The binary from Task 2 contains `aac`, `libopus`, `libmp3lame`, `flac`, `alac`, `pcm_*`, `mjpeg`/`png` (cover art), the `loudnorm`/`atempo` filters and the `mp3`/`ipod`/`opus`/`flac`/`wav`/`image2` muxers. The `ftyp` brands `M4A `, `M4B `, `M4P ` are not claimed as video (Task 4), so B can sniff them.
-- **C (watchers)**, merge-time step after both land: in `src-tauri/src/watch/hooks.rs` set `pub const VIDEO: bool = true;`. Replace the body of `video_job` with `Some(Job::file(path, settings, app.state::<AppState>().gifsicle.is_some()))`, because `Job::file` accepts videos after Task 10. Drop `"avi"` from C's `VIDEO_EXTENSIONS`: Ferry does not accept AVI, so it would end in an Error card.
+- **C (watchers)**, merge-time step after both land: in `src-tauri/src/watch/hooks.rs` set `pub const VIDEO: bool = true;`. Replace the body of `video_job` with `Some(Job::file(path, settings, app.state::<AppState>().gifsicle.is_some()))`, because `Job::file` accepts videos after Task 10.
 - **D (drop zone, batch)** calls `Job::file`; videos need nothing extra. `ferry_core::video::is_video_file(path)` tells the caller whether a file is a video (from its first 64 bytes).
-- **F (pipelines)** later registers video step kinds in its `crates/ferry-core/src/pipeline_steps.rs` registry. Each one only builds an `EditsPatch` from this plan's fields: `changeSpeed(factor, frames)` → `speed: Some(Some(Speed { percent, keep_frames }))`, `removeAudio` → `mute: Some(true)`, `convert(to)` → `format: Some(Some(Format::Mp4 | Hevc | Av1 | WebM | Gif))`, `optimise(encoder)` → `encoder: Some(Some(VideoEncoder::…))`, and downscale/crop as for images. F's "Re-optimise with encoder ▸" menu item uses `encoder` too. Nothing in this plan touches F's files.
+- **F (pipelines)** later registers video step kinds in its `crates/ferry-core/src/pipeline_steps.rs` registry. Each one only builds an `EditsPatch` from this plan's fields: `changeSpeed(factor, frames)` → `speed: Some(Some(Speed { percent, keep_frames }))`, `removeAudio` → `mute: Some(true)`, `convert(to)` → `format: Some(Some(Format::Mp4 | Hevc | Av1 | WebM | Gif))`, `optimise(encoder)` → `encoder: Some(Some(optimise::Encoder::…))` (F's own enum and field, shared as above), and downscale/crop as for images. F's "Re-optimise with encoder ▸" menu item uses `encoder` too, so on a video card it re-runs with that mode. `convert(hevc)` on a machine without a hardware HEVC encoder writes H.264 with the `video.note.hevc_as_h264` note (Task 10). Merge note: if F's `EditsPatch::from_recipe` exists when A merges (or A's fields when F merges), it must also copy `speed` and `mute`. Apart from the shared `Encoder` lines above, nothing in this plan touches F's files.
 - **E (pdf-formats)** also adds `Format` variants. At merge, keep both blocks in the enum and in every `match`.
 
 ## New dependencies
 
 | Dependency | Kind | Version | Licence | Flag |
 | --- | --- | --- | --- | --- |
-| FFmpeg (sidecar `ffmpeg-<triple>`) | binary, built in CI and locally | 9.0.2 | **GPL-3.0-or-later** (configured) | GPL; links patent-encumbered H.264/HEVC/AAC encoders |
+| FFmpeg (sidecar `ffmpeg-<triple>`) | binary, built in CI and locally | 9.0.2 | **GPL-3.0-or-later** (configured) | GPL; links the patent-encumbered x264 (H.264) and native AAC encoders. HEVC is encoded only through OS/GPU hardware encoders (no x265) |
 | x264 | static library in the sidecar | stable `31e19f92` | **GPL-2.0-or-later** | GPL; H.264 patents |
-| x265 | static library in the sidecar | 4.2 | **GPL-2.0-or-later** | GPL; HEVC patents |
 | libvpx | static library | 1.17.0 | BSD-3-Clause + patent grant | third-party VP9 pool claims |
 | SVT-AV1 | static library | 4.2.0 | BSD-3-Clause-Clear + AOM patent licence | third-party AV1 pool claims |
 | dav1d | static library | 1.5.4 | BSD-2-Clause | |
@@ -127,7 +155,7 @@ If the LAME checksum does not match on first download, stop and ask. Do not over
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `video.encoder` | `"fast" \| "small" \| "visually_lossless"` | `"fast"` | |
+| `video.encoder` | `"fast" \| "small" \| "visually_lossless"` | `"fast"` | Rust type `ferry_core::optimise::Encoder`, stream F's enum (see "Encoder choice") |
 | `video.compression` | u8 5..=100 | `80` | Clamped |
 | `video.convert_mov` | bool | `true` | |
 | `video.audio_to_aac` | bool | `false` | |
@@ -162,6 +190,7 @@ If the LAME checksum does not match on first download, stop and ask. Do not over
 | `video.detail.speed` | `{n}×` | 10 |
 | `video.detail.no_audio` | `no audio` | 10 |
 | `video.note.hdr` | `HDR colours flattened to SDR` | 10 |
+| `video.note.hevc_as_h264` | `Saved as H.264 — this computer has no HEVC encoder` | 10 |
 | `video.menu.speed` | `Change speed…` | 11 |
 | `video.menu.mute` | `Remove audio` | 11 |
 | `video.menu.unmute` | `Keep audio` | 11 |
@@ -177,11 +206,11 @@ If the LAME checksum does not match on first download, stop and ask. Do not over
 | `video.pane` | `Videos` | 13 |
 | `video.group` | `Videos` | 13 |
 | `video.encoder` | `Encoder` | 13 |
-| `video.encoder.help` | `How videos are re-encoded.` | 13 |
+| `video.encoder.help` | `How videos are re-encoded. HEVC always uses the hardware encoder.` | 13 |
 | `video.encoder.fast` | `Fast` | 13 |
 | `video.encoder.fast.help` | `Hardware encoder: quick and light on the CPU, larger files.` | 13 |
 | `video.encoder.small` | `Small` | 13 |
-| `video.encoder.small.help` | `Software encoder: slower, smallest files.` | 13 |
+| `video.encoder.small.help` | `Software encoder: slower, smallest files (HEVC stays on hardware).` | 13 |
 | `video.encoder.visually_lossless` | `Visually lossless` | 13 |
 | `video.encoder.visually_lossless.help` | `Software, close to the original: larger files, no visible loss.` | 13 |
 | `video.compression` | `Compression` | 13 |
@@ -223,10 +252,12 @@ Existing keys reused unchanged: `error.cancelled`, `error.too_large`, `error.ign
 | File | Anchor | What | Task |
 | --- | --- | --- | --- |
 | `crates/ferry-core/src/lib.rs` | new group after `pub mod workdir;`: blank line, `// stream A: video`, `pub mod error; pub mod ffmpeg; pub mod video; pub use error::FerryError;` (the blank line stops rustfmt re-sorting across groups) | modules | 1, 6 |
-| `crates/ferry-core/src/settings.rs` | `Settings` struct: field `pub video: Video,` after `pub hotkeys: Hotkeys,`; `Default for Settings`: `video: Video::default(),`; new block `// stream A: video settings` after `impl Default for Backups` holding `Video`, `VideoEncoder`, `SpeedFrames`, `FpsCap`, `impl Default for Video`, `Output::with_folder`; in `sanitised()` a new block before `self.version = …` | `[video]` section | 5 |
+| `crates/ferry-core/src/settings.rs` | `Settings` struct: field `pub video: Video,` after `pub hotkeys: Hotkeys,`; `Default for Settings`: `video: Video::default(),`; new block `// stream A: video settings` after `impl Default for Backups` holding `Video`, `SpeedFrames`, `FpsCap`, `impl Default for Video`, `Output::with_folder` (the encoder type is F's `optimise::Encoder`, not a new enum); in `sanitised()` a new block before `self.version = …` | `[video]` section | 5 |
+| `crates/ferry-core/src/optimise/mod.rs` | only if F's `Encoder` is not on the branch yet: F's enum right after `pub enum Level` (see "Encoder choice") | shared encoder enum | 5 |
+| `crates/ferry-core/src/edit/mod.rs` | `Edits`, `EditsPatch`, `merge`: A's `speed`/`mute` at the end under `// stream A: video`; F's `encoder` only if absent, under the F comment (see "Encoder choice") | recipe | 7 |
 | `src/lib/i18n/en.json` | one block at the end of the file | `video.*` strings | 1, 6, 10–14 |
 | `src/lib/types.ts` | does not exist in this repo; the TS types live in `src/lib/ipc.ts` and `src/lib/settings.ts` | none | — |
-| `src/lib/ipc.ts` | `Format` union (append video members); `Edits` (append `speed`, `mute`, `encoder`); `JobUpdate` (append `video`); `CardAction.action` (append `'speed'`); `StackConfig` (append `video_compression`, `speed_frames`); new `VideoMeta`, `Speed` interfaces under `// stream A: video` | types | 4, 7, 12 |
+| `src/lib/ipc.ts` | `Format` union (append video members); `Edits` (append `speed`, `mute`; F's `encoder` only if absent); `JobUpdate` (append `video`); `CardAction.action` (append `'speed'`); `StackConfig` (append `video_compression`, `speed_frames`); new `VideoMeta`, `Speed` interfaces under `// stream A: video` | types | 4, 7, 12 |
 | `src/lib/settings.ts` | `Settings` interface: `video: VideoSettings` field after `hotkeys`; new `VideoSettings` interface under `// stream A: video` | types | 5 |
 | `src-tauri/tauri.conf.json` | `bundle.externalBin` append `"binaries/ffmpeg"`; new `bundle.resources` `{ "binaries/licenses/": "licenses/" }`; `app.security.csp` add ` media-src 'self' asset: http://asset.localhost;` after the `img-src …;` directive | sidecar, licences, video playback | 3 |
 | `src-tauri/src/lib.rs` | `setup()`: call `video_startup(app);` just before `Ok(())`; new `fn video_startup` under `// stream A: video` at file end; `.run(|_app, event| match event {…})`: new arm `tauri::RunEvent::Exit => ferry_core::ffmpeg::kill_all(),` before `_ => {}` | startup probe, kill on quit | 11 |
@@ -238,7 +269,7 @@ Existing keys reused unchanged: `error.cancelled`, `error.too_large`, `error.ign
 | `src-tauri/capabilities/*` | no change | — | — |
 | `Cargo.lock` | updated by cargo only (ferry-core gains `windows-sys`) | — | 1 |
 
-Non-shared files this plan also edits: `crates/ferry-core/src/{sniff,job,pipeline,fsutil,output,testutil}.rs`, `edit/mod.rs`, `optimise/mod.rs`, `edit/raster.rs`, `bitmap.rs`, `src-tauri/src/{jobs,compare}.rs`, `src-tauri/src/platform/windows_clipboard.rs`, `src/lib/{edits,cards,schema}.ts`, `src/lib/{card,settings}.fixture.ts`, `src/stack/FormatBar.svelte` (no change expected), `src/settings/Row.svelte`, `src/settings/controls/OutputRule.svelte`, `src/compare/Compare.svelte`, `.github/workflows/{ci,release}.yml`, `scripts/build-gifsicle.sh`, `package.json`, `README.md`.
+Non-shared files this plan also edits: `crates/ferry-core/src/{sniff,job,pipeline,fsutil,output,testutil}.rs`, `optimise/mod.rs` (Task 4's video arm in `encode`), `edit/raster.rs`, `bitmap.rs`, `src-tauri/src/{jobs,compare}.rs`, `src-tauri/src/platform/windows_clipboard.rs`, `src/lib/{edits,cards,schema}.ts`, `src/lib/{card,settings}.fixture.ts`, `src/stack/FormatBar.svelte` (no change expected), `src/settings/Row.svelte`, `src/settings/controls/OutputRule.svelte`, `src/compare/Compare.svelte`, `.github/workflows/{ci,release}.yml`, `scripts/build-gifsicle.sh`, `package.json`, `README.md`.
 
 ## Windows-only code (compiled in CI, not on this Mac)
 
@@ -266,7 +297,8 @@ Non-shared files this plan also edits: `crates/ferry-core/src/{sniff,job,pipelin
 | `crates/ferry-core/src/video/plan.rs` (create) | recipe → ffmpeg arguments | 8 |
 | `crates/ferry-core/src/video/fit.rs` (create) | fit-under bitrates, hardware bitrate | 8 |
 | `crates/ferry-core/src/settings.rs`, `output.rs` (modify) | `[video]`, output example for videos | 5 |
-| `crates/ferry-core/src/edit/mod.rs` (modify) | `Speed`, `mute`, `encoder` | 7 |
+| `crates/ferry-core/src/optimise/mod.rs` (modify, only if F's `Encoder` is absent) | F's `Encoder` enum, verbatim | 5 |
+| `crates/ferry-core/src/edit/mod.rs` (modify) | `Speed`, `mute`; F's `encoder` field only if absent | 7 |
 | `crates/ferry-core/src/fsutil.rs` (modify) | `atomic_replace_from` | 9 |
 | `crates/ferry-core/src/pipeline.rs` (modify) | `Content` (bytes or file), video dispatch, video output rules | 9, 10 |
 | `crates/ferry-core/src/pipeline/video_job.rs` (create) | video file jobs end to end | 10 |
@@ -458,30 +490,30 @@ Script layout (bash, `set -euo pipefail`, same style as `build-gifsicle.sh`):
 - **`x86_64-unknown-linux-gnu`:** native gcc, no hardware encoders (parity with gifsicle).
 - Libraries, in order (all static, installed into the prefix):
   - x264: `./configure --prefix=$PREFIX --enable-static --disable-cli --enable-pic --disable-opencl`.
-  - x265: from `source/`, three CMake builds, each with `-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DCMAKE_BUILD_TYPE=Release`. (1) `-DHIGH_BIT_DEPTH=ON -DEXPORT_C_API=OFF` → `libx265_main10.a`. (2) main: `-DEXTRA_LIB=x265_main10.a -DEXTRA_LINK_FLAGS=-L. -DLINKED_10BIT=ON` with the 10-bit archive copied in → `make install`. (3) merge: macOS `libtool -static -o libx265.a libx265_main.a libx265_main10.a`; mingw/linux an `ar -M` script (`CREATE libx265.a`, `ADDLIB libx265_main.a`, `ADDLIB libx265_main10.a`, `SAVE`, `END`). Copy the merged archive over `$PREFIX/lib/libx265.a`.
+  - **No x265.** The script never fetches or builds it (HEVC is encoded by hardware only).
   - libvpx: `./configure --prefix=$PREFIX --target=<x86_64-darwin20-gcc | arm64-darwin20-gcc | x86_64-win64-gcc | x86_64-linux-gcc> --enable-static --disable-shared --enable-pic --enable-vp9-highbitdepth --disable-examples --disable-tools --disable-docs --disable-unit-tests`.
   - SVT-AV1: `cmake -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX`.
   - dav1d: `meson setup build --prefix=$PREFIX --libdir=lib --default-library=static --buildtype=release -Denable_tools=false -Denable_tests=false && ninja -C build install`.
   - Opus: `cmake -B build -DOPUS_BUILD_SHARED_LIBRARY=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX`.
   - LAME: first `sed -i.bak '/lame_init_old/d' include/libmp3lame.sym` (the known macOS link fix). Then `./configure --prefix=$PREFIX --enable-static --disable-shared --disable-frontend --disable-decoder`, adding `--enable-nasm` on x86_64.
   - Windows only: nv-codec-headers `make install PREFIX=$PREFIX`; AMF `mkdir -p $PREFIX/include/AMF && cp -R amf/public/include/* $PREFIX/include/AMF/`; libvpl `cmake -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF -DBUILD_TOOLS=OFF -DCMAKE_INSTALL_PREFIX=$PREFIX && cmake --build build --target install`.
-- FFmpeg `./configure`, always: `--prefix=$PREFIX --pkg-config-flags=--static --extra-cflags=-I$PREFIX/include --extra-ldflags=-L$PREFIX/lib --enable-gpl --enable-version3 --disable-autodetect --disable-shared --enable-static --disable-doc --disable-debug --enable-stripping --disable-ffplay --disable-ffprobe --disable-network --enable-zlib --enable-libx264 --enable-libx265 --enable-libvpx --enable-libsvtav1 --enable-libdav1d --enable-libopus --enable-libmp3lame`. macOS adds `--enable-videotoolbox --enable-audiotoolbox` and `-mmacosx-version-min=13.0` in both extra flags. Windows adds `--enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --extra-ldflags=-static`. Then `make` and `strip`.
+- FFmpeg `./configure`, always: `--prefix=$PREFIX --pkg-config-flags=--static --extra-cflags=-I$PREFIX/include --extra-ldflags=-L$PREFIX/lib --enable-gpl --enable-version3 --disable-autodetect --disable-shared --enable-static --disable-doc --disable-debug --enable-stripping --disable-ffplay --disable-ffprobe --disable-network --enable-zlib --enable-libx264 --enable-libvpx --enable-libsvtav1 --enable-libdav1d --enable-libopus --enable-libmp3lame`. macOS adds `--enable-videotoolbox --enable-audiotoolbox` and `-mmacosx-version-min=13.0` in both extra flags. Windows adds `--enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --extra-ldflags=-static`. Then `make` and `strip`.
 - **Self-checks the script runs and fails on:**
-  - `ffmpeg -hide_banner -buildconf` (host-arch binaries only) contains `--enable-gpl` and `--enable-version3` and not `--enable-nonfree`.
+  - `ffmpeg -hide_banner -buildconf` (host-arch binaries only) contains `--enable-gpl` and `--enable-version3`, and contains neither `--enable-nonfree` nor `--enable-libx265`.
   - macOS: every line of `otool -L` is under `/usr/lib/` or `/System/Library/`.
   - Windows: `objdump -p ffmpeg.exe | grep 'DLL Name'` names none of `libwinpthread-1.dll`, `libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `zlib1.dll`.
-- **Licences:** copy into `src-tauri/binaries/licenses/`: `ffmpeg/{COPYING.GPLv3,LICENSE.md}`, `x264/COPYING`, `x265/COPYING`, `libvpx/{LICENSE,PATENTS}`, `svt-av1/{LICENSE.md,PATENTS.md}`, `dav1d/COPYING`, `opus/COPYING`, `lame/COPYING`; on Windows also `libvpl/LICENSE`, `amf/LICENSE.txt`, and `nv-codec-headers/LICENSE`, made from the leading comment of `include/ffnvcodec/nvEncodeAPI.h` (`sed -n '1,/\*\//p'`). Then copy the repo's `THIRD-PARTY-NOTICES.md`.
+- **Licences:** copy into `src-tauri/binaries/licenses/`: `ffmpeg/{COPYING.GPLv3,LICENSE.md}`, `x264/COPYING`, `libvpx/{LICENSE,PATENTS}`, `svt-av1/{LICENSE.md,PATENTS.md}`, `dav1d/COPYING`, `opus/COPYING`, `lame/COPYING`; on Windows also `libvpl/LICENSE`, `amf/LICENSE.txt`, and `nv-codec-headers/LICENSE`, made from the leading comment of `include/ffnvcodec/nvEncodeAPI.h` (`sed -n '1,/\*\//p'`). Then copy the repo's `THIRD-PARTY-NOTICES.md`.
 - Print `ffmpeg -version | head -1`, the file size in MB, and `built <path>`.
 
-`THIRD-PARTY-NOTICES.md` holds one section per shipped component (gifsicle 1.98 too) with its name, version, pin (commit or SHA-256), source URL, licence, the licence file's path inside the bundle, and the IJG sentence: "This software is based in part on the work of the Independent JPEG Group." (FFmpeg's `jfdctfst.c`, `jfdctint_template.c` and `jrevdct.c`, unchanged). It also states that the build is GPL-3.0-or-later and that the corresponding source is attached to each GitHub Release as `ferry-<tag>-third-party-sources.tar.xz`.
+`THIRD-PARTY-NOTICES.md` holds one section per shipped component (gifsicle 1.98 too) with its name, version, pin (commit or SHA-256), source URL, licence, the licence file's path inside the bundle, and the IJG sentence: "This software is based in part on the work of the Independent JPEG Group." (FFmpeg's `jfdctfst.c`, `jfdctint_template.c` and `jrevdct.c`, unchanged). It also states that the build is GPL-3.0-or-later, that it contains no x265 (HEVC is encoded only by the OS or GPU hardware encoders), and that the corresponding source is attached to each GitHub Release as `ferry-<tag>-third-party-sources.tar.xz`.
 
 - [ ] **Step 1: Write the script, the notices file and the gifsicle licence copy.**
 - [ ] **Step 2: Run `bash -n scripts/build-ffmpeg.sh` and `shellcheck scripts/build-ffmpeg.sh` (if installed).** Expected: no errors.
 - [ ] **Step 3: Manual check: local build on this Mac (Intel).** Install the tools first (`brew install nasm pkgconf meson ninja cmake`), then run `bash scripts/build-ffmpeg.sh`. Look at:
-  1. The script ends with `built …/src-tauri/binaries/ffmpeg-x86_64-apple-darwin` and prints a size, expected 40–80 MB.
-  2. `"$FERRY_FFMPEG" -hide_banner -encoders | grep -E ' (libx264|libx265|libsvtav1|libvpx-vp9|libopus|libmp3lame|aac|h264_videotoolbox|hevc_videotoolbox|gif) '` lists all ten.
-  3. `"$FERRY_FFMPEG" -hide_banner -f lavfi -i testsrc2=d=1 -c:v hevc_videotoolbox -f null -` exits 0, which shows the hardware HEVC encoder works on this Mac.
-  4. `ls src-tauri/binaries/licenses` shows `ffmpeg x264 x265 libvpx svt-av1 dav1d opus lame gifsicle THIRD-PARTY-NOTICES.md` (run `pnpm sidecar` once for gifsicle).
+  1. The script ends with `built …/src-tauri/binaries/ffmpeg-x86_64-apple-darwin` and prints a size, expected 30–75 MB.
+  2. `"$FERRY_FFMPEG" -hide_banner -encoders | grep -E ' (libx264|libsvtav1|libvpx-vp9|libopus|libmp3lame|aac|h264_videotoolbox|hevc_videotoolbox|gif) '` lists all nine, and `"$FERRY_FFMPEG" -hide_banner -encoders | grep libx265` prints nothing.
+  3. `"$FERRY_FFMPEG" -hide_banner -f lavfi -i testsrc2=d=1 -c:v hevc_videotoolbox -f null -` exits 0, which shows the hardware HEVC encoder works on this Mac. Also try 10-bit: the same command with `-pix_fmt p010le -profile:v main10` before `-f null`; record whether it exits 0 (older Intel Macs have no 10-bit HEVC encode, and Ferry then falls back as the "HEVC output" decision says).
+  4. `ls src-tauri/binaries/licenses` shows `ffmpeg x264 libvpx svt-av1 dav1d opus lame gifsicle THIRD-PARTY-NOTICES.md` (no `x265`) (run `pnpm sidecar` once for gifsicle).
   5. A second run reuses the checkouts and skips the fetches.
 
   Record the build time and size in the commit message.
@@ -518,10 +550,12 @@ CI (`ci.yml`), in both the `core` and `bundle` jobs, before the existing gifsicl
     let out = Command::new(ffmpeg).args(["-hide_banner", "-buildconf"]).output().unwrap(); let conf = String::from_utf8_lossy(&out.stdout);
     assert!(conf.contains("--enable-gpl") && conf.contains("--enable-version3"));
     assert!(!conf.contains("--enable-nonfree"));
+    assert!(!conf.contains("--enable-libx265"), "x265 must not be in the build: HEVC is hardware only");
 }
 #[test] fn the_sidecar_has_every_encoder_ferry_uses() {
     let out = Command::new(ffmpeg).args(["-hide_banner", "-encoders"]).output().unwrap(); // has(e): a stdout line whose second column is e
-    for e in ["libx264", "libx265", "libsvtav1", "libvpx-vp9", "libopus", "libmp3lame", "aac", "gif", "mjpeg", "png"] { assert!(has(e)); }
+    for e in ["libx264", "libsvtav1", "libvpx-vp9", "libopus", "libmp3lame", "aac", "gif", "mjpeg", "png"] { assert!(has(e)); }
+    assert!(!has("libx265"), "no software HEVC encoder may ship");
     if cfg!(target_os = "macos") { for e in ["h264_videotoolbox", "hevc_videotoolbox"] { assert!(has(e)); } }
     if cfg!(windows) { for e in ["h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"] { assert!(has(e)); } }
 }
@@ -636,15 +670,15 @@ it('keeps the image chips unchanged now that formats include video', () => {
 ### Task 5: The `[video]` settings section
 
 **Files:**
-- Modify: `crates/ferry-core/src/settings.rs` (anchors in the table), `crates/ferry-core/src/output.rs`, `src/lib/settings.ts`, `src/lib/settings.fixture.ts`
+- Modify: `crates/ferry-core/src/settings.rs` (anchors in the table), `crates/ferry-core/src/output.rs`, `src/lib/settings.ts`, `src/lib/settings.fixture.ts`; `crates/ferry-core/src/optimise/mod.rs` **only if** stream F's `Encoder` is not on the branch yet (Step 0)
 - Test: `settings.rs` tests, `output.rs` tests, `src/lib/settings.test.ts`
 
 **Interfaces:**
+- Consumes: stream F's `ferry_core::optimise::Encoder { Fast, Small, VisuallyLossless }` (see Decisions, "Encoder choice"). There is no `VideoEncoder`.
 - Produces:
 
 ```rust
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)] #[serde(rename_all = "snake_case")]
-pub enum VideoEncoder { #[default] Fast, Small, VisuallyLossless }
+use crate::optimise::Encoder;   // F's enum; add to settings.rs's imports
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)] #[serde(rename_all = "snake_case")]
 pub enum SpeedFrames { #[default] Keep, Drop }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -652,7 +686,7 @@ pub enum FpsCap { #[default] #[serde(rename = "off")] Off, #[serde(rename = "24"
 impl FpsCap { pub fn fps(self) -> Option<u32> }   // None, 24, 30, 60
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] #[serde(default)]
 pub struct Video {
-    pub encoder: VideoEncoder, pub compression: u8, pub convert_mov: bool, pub audio_to_aac: bool,
+    pub encoder: Encoder, pub compression: u8, pub convert_mov: bool, pub audio_to_aac: bool,
     pub remove_audio: bool, pub fps_cap: FpsCap, pub speed_frames: SpeedFrames, pub preserve_dates: bool,
     pub ignored_extensions: Vec<String>, pub max_size_mb: u32, pub output: Output,
     #[serde(flatten)] pub extra: Map<String, Value>,
@@ -677,14 +711,31 @@ export interface VideoSettings {
 // Settings gains `video: VideoSettings` after `hotkeys`
 ```
 
+`impl Default for Video` sets `encoder: Encoder::Fast` explicitly (F's enum has no `Default`; do not add one).
+
 `sanitised()` adds: compression clamped to 5..=100; `max_size_mb.max(1)`; `ignored_extensions` trimmed with empty entries dropped; both video output rules repaired as the image rules are (invalid or empty template → default, empty folder → default) by a new private `fn repair_output(out: &mut Output, defaults: &Output)` that leaves the existing image loop untouched. The defaults come from `Video::default().output`.
+
+- [ ] **Step 0: Make sure F's encoder enum exists.** Run `grep -n "pub enum Encoder" crates/ferry-core/src/optimise/mod.rs`. If it prints a line, stream F's Task 1 is already on the branch: use that enum and skip to Step 1. If it prints nothing, add F's definition verbatim right after `pub enum Level { … }` (the file already imports `serde::{Deserialize, Serialize}`):
+
+```rust
+// stream F: pipelines (encoder; added early by stream A, identical to F's Task 1)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Encoder {
+    Fast,
+    Small,
+    VisuallyLossless,
+}
+```
+
+  Add nothing else of F's (no `OptimiseOptions.encoder`, no `adaptive`, no image-encoder mapping, no tests in `optimise/mod.rs`); the settings test below covers its serde names.
 
 - [ ] **Step 1: Write the failing tests.**
 
 ```rust
 #[test] fn video_defaults_match_the_plan() {
     let v = Settings::default().video;
-    assert_eq!((v.encoder, v.compression, v.convert_mov, v.audio_to_aac, v.remove_audio), (VideoEncoder::Fast, 80, true, false, false));
+    assert_eq!((v.encoder, v.compression, v.convert_mov, v.audio_to_aac, v.remove_audio), (Encoder::Fast, 80, true, false, false));
     assert_eq!((v.fps_cap, v.speed_frames, v.preserve_dates, v.max_size_mb), (FpsCap::Off, SpeedFrames::Keep, true, 4000));
     let folder = if cfg!(windows) { "~/Videos/Ferry" } else { "~/Movies/Ferry" };
     assert_eq!(v.output.optimised.folder, folder);
@@ -694,6 +745,7 @@ export interface VideoSettings {
 #[test] fn a_file_without_a_video_section_loads_its_defaults() { /* version-2 JSON with only images → video == Video::default() */ }
 #[test] fn video_values_out_of_range_are_repaired() { /* compression 0 → 5, 250 → 100; max_size_mb 0 → 1; template "%q" → default; " mov " → "mov" */ }
 #[test] fn the_fps_cap_reads_and_writes_as_text() { assert_eq!(serde_json::to_string(&FpsCap::Fps30).unwrap(), "\"30\""); assert_eq!(FpsCap::Fps60.fps(), Some(60)); }
+#[test] fn the_video_encoder_setting_reads_snake_case() { /* {"video":{"encoder":"visually_lossless"}} loads Encoder::VisuallyLossless; "small" → Encoder::Small */ }
 // output.rs
 #[test] fn the_video_example_uses_a_clip() {
     // Location::SameFolder, template "%f_optimised.%e", Optimised → "~/Desktop/clip_optimised.mp4"
@@ -707,8 +759,8 @@ export interface VideoSettings {
 
 - [ ] **Step 2: Run.** `cargo test -p ferry-core settings` → FAIL.
 - [ ] **Step 3: Implement**, then update `settings.fixture.ts` with the `video` defaults (macOS folder `~/Movies/Ferry`).
-- [ ] **Step 4: Run.** `cargo test -p ferry-core settings`, `cargo test -p ferry-core output`, `pnpm test`, `pnpm check`. Expected: PASS.
-- [ ] **Step 5: Commit.** `git commit -m "feat(core): video settings section"`.
+- [ ] **Step 4: Run.** `cargo test -p ferry-core settings`, `cargo test -p ferry-core output`, `cargo test -p ferry-core optimise`, `pnpm test`, `pnpm check`. Expected: PASS.
+- [ ] **Step 5: Commit.** `git commit -m "feat(core): video settings section"` (if Step 0 added F's enum, say so in the message body: "adds stream F's optimise::Encoder verbatim").
 
 ### Task 6: Probe a video, detect hardware encoders
 
@@ -743,22 +795,24 @@ pub fn probe(path: &Path, cancel: &CancelToken) -> Result<Probe, FerryError>;
 // hardware.rs
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Hardware { pub h264: Option<&'static str>, pub hevc: Option<&'static str> }
+// hevc == None: this machine cannot write HEVC at all (the build has no x265), so HEVC is not offered
+// and anything that needs it falls back to H.264 (Decisions, "HEVC output").
 pub fn candidates(codec: Codec) -> &'static [&'static str];
 // macOS: H264 ["h264_videotoolbox"], Hevc ["hevc_videotoolbox"];
 // Windows: H264 ["h264_nvenc", "h264_qsv", "h264_amf"], Hevc ["hevc_nvenc", "hevc_qsv", "hevc_amf"]; else and Av1/Vp9: []
 pub fn detect(works: impl Fn(&str) -> bool) -> Hardware;  // first working candidate per codec, in order
-pub fn probe_hardware() -> Hardware;   // once per process (OnceLock); each test encode:
+pub fn probe_hardware() -> Hardware;   // once per process (OnceLock::get_or_init: a second caller blocks until the first probe is done); each test encode:
 // run(["-f","lavfi","-i","color=c=black:s=256x256:r=30:d=1","-pix_fmt","nv12","-c:v",<enc>,"-f","null","-"]).is_ok()
-pub fn hardware() -> Hardware;         // the probed value, or Hardware::default() before probe_hardware finished
+pub fn hardware() -> Hardware;         // non-blocking: the probed value, or Hardware::default() before probe_hardware finished (OnceLock::get)
 
 // video/mod.rs
 pub fn codec_label(ffmpeg_name: &str) -> String;     // h264 H.264, hevc HEVC, av1 AV1, vp9 VP9, vp8 VP8, prores ProRes, mpeg4 MPEG-4, else upper case
 pub fn source_format(container: Format, probe: &Probe) -> Format; // (Mp4, hevc) → Hevc; (Mp4 | Mkv, av1) → Av1; else container
 
 // testutil.rs
-pub struct VideoSpec { pub size: (u32, u32), pub secs: u32, pub fps: u32, pub codec: &'static str, pub audio_tracks: u32 }
+pub struct VideoSpec { pub size: (u32, u32), pub secs: u32, pub fps: u32, pub codec: &'static str, pub audio_tracks: u32 }  // codec: "libx264" or "libvpx-vp9" (no libx265 in the build)
 pub fn video(dir: &Path, file: &str, spec: &VideoSpec) -> Option<PathBuf>; // None without FERRY_FFMPEG
-// lavfi testsrc2 + one sine per track (440 Hz × k), -map each; libx264/libx265 "-preset ultrafast -crf 10",
+// lavfi testsrc2 + one sine per track (440 Hz × k), -map each; libx264 "-preset ultrafast -crf 10",
 // libvpx-vp9 "-deadline realtime -cpu-used 8 -crf 10 -b:v 0"; -pix_fmt yuv420p; audio aac (libopus for .webm); -shortest
 ```
 
@@ -837,6 +891,11 @@ Input #0, matroska,webm, from 'a.webm':
     assert_eq!(none, Hardware::default());
 }
 #[test] fn macos_offers_videotoolbox() { if cfg!(target_os = "macos") { assert_eq!(candidates(Codec::Hevc), ["hevc_videotoolbox"]); } assert!(candidates(Codec::Av1).is_empty()); }
+#[test] fn hevc_has_hardware_candidates_only_where_an_os_encoder_exists() {
+    // HEVC has no software fallback, so its list is the whole story: macOS and Windows non-empty, every other OS empty
+    assert_eq!(candidates(Codec::Hevc).is_empty(), !(cfg!(target_os = "macos") || cfg!(windows)));
+    assert!(candidates(Codec::Hevc).iter().all(|e| e.starts_with("hevc_")));
+}
 // video/mod.rs
 #[test] fn the_source_format_follows_the_codec() { /* Mp4+hevc → Hevc; Mkv+av1 → Av1; Mov+hevc → Mov; WebM+av1 → WebM; Mp4+h264 → Mp4 */ }
 #[test] fn codecs_get_their_usual_names() { assert_eq!(codec_label("h264"), "H.264"); assert_eq!(codec_label("prores"), "ProRes"); assert_eq!(codec_label("dnxhd"), "DNXHD"); }
@@ -847,13 +906,14 @@ Input #0, matroska,webm, from 'a.webm':
 - [ ] **Step 4: Run.** `cargo test -p ferry-core probe`, `cargo test -p ferry-core hardware`, `cargo test -p ferry-core video`. Expected: PASS (the real-clip test runs locally with `FERRY_FFMPEG` set).
 - [ ] **Step 5: Commit.** `git commit -m "feat(core): probe videos and detect hardware encoders"`.
 
-### Task 7: Speed, mute and encoder in the recipe
+### Task 7: Speed and mute in the recipe (encoder: stream F's field)
 
 **Files:**
 - Modify: `crates/ferry-core/src/edit/mod.rs`, `src/lib/ipc.ts` (`Edits`, `Speed`), `src/lib/card.fixture.ts`
 - Test: `edit/mod.rs` tests; `pnpm check`
 
 **Interfaces:**
+- Consumes: stream F's `optimise::Encoder` (on the branch since Task 5 Step 0) and F's `Edits.encoder` / `EditsPatch.encoder` (Decisions, "Encoder choice").
 - Produces:
 
 ```rust
@@ -862,20 +922,24 @@ pub struct Speed { pub percent: u16, pub keep_frames: bool }  // 50..=400; 100 m
 // Edits gains (at the end, under // stream A: video):
 pub speed: Option<Speed>,
 pub mute: bool,
-pub encoder: Option<settings::VideoEncoder>,   // None: the settings' encoder
-// EditsPatch gains:
+// EditsPatch gains (under // stream A: video):
 #[serde(deserialize_with = "present")] pub speed: Option<Option<Speed>>,
 pub mute: Option<bool>,
-#[serde(deserialize_with = "present")] pub encoder: Option<Option<settings::VideoEncoder>>,
+// F's encoder field, ONLY if `grep -n "pub encoder" crates/ferry-core/src/edit/mod.rs` prints nothing
+// (under // stream F: pipelines (encoder; added early by stream A, identical to F's Task 1)):
+pub encoder: Option<Encoder>,                                                   // in Edits; None: the settings' encoder
+#[serde(deserialize_with = "present")] pub encoder: Option<Option<Encoder>>,    // in EditsPatch
 ```
 
-- `is_plain()` is also false when `speed.is_some() || mute || encoder.is_some()`. `reshapes()` is unchanged.
-- `merge`: speed `percent` clamped to 50..=400, then `None` if it equals 100; mute set; encoder set or cleared.
-- Image runs ignore all three (`edit::apply` is unchanged).
+- `is_plain()` is also false when `speed.is_some() || mute`. It is **not** affected by `encoder` (F's rule: a plain run with an encoder choice still follows never-worse). `reshapes()` is unchanged.
+- `merge`: speed `percent` clamped to 50..=400, then `None` if it equals 100; mute set. If A adds F's `encoder`: `if let Some(encoder) = patch.encoder { self.encoder = encoder; }` (set or clear), in the F-commented block.
+- If F's `EditsPatch::from_recipe` is already on the branch, extend it with `speed: Some(e.speed)` and `mute: Some(e.mute)` so it still makes the target equal to `e`. If it is not, add nothing (F's own Task 1 must then include A's fields; see the F hook).
+- Image runs ignore `speed` and `mute` (`edit::apply` is unchanged by this stream).
 
 ```ts
 export interface Speed { percent: number; keep_frames: boolean }
-// Edits: speed: Speed | null; mute: boolean; encoder: 'fast' | 'small' | 'visually_lossless' | null;
+// Edits, under // stream A: video: speed: Speed | null; mute: boolean;
+// Edits, F's field, only if absent (under // stream F: pipelines): encoder: 'fast' | 'small' | 'visually_lossless' | null;
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -890,12 +954,15 @@ export interface Speed { percent: number; keep_frames: boolean }
     e.merge(EditsPatch { speed: Some(Some(Speed { percent: 10, keep_frames: false })), ..Default::default() });
     assert_eq!(e.speed.map(|s| s.percent), Some(50));
 }
-#[test] fn speed_mute_and_encoder_are_explicit_edits() {
+#[test] fn speed_and_mute_are_explicit_edits_but_an_encoder_is_not() {
     for patch in [
         EditsPatch { speed: Some(Some(Speed { percent: 200, keep_frames: true })), ..Default::default() },
         EditsPatch { mute: Some(true), ..Default::default() },
-        EditsPatch { encoder: Some(Some(VideoEncoder::Small)), ..Default::default() },
     ] { let mut e = Edits::default(); e.merge(patch); assert!(!e.is_plain()); }
+    let mut e = Edits::default();
+    e.merge(EditsPatch { encoder: Some(Some(Encoder::Small)), ..Default::default() });
+    assert_eq!(e.encoder, Some(Encoder::Small));
+    assert!(e.is_plain());
 }
 #[test] fn the_new_fields_read_from_card_json() {
     let p: EditsPatch = serde_json::from_str(r#"{"speed":{"percent":150,"keep_frames":false},"mute":true,"encoder":null}"#).unwrap();
@@ -907,9 +974,9 @@ export interface Speed { percent: number; keep_frames: boolean }
 ```
 
 - [ ] **Step 2: Run.** `cargo test -p ferry-core edit` → FAIL.
-- [ ] **Step 3: Implement**; update `ipc.ts` and `card.fixture.ts` (`speed: null, mute: false, encoder: null`).
+- [ ] **Step 3: Implement**; update `ipc.ts` and `card.fixture.ts` (`speed: null, mute: false`, plus `encoder: null` only if F's fixture line is absent).
 - [ ] **Step 4: Run.** `cargo test -p ferry-core edit`, `pnpm check`, `pnpm test`. Expected: PASS.
-- [ ] **Step 5: Commit.** `git commit -m "feat(core): speed, mute and encoder in the edit recipe"`.
+- [ ] **Step 5: Commit.** `git commit -m "feat(core): speed and mute in the edit recipe"` (if this task added F's `encoder` field, say so in the body: "adds stream F's Edits.encoder verbatim").
 
 ### Task 8: Plan an encode
 
@@ -919,7 +986,7 @@ export interface Speed { percent: number; keep_frames: boolean }
 - Test: unit tests in `plan.rs`, `fit.rs`
 
 **Interfaces:**
-- Consumes: `Probe` (Task 6), `Hardware` (Task 6), `Edits`/`Speed` (Task 7), `settings::Video` (Task 5), `edit::geometry::{crop_size, output_size, Rect}`, `optimise::{quality, OptimiseOptions}`.
+- Consumes: `Probe` (Task 6), `Hardware` (Task 6), `Edits`/`Speed` (Task 7) with F's `Edits.encoder` and `optimise::Encoder`, `settings::Video` (Task 5), `edit::geometry::{crop_size, output_size, Rect}`, `optimise::{quality, OptimiseOptions}`.
 - Produces:
 
 ```rust
@@ -928,7 +995,7 @@ pub struct PlanInput<'a> {
     pub input: &'a Path, pub output: &'a Path, pub probe: &'a Probe,
     pub source: Format, pub target: Format, pub edits: &'a Edits, pub settings: &'a settings::Video,
     pub hardware: Hardware, pub crop: Option<Rect>, pub out: (u32, u32),
-    pub software: bool,               // forced: the hardware attempt failed
+    pub software: bool,               // forced: the hardware attempt failed (H.264 → libx264; HEVC → H.264, see rule 5)
     pub video_bitrate: Option<u64>,   // fit under size: the bitrate to aim at
     pub same_container: bool,         // the result keeps the source's extension: subtitles are copied
 }
@@ -936,17 +1003,20 @@ pub struct PlanInput<'a> {
 pub struct Plan {
     pub args: Vec<OsString>, pub expected: Duration, pub encoder: &'static str, pub hardware: bool,
     pub codec_label: &'static str, pub fps: Option<f32>, pub audio: bool, pub hdr_flattened: bool,
+    pub hevc_as_h264: bool,           // the target asked for HEVC, no hardware HEVC encoder may be used, so H.264 was planned
 }
 pub fn plan(p: &PlanInput) -> Plan;
 pub fn plain_target(source: Format, probe: &Probe, settings: &settings::Video) -> Format;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route { Encode(Format), Keep }
+pub fn route(target: Format, probe: &Probe, hevc_ok: bool, plain: bool) -> Route;  // rules below; hevc_ok = hardware.hevc.is_some() && !software
 pub struct Framed { pub window: (u32, u32), pub out: (u32, u32) }
 pub fn frame(display: (u32, u32), edits: &Edits, target: Format) -> Framed;
-pub fn codec_for(target: Format, probe: &Probe) -> Option<Codec>;  // Mp4 H264, Hevc Hevc, Av1 Av1, WebM Vp9, Mov|Mkv: Hevc if the source is hevc else H264, Gif None
+pub fn codec_for(target: Format, probe: &Probe) -> Option<Codec>;  // the codec the target asks for: Mp4 H264, Hevc Hevc, Av1 Av1, WebM Vp9, Mov|Mkv: Hevc if the source is hevc else H264, Gif None
 pub fn muxer(ext: &str) -> &'static str;   // mp4|m4v "mp4", mov "mov", mkv "matroska", webm "webm", gif "gif"
 pub fn thumb_args(input: &Path, output: &Path) -> Vec<OsString>;  // -i in -map 0:v:0 -frames:v 1 -vf scale='min(600,iw)':-2 -c:v mjpeg -q:v 3 -f image2 out
 pub fn frame_args(input: &Path, output: &Path) -> Vec<OsString>;  // -i in -map 0:v:0 -frames:v 1 -c:v png -f image2 out
 pub fn crf_x264(q: u8) -> u8;  // 18 + round((100 − q) × 24 / 95)
-pub fn crf_x265(q: u8) -> u8;  // crf_x264(q) + 5
 pub fn crf_svt(q: u8) -> u8;   // 20 + round((100 − q) × 35 / 95)
 pub fn crf_vp9(q: u8) -> u8;   // 15 + round((100 − q) × 35 / 95)
 
@@ -967,37 +1037,46 @@ Planning rules (`plan`), in argument order:
 3. Video filter chain (`-vf`, comma-joined, only when non-empty): `crop=w:h:x:y` (when `crop` is Some), `scale=W:H:flags=lanczos` (when `out` ≠ the window), `setpts=PTS*100/<percent>` (speed), then `fps=<f>`. f is the smaller of the source fps (rounded to 3 decimals) when speed has `keep_frames: false` and `settings.fps_cap.fps()` when the source fps exceeds the cap by more than 0.5. Any `fps=` filter means `-fps_mode cfr`; otherwise `-fps_mode passthrough`.
 4. q = `optimise::quality(&OptimiseOptions { level: edits.level, compression: edits.compression.unwrap_or(settings.compression), ..Default::default() })`. The mode is `edits.encoder.unwrap_or(settings.encoder)`. `VisuallyLossless` counts only when `edits.compression` and `edits.fit_under` are both `None`; otherwise it acts as `Small`.
 5. Encoder:
-   - H.264/HEVC use hardware when the mode is `Fast`, `!software`, and `hardware.h264`/`hardware.hevc` is Some. Everything else is software.
-   - 10-bit only when `probe.video.ten_bit` and the codec is HEVC or AV1. Pixel format: software 8-bit `yuv420p`, 10-bit `yuv420p10le`; hardware 8-bit `nv12`, 10-bit `p010le`.
-   - With `video_bitrate: Some(b)` every encoder uses `-b:v b`, and x264/x265/hardware also get `-maxrate 1.5b -bufsize 2b`, in place of any crf or quality option.
+   - Start from `codec_for(target, probe)`. **HEVC (hardware only, no x265):** `hevc_ok = hardware.hevc.is_some() && !software`. If the codec is HEVC and `hevc_ok`, use `hardware.hevc` in **every** mode (Fast, Small, Visually lossless). If the codec is HEVC and not `hevc_ok`, plan **H.264** instead (the rules below for H.264 apply, with `software` still forcing libx264) and set `hevc_as_h264: true`. The container stays as given (`.mp4`, `.mov` and `.mkv` all hold H.264). In a job, `route` (below) has usually turned an `Hevc` target into `Mp4` already, so `plan` sees `Mp4` and `hevc_as_h264` stays false; `run_video` then sets the note itself (Task 10, step 4). `hevc_as_h264` is set by `plan` for `Mov`/`Mkv` targets holding HEVC and for a direct `Hevc` target.
+   - H.264 uses hardware when the mode is `Fast`, `!software`, and `hardware.h264` is Some; otherwise libx264. AV1 and VP9 are always software.
+   - 10-bit only when `probe.video.ten_bit` and the codec is HEVC (hardware) or AV1. Pixel format: software 8-bit `yuv420p`, 10-bit `yuv420p10le` (AV1 only); hardware 8-bit `nv12`, 10-bit `p010le` (HEVC only; hardware H.264 is always `nv12`).
+   - Hardware bitrate B = `hardware_bitrate(q, …)`, except Visually lossless (when it counts, rule 4) on hardware HEVC: `hardware_bitrate(95, …)`. Small on hardware HEVC uses q like Fast.
+   - With `video_bitrate: Some(b)` every encoder uses `-b:v b`, and x264/hardware also get `-maxrate 1.5b -bufsize 2b` (VideoToolbox: no `-maxrate`, see below), in place of any crf or quality option.
 
 | Encoder | Fast (software fallback) | Small | Visually lossless |
 | --- | --- | --- | --- |
 | `libx264` | `-preset veryfast -crf crf_x264(q) -profile:v high` | `-preset slow -crf crf_x264(q) -profile:v high` | `-preset slow -crf 16 -profile:v high` |
-| `libx265` | `-preset fast -crf crf_x265(q) -tag:v hvc1 -x265-params log-level=error` (+ `-profile:v main10` when 10-bit) | `-preset medium …` | `-preset medium -crf 18 …` |
 | `libsvtav1` | `-preset 10 -crf crf_svt(q)` | `-preset 6 -crf crf_svt(q)` | `-preset 4 -crf 18` |
 | `libvpx-vp9` | `-deadline good -cpu-used 5 -row-mt 1 -b:v 0 -crf crf_vp9(q)` | `… -cpu-used 2 …` | `… -cpu-used 1 … -crf 12` |
-| `h264_videotoolbox` / `hevc_videotoolbox` | `-b:v B` with B = `hardware_bitrate`, `-profile:v high` / `-profile:v main` or `main10`, HEVC adds `-tag:v hvc1` | (not used) | (not used) |
-| `*_nvenc` | `-preset p5 -tune hq -rc vbr -b:v B -maxrate 1.5B -bufsize 2B` | | |
-| `*_qsv` | `-preset slow -b:v B -maxrate 1.5B -bufsize 2B` | | |
-| `*_amf` | `-quality quality -rc vbr_peak -b:v B -maxrate 1.5B -bufsize 2B` | | |
+| `h264_videotoolbox` / `hevc_videotoolbox` | `-b:v B` with B = `hardware_bitrate`, `-profile:v high` / `-profile:v main` or `main10`, HEVC adds `-tag:v hvc1` | H.264: not used (libx264). HEVC: same as Fast | H.264: not used (libx264). HEVC: same as Fast with B at quality 95 |
+| `*_nvenc` | `-preset p5 -tune hq -rc vbr -b:v B -maxrate 1.5B -bufsize 2B` (HEVC adds `-tag:v hvc1`, and `-profile:v main10` when 10-bit) | as for VideoToolbox | as for VideoToolbox |
+| `*_qsv` | `-preset slow -b:v B -maxrate 1.5B -bufsize 2B` (HEVC as for NVENC) | as for VideoToolbox | as for VideoToolbox |
+| `*_amf` | `-quality quality -rc vbr_peak -b:v B -maxrate 1.5B -bufsize 2B` (HEVC as for NVENC) | as for VideoToolbox | as for VideoToolbox |
+
+   There is no `libx265` row: the build has no x265 (Decisions, "HEVC output").
 
    VideoToolbox gets no `-maxrate` (Intel Macs reject data-rate limits on HEVC) and no `-q:v`. FFmpeg allows `-q:v` on VideoToolbox only on Apple Silicon, and this Mac is Intel.
 6. Audio (when kept). The muxer comes from the output's extension. **Copy** (`-c:a copy`) when there is no speed, the codec fits the muxer (mp4/mov: aac, mp3, alac, ac3, eac3; matroska: those plus opus, vorbis, flac, pcm_*; webm: opus, vorbis), and not (`settings.audio_to_aac` and codec ≠ aac). Otherwise **encode**: webm → `-c:a libopus -b:a <min(src or 128k, 128k), at least 48k>`; others → `-c:a aac -b:a <min(src or 160k, 192k), at least 64k>`. With `fit_under` set, the cap is 128k for AAC and 96k for Opus. Speed adds `-af atempo=<percent/100 as decimal, e.g. 1.5>`.
 7. Muxer flags: mp4/mov `-movflags +faststart+use_metadata_tags`. Then `-f <muxer> <output>`.
 8. **GIF target:** `-i in -an -sn -filter_complex "[0:v:0]<crop,scale,setpts as above>,fps=15,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle[o]" -map "[o]" -loop 0 -f gif out`. The codec label is `"GIF"`, encoder `"gif"`, fps `Some(15.0)`.
-9. `expected` = duration × 100 / speed percent (the duration when there is no speed). `fps` = the output fps: the fps filter value, else the source fps × percent/100 with `keep_frames`, else the source fps. `audio` = audio is kept and the source has audio. `hdr_flattened` = `probe.video.hdr` and the codec is H264/Vp9 or the target is Gif.
+9. `expected` = duration × 100 / speed percent (the duration when there is no speed). `fps` = the output fps: the fps filter value, else the source fps × percent/100 with `keep_frames`, else the source fps. `audio` = audio is kept and the source has audio. `hdr_flattened` = `probe.video.hdr` and the planned codec is H264/Vp9 (including an HEVC request planned as H.264) or the target is Gif. `hevc_as_h264` as in rule 5. `codec_label`/`encoder` name what was actually planned ("H.264", "libx264" for a fallback).
 
 `frame(display, edits, target)`: window = `geometry::crop_size(display, edits)`, out = `geometry::output_size(window, edits)`. For `Gif` with no `size` and no `scale`, out is shrunk so its long edge is ≤ 800 (never enlarged). For every other target, window and out are rounded **down** to even numbers, at least 2.
 
 `plain_target`: `Mov` → `Hevc` if the source codec is `hevc` else `Mp4` when `convert_mov`, else `Mov`. Any other source returns itself.
+
+`route(target, probe, hevc_ok, plain)` decides, before planning, what happens when the target asks for HEVC (`codec_for(target, probe) == Some(Codec::Hevc)`) and `hevc_ok` is false. `run_video` calls it (Task 10):
+- The target does not ask for HEVC, or `hevc_ok` → `Encode(target)`.
+- `plain` and the source codec is `hevc` → `Keep`: a plain optimise never turns an HEVC video into H.264 (it would be larger and lose 10-bit/HDR); the job leaves the file as it is.
+- `target == Hevc` → `Encode(Mp4)`: the result is recorded as MP4 (H.264), which is what it is.
+- Otherwise (`Mov`/`Mkv` holding HEVC, with an explicit edit) → `Encode(target)`: same container, H.264 inside (`plan` sets `hevc_as_h264`).
 
 - [ ] **Step 1: Write the failing tests.** `probe_1080()` is a 1920×1080 H.264 30 fps 6 Mb/s probe with one AAC 128k track, 10 s long. `input(..)` builds a `PlanInput` with `Settings::default().video`, target `Mp4`, out (1920, 1080), no crop, `Hardware::default()`, paths `/b/in.mp4` and `/w/out.mp4`. `has(args, &["-crf", "23"])` checks for a consecutive pair.
 
 ```rust
 #[test] fn quality_maps_to_each_encoders_scale() {
     assert_eq!((crf_x264(80), crf_x264(100), crf_x264(5), crf_x264(60)), (23, 18, 42, 28));
-    assert_eq!((crf_x265(80), crf_svt(80), crf_svt(5), crf_vp9(80), crf_vp9(5)), (28, 27, 55, 22, 50));
+    assert_eq!((crf_svt(80), crf_svt(5), crf_vp9(80), crf_vp9(5)), (27, 55, 22, 50));
 }
 #[test] fn a_plain_h264_optimise_keeps_every_frame_and_every_track() {
     let plan = plan(&input(..));  // encoder setting Small
@@ -1015,8 +1094,28 @@ Planning rules (`plan`), in argument order:
 }
 #[test] fn a_failed_hardware_encode_is_planned_again_in_software() { /* software: true → "libx264", hardware false */ }
 #[test] fn ten_bit_hdr_stays_main10_on_plain_hevc() {
-    // probe hevc ten_bit hdr, target Hevc, Small → libx265, -pix_fmt yuv420p10le, -profile:v main10, -tag:v hvc1, hdr_flattened false
-    // Fast with hevc_videotoolbox → -pix_fmt p010le, -profile:v main10
+    // probe hevc ten_bit hdr, target Hevc, Hardware { hevc: Some("hevc_videotoolbox"), .. }:
+    // for each mode Fast, Small, VisuallyLossless → encoder "hevc_videotoolbox", hardware true, -pix_fmt p010le,
+    //   -profile:v main10, -tag:v hvc1, no "-crf", hdr_flattened false, hevc_as_h264 false
+    // VisuallyLossless → "-b:v" is hardware_bitrate(95, &probe, out, fps, Codec::Hevc); Small → the same "-b:v" as Fast
+    // no arg anywhere equals "libx265"
+}
+#[test] fn hevc_without_a_hardware_encoder_is_written_as_h264() {
+    // same probe, target Hevc, Hardware::default(), encoder Small → "libx264", -pix_fmt yuv420p, codec_label "H.264",
+    //   hevc_as_h264 true, hdr_flattened true
+    // Hardware { hevc: Some("hevc_videotoolbox"), h264: Some("h264_videotoolbox") }, software: true → "libx264", hevc_as_h264 true
+    // Hardware { hevc: None, h264: Some("h264_videotoolbox") }, Fast → "h264_videotoolbox" (nv12), hevc_as_h264 true
+    // target Mp4 never sets hevc_as_h264
+}
+#[test] fn a_plain_hevc_optimise_never_becomes_h264() {
+    // hevc probe (hp) and h264 probe (p):
+    assert_eq!(route(Format::Hevc, &hp, false, true), Route::Keep);
+    assert_eq!(route(Format::Mov, &hp, false, true), Route::Keep);              // a MOV holding HEVC, convert_mov off
+    assert_eq!(route(Format::Hevc, &hp, false, false), Route::Encode(Format::Mp4));
+    assert_eq!(route(Format::Mkv, &hp, false, false), Route::Encode(Format::Mkv));
+    assert_eq!(route(Format::Hevc, &p, false, false), Route::Encode(Format::Mp4)); // "Convert to HEVC" from a pipeline
+    assert_eq!(route(Format::Hevc, &hp, true, true), Route::Encode(Format::Hevc));
+    assert_eq!(route(Format::Mp4, &p, false, true), Route::Encode(Format::Mp4));
 }
 #[test] fn hdr_to_h264_is_flagged_flattened() { /* same probe, target Mp4 → libx264, yuv420p, hdr_flattened true; target Gif → true */ }
 #[test] fn frames_are_rounded_down_to_even_sizes() {
@@ -1126,7 +1225,7 @@ The Clipboard branches of `put` and `put_back` need `Content::Bytes`. Given a `F
 
 **Files:**
 - Create: `crates/ferry-core/src/pipeline/video_job.rs` (declared in `pipeline.rs` as `mod video_job;`, a child module, so it sees `Job`'s private fields; named `video_job` so it never shadows the crate's `video` module, which `pipeline.rs` uses as `video::…`)
-- Modify: `crates/ferry-core/src/pipeline.rs`, `crates/ferry-core/src/job.rs`, `crates/ferry-core/src/video/mod.rs` (`step_text`), `src/lib/i18n/en.json` (`video.step.*`, `video.detail.*`, `video.note.hdr`), `src/lib/ipc.ts` (`VideoMeta`, `JobUpdate.video`), `src/lib/card.fixture.ts` (`video: null`)
+- Modify: `crates/ferry-core/src/pipeline.rs`, `crates/ferry-core/src/job.rs`, `crates/ferry-core/src/video/mod.rs` (`step_text`), `src/lib/i18n/en.json` (`video.step.*`, `video.detail.*`, `video.note.hdr`, `video.note.hevc_as_h264`), `src/lib/ipc.ts` (`VideoMeta` with `hevc_encoder: boolean`, `JobUpdate.video`), `src/lib/card.fixture.ts` (`video: null`)
 - Test: `pipeline/video_job.rs` tests (real ffmpeg; skip without `FERRY_FFMPEG`), `job.rs` test, `video/mod.rs` test
 
 **Interfaces:**
@@ -1143,17 +1242,22 @@ pub struct VideoMeta {
     pub audio: bool,               // the current result has audio
     pub original: Option<PathBuf>, // the backup: compare's left side
     pub original_duration_ms: u64,
+    pub hevc_encoder: bool,        // the job's hardware has an HEVC encoder: the format bar and menu offer HEVC
 }
 // JobUpdate gains, last: #[serde(default)] pub video: Option<VideoMeta>,   (notice(): None)
 
 // pipeline.rs
-pub struct RunOptions { …, pub video: settings::Video, pub hardware: video::hardware::Hardware }  // RunOptions::new fills them from settings.video and video::hardware::hardware()
+pub struct RunOptions { …, pub video: settings::Video, pub hardware: Option<video::hardware::Hardware> }
+// RunOptions::new: video from settings.video, hardware None. None means run_video calls video::hardware::probe_hardware(),
+// which waits on the worker thread for the startup probe if it is still running (so HEVC is not missed right after launch).
+// Tests set Some(Hardware::default()) for deterministic software encodes.
 impl Job { pub fn is_video(&self) -> bool }
 // Job gains (last field, // stream A: video): video: Option<video_job::VideoState>   (clipboard/file: None; fork: clone)
 
 // pipeline/video_job.rs
 #[derive(Debug, Clone, Default)]
-pub(crate) struct VideoState { pub probe: Option<Probe>, pub thumb: Option<PathBuf>, pub result: Option<Made> }
+pub(crate) struct VideoState { pub probe: Option<Probe>, pub thumb: Option<PathBuf>, pub result: Option<Made>, pub hardware: Option<Hardware> }
+// hardware: the `hw` run_video used (step 4); video_meta's hevc_encoder = self.hardware.unwrap_or_else(video::hardware::hardware).hevc.is_some()
 #[derive(Debug, Clone)]
 pub(crate) struct Made { pub codec: &'static str, pub fps: Option<f32>, pub duration: Duration, pub audio: bool, pub speed: Option<u16> }
 impl Job {
@@ -1186,21 +1290,23 @@ Changes in `pipeline.rs` (each marked `// stream A: video`):
 1. `emit(Optimising{0, t("video.step.backup")})` on the first run; `backup_path(backups)` (failure → `error.backup`).
 2. With no probe yet: emit `video.step.reading`, run `probe(backup)`, set `source_format = video::source_format(container, &probe)` (and `format` too while `!changed`), and set `dims` to the display size.
 3. With no thumb: `run(thumb_args(backup, <tmp>/thumb.jpg))`, then `backups.store_bytes(id, ".ferry-thumb.jpg", bytes)`. A failure is ignored (the card keeps its placeholder).
-4. `target = edits.format.unwrap_or(plain_target(..))`; `plain = edits.is_plain() && !twin`.
+4. `hw = o.hardware.unwrap_or_else(video::hardware::probe_hardware)`, stored in `VideoState::hardware`. `target = edits.format.unwrap_or(plain_target(..))`; `plain = edits.is_plain() && !twin` (an `encoder` choice alone keeps it plain, F's rule). Then `route(target, &probe, hw.hevc.is_some(), plain)`:
+   - `Keep` → `put_back(Content::File(backup), self.changed, …)`, clear the result info and finish `AlreadyOptimal`, with no encode (log at `info`: "HEVC kept: no hardware HEVC encoder").
+   - `Encode(t)` → `target = t`; remember `hevc_fallback = t != the target asked for` (an `Hevc` request routed to `Mp4`).
 5. Geometry: `frame(dims, &edits, target)`. Crop rect: `Framing::Smart` with window ≠ display → `run(frame_args(backup, <tmp>/frame.png))`, then `raster::decode` (PNG) and `smart::frame`. Otherwise `geometry::centre`.
 6. Temp folder `<o.work_dir>/video/<job id>/`, removed by a guard on **every** exit, including cancel and failure. Output `<tmp>/out.<ext>`. ext = `source_ext` when target == `source_format`, else `target.extension()`, exactly as `put` computes it.
-7. Run the plan with `run_expecting(args, plan.expected, …)`. Emit `Optimising{p, step_text(<video.step.encode{codec}> | <…_software> | <video.step.gif>, p, elapsed)}` only when the whole percent changes. `Failed` with `plan.hardware` → plan again with `software: true` and run once more. `Cancelled` → `None`.
+7. Run the plan with `run_expecting(args, plan.expected, …)`. Emit `Optimising{p, step_text(<video.step.encode{codec}> | <…_software> | <video.step.gif>, p, elapsed)}` only when the whole percent changes. `Failed` with `plan.hardware` → log the error at `warn`, then call `route` again with `hevc_ok = false` (a failed HEVC attempt means no HEVC on this run): `Keep` → as in step 4 (`AlreadyOptimal`, file untouched); `Encode(t)` → plan again with `target = t` and `software: true` (H.264 via libx264) and run once more, setting `hevc_fallback` as in step 4. `Cancelled` → `None`.
 8. **GIF:** read `<tmp>/out.gif`. With `o.gifsicle`, `optimise::encode(bytes, Format::Gif, …)` at quality q, or with `fit_under`, `edit::fit::search(limit, |q| optimise::encode(…))` (its `missed` sets the note). Write the bytes back to `<tmp>/out.gif`.
 9. **Fit (non-GIF):** audio b/s as the plan caps it (0 when muted or silent) gives `budget`. Encode at most 3 times (`next_bitrate` after each miss). Keep the smallest result; still over the limit → note `card.note.fit_missed`.
 10. **Never worse:** for a plain run, out ≤ 99% of `before` → `Done`. Out > `before` → `Larger`; otherwise `AlreadyOptimal`. In both of those cases: `put_back(Content::File(backup), self.changed, …)`, and the result info is cleared.
-11. Otherwise `put(Content::File(out), target, Content::File(backup), o, &mut |_, _, _| Ok(()))`. Set `result = Some(Made{..})` from the plan, `dims_after` = out when ≠ dims, and `note` = fit missed, else `video.note.hdr` when `hdr_flattened`.
+11. Otherwise `put(Content::File(out), target, Content::File(backup), o, &mut |_, _, _| Ok(()))`. Set `result = Some(Made{..})` from the plan, `dims_after` = out when ≠ dims, and `note` = fit missed, else `video.note.hevc_as_h264` when `hevc_fallback || plan.hevc_as_h264`, else `video.note.hdr` when `hdr_flattened`.
 12. Map errors: a `FerryError` becomes `self.fail(e.reason(), e)`; an output error from `put` stays as it is.
 
 `restore_video`: `put_back(Content::File(backup), true, o, …)`; clear the recipe, `dims_after`, `note` and `result`; return `Restored` (like `restore`, without reading bytes).
 
 `video_detail`: `"W×H"` or `"W×H → w×h"`, the codec label, `tf("video.detail.fps", n)` (n without a trailing `.0`: `30`, `29.97`), `tf("video.detail.speed", "1.5")` when sped up, `t("video.detail.no_audio")` when the original had audio and the result has none, `card.detail.aggressive` when aggressive. Joined with `" · "`.
 
-- [ ] **Step 1: Write the failing tests.** Each starts with `let Some(src) = testutil::video(dir, "clip.mp4", &spec) else { return };`. Options: `RunOptions::new(&settings, testutil::gifsicle(), env.work(), test_trash, CancelToken::new())` with `settings.video.encoder = VideoEncoder::Small` (deterministic software encodes). The `Env`, `test_trash` and `run` helpers are copied in small from the `pipeline` tests. "probe" below means `video::probe::probe(path, &CancelToken::new())`.
+- [ ] **Step 1: Write the failing tests.** Each starts with `let Some(src) = testutil::video(dir, "clip.mp4", &spec) else { return };`. Options: `RunOptions::new(&settings, testutil::gifsicle(), env.work(), test_trash, CancelToken::new())` with `settings.video.encoder = Encoder::Small` (F's `optimise::Encoder`) and then `o.hardware = Some(Hardware::default())` (deterministic software encodes, and the same result on a Mac with VideoToolbox as in CI). The `Env`, `test_trash` and `run` helpers are copied in small from the `pipeline` tests. "probe" below means `video::probe::probe(path, &CancelToken::new())`.
 
 ```rust
 #[test] fn a_video_file_is_backed_up_optimised_in_place_and_keeps_its_dates() {
@@ -1225,6 +1331,11 @@ Changes in `pipeline.rs` (each marked `// stream A: video`):
     // convert Gif → output "clip.gif"; sniff Gif; gif_frame_count > 1; long edge ≤ 800; card.format Gif
 }
 #[test] fn fit_under_size_lands_under_the_limit() { /* fit_under = 60% of before → after ≤ limit, note None */ }
+#[test] fn a_hevc_request_without_a_hevc_encoder_is_saved_as_h264() {
+    // o.hardware = Some(Hardware::default()); edit format Some(Format::Hevc) on the libx264 clip
+    // → Done; probe(output).video.codec == "h264"; card.format == Some(Format::Mp4); card.video.codec == "H.264";
+    //   note == "Saved as H.264 — this computer has no HEVC encoder"; card.video.hevc_encoder == false
+}
 #[test] fn a_cancelled_encode_changes_nothing_and_leaves_no_temp_folder() {
     // 10 s 1280×720 source; cancel from emit when progress > 0 → run returns None; source bytes unchanged; <work>/video/<id> does not exist
 }
