@@ -71,3 +71,14 @@ Patent-encumbered: H.264, HEVC, AAC; VP9/AV1 have third-party pool claims.
 9. Pipeline rail buttons are a post-merge edit on G's rail editor. **Recommend: yes.**
 - Hook for A/B/E: `pub fn register(r: &mut crate::pipeline_steps::Registry)` in `{video,audio,pdf}_steps.rs`, one line each in `pipeline_steps::builtin()` under `// Later streams register their steps here, one line each:`.
 - C calls `pipe_jobs::start_assigned(..., Trigger::Pipeline(id), ...)`; G rail ids `pipeline:<id>` call `pipe_run`.
+
+## B audio (`plans/2026-10-23-ferry-sB-audio.md`, 16 tasks; no new deps; uses A's sidecar: FFmpeg GPL-3.0+, LAME LGPL-2.0+, Opus BSD-3, native aac; libfdk_aac ruled out (non-free); AAC may be patent-encumbered)
+Aligned to A's plan: uses `ffmpeg::exec -> Captured`, A's refactor names (`Content`, `backup_path`, `atomic_replace_from`, `replace_with`), `restore_audio` like `restore_video`, progress in step text.
+1. Merge order: wait for A's Tasks 1-4 and 9, or start after Task 1 and accept a `sniff.rs` conflict. **Recommend: wait for 1-4 and 9.**
+2. Ogg Vorbis output defaults to Opus (`.ogg` becomes `.opus`). **Recommend: keep Opus; no libvorbis.**
+3. Add ATSC A/85 (-24 LKFS, -2 dBTP) broadcast option? **Recommend: not this cycle.**
+4. Audio A/B compare (Cmd+D disabled on audio cards). **Recommend: Cycle 4.**
+5. Space on Windows audio cards does nothing; open default player instead (takes focus)? **Recommend: leave it doing nothing.**
+6. Use Apple `aac_at` on macOS when present? **Recommend: yes (better quality at the same bitrate, one start-up check).**
+7. Defaults: loudness Off; cover art Optimise (no resize); 192 kbps MP3/AAC, 128 kbps Opus; size limit 2000 MB. **Recommend: yes.**
+- Merge notes: C sets `AUDIO = true`, routes `audio_job` through `Job::file`, stops counting audio as image, and puts `selfwrite::record` in the shared `replace_with` helper. A: B's M4A brand check runs before A's `ftyp` branch. D: nothing needed.
