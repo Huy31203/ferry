@@ -7,7 +7,10 @@
 #![allow(clippy::unused_unit)] // the panel_event! macro expands to `-> ()`
 
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 use tauri::{Emitter, Manager, WebviewWindow};
 use tauri_nspanel::{
     CollectionBehavior, ManagerExt, PanelLevel, TrackingAreaOptions, WebviewWindowExt,
@@ -19,7 +22,7 @@ use crate::windows::STACK;
 tauri_panel! {
     panel!(StackPanel {
         config: {
-            can_become_key_window: false,
+            can_become_key_window: key_wanted(),
             can_become_main_window: false,
             is_floating_panel: true
         }
@@ -113,4 +116,61 @@ pub fn app_identifier(path: &Path) -> Option<String> {
     use objc2_foundation::{NSBundle, NSString};
     let bundle = NSBundle::bundleWithPath(&NSString::from_str(path.to_str()?))?;
     bundle.bundleIdentifier().map(|id| id.to_string())
+}
+
+/// Whether the stack may take the keyboard: only while a text field or a
+/// slider drag is open (spec §2 "Text input in the stack").
+static KEY_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// The app that had the keyboard before the stack took it.
+// `tauri_panel!` already imports `Retained` into this module.
+static FRONT: Mutex<Option<objc2::rc::Retained<NSRunningApplication>>> = Mutex::new(None);
+
+/// Fallback switch (Task 11): `true` activates Ferry while a field is open,
+/// for when a non-activating key panel does not get typing.
+const ACTIVATE_FOR_KEYS: bool = false;
+
+/// The panel's `canBecomeKeyWindow`, asked by AppKit on every call.
+fn key_wanted() -> bool {
+    KEY_WANTED.load(Ordering::Relaxed)
+}
+
+/// Make the stack the key window without activating Ferry (the panel is
+/// non-activating), or give the keyboard back to the app that had it.
+pub fn set_stack_key(window: &WebviewWindow, on: bool) -> tauri::Result<()> {
+    KEY_WANTED.store(on, Ordering::Relaxed);
+    let Ok(panel) = window.app_handle().get_webview_panel(window.label()) else {
+        return Ok(());
+    };
+    if on {
+        let me = NSRunningApplication::currentApplication();
+        let front = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .filter(|app| app.processIdentifier() != me.processIdentifier());
+        *FRONT.lock().unwrap() = front;
+        if ACTIVATE_FOR_KEYS {
+            #[allow(deprecated)]
+            me.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+        }
+        panel.make_key_window();
+    } else {
+        panel.resign_key_window();
+        // That app stayed active while the panel was key (unless the fallback
+        // is on); activating it again gives its own window the keyboard back.
+        // Not when the user has since clicked another app (that click is what
+        // closed the field): the keyboard stays where they put it.
+        if let Some(front) = FRONT.lock().unwrap().take() {
+            let me = NSRunningApplication::currentApplication().processIdentifier();
+            let still_ours = NSWorkspace::sharedWorkspace()
+                .frontmostApplication()
+                .is_none_or(|now| {
+                    let pid = now.processIdentifier();
+                    pid == front.processIdentifier() || pid == me
+                });
+            if still_ours {
+                front.activateWithOptions(NSApplicationActivationOptions::empty());
+            }
+        }
+    }
+    Ok(())
 }
