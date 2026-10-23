@@ -91,3 +91,18 @@ Plan amendments this requires (applied in the plans themselves, since each imple
 - C: screenshot/recording watching default off; drop `.avi`.
 - D: Windows drop zone default is "modifier tap only", edge-tab auto-show opt-in; list keys need a click on the list first.
 Integration tasks for `feat/c3-all` (after the streams merge): C/D `jobs::start` -> I's `jobs::start_auto_copied`; FR-T3 auto-optimise copied video (A + I); F's three D edits (`drag:ended`, `start_assigned` in `intake::accept`, `pipe.zones.hint_tap`); F pipeline rail buttons on G's rail editor; C/H machine-specific keys into G's `settings_sync::LOCAL`; check F's copy step writes are recorded by C; C's video/audio hooks wired to A/B; rail Tab order fix after `Card.svelte` merges settle.
+
+## E pdf-formats (`plans/2026-10-23-ferry-sE-pdf-formats.md`, 20 tasks)
+New deps: `lopdf` 0.45 MIT; `pdfium-render` 0.9.4 MIT/Apache + PDFium chromium/7881 binaries BSD-3/Apache (+ permissive notices); `tiff` 0.11.3 MIT; `avif-decode` 3.0.0 BSD-3 (pulls `rav1d` BSD-2, `avif-parse` **MPL-2.0 weak copyleft**, `yuv`); `ravif` 0.13.0 BSD-3 (`rav1e` BSD-2); `moxcms` 0.9.1 BSD-3/Apache; `objc2-image-io` 0.3.2; NASM + `ilammy/setup-nasm@v1`. Rejected: MuPDF, Ghostscript (AGPL); libheif/libde265 (LGPL-3) + HEVC patents (HEIC via OS codecs instead).
+Recommendations (all accepted in advance by the user, all match the plan as written, so no amendment):
+1. PDFium bundled (15 MB mac / 7 MB win), not hayro. **Yes.**
+2. Windows HEIC decode-only via Microsoft's HEIF/HEVC Store extensions. **Yes.**
+3. NASM for AVIF decode on x86_64 (`brew install nasm`, already needed by A). **Yes.**
+4. Large PDFs: parallel image recompression instead of 100-page chunks (keeps links/outlines). **Yes.**
+5. Adaptive DPI left to F; no Adaptive stop on the DPI slider. **Yes.**
+6. HDR HEIC becomes SDR JPEG this cycle. **Yes.**
+7. FR-T3 for copied PDFs. **One integration task on `feat/c3-all` with the video one (needs A, E and I).**
+8. TIFF on the clipboard defaults to JPEG, per the requirements. **Keep JPEG.**
+9. Signed PDFs: refuse rewriting, allow page extraction. **Yes.**
+10. PDF Converted default location Same folder. **Yes.**
+- Note: E adds `tauri.macos.conf.json` / `tauri.windows.conf.json` overlays (leaves `tauri.conf.json` untouched); F maps its PDF steps onto E's recipe fields (`dpi`, `pages`, `uncrop`).
