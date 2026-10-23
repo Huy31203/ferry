@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { draggable, isBusy, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
+  import { draggable, hoverTarget, isBusy, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
   import type { CropFrame } from '../lib/edits';
   import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
@@ -45,6 +45,15 @@
     if (on === keyed) return;
     keyed = on;
     invoke('stack_focus', { on }).catch((e) => console.warn('stack_focus', e));
+  });
+
+  // Hover hotkeys follow the idle card under the pointer (Rust registers them).
+  let hoverSent: string | null = null;
+  $effect(() => {
+    const id = hoverTarget(hovered, cards, tool, config.hover_hotkeys);
+    if (id === hoverSent) return;
+    hoverSent = id;
+    invoke('card_hover', { id }).catch((e) => console.warn('card_hover', e));
   });
 
   function setTool(id: string, kind: Tool | null) {

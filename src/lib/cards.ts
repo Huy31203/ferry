@@ -74,3 +74,16 @@ export function openTool(tool: OpenTool | null, cards: JobUpdate[]): OpenTool | 
   const owner = cards.find((c) => c.id === tool.id);
   return owner && canDrag(owner) ? tool : null;
 }
+
+/** The card the hover hotkeys act on (spec §4.5): the idle card under the pointer,
+ *  unless a tool has the keyboard or the setting is off. */
+export function hoverTarget(
+  hovered: string | null,
+  cards: JobUpdate[],
+  tool: OpenTool | null,
+  enabled: boolean,
+): string | null {
+  if (!enabled || tool !== null || hovered === null) return null;
+  const card = cards.find((c) => c.id === hovered);
+  return card && canDrag(card) ? card.id : null;
+}

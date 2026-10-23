@@ -7,8 +7,8 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use ferry_core::i18n::t;
 
-use crate::platform;
 use crate::state::AppState;
+use crate::{hover_keys, platform};
 
 pub const STACK: &str = "stack";
 pub const SETTINGS: &str = "settings";
@@ -60,6 +60,8 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         return Ok(());
     };
     if width < 1.0 || height < 1.0 {
+        // No pointer-leave arrives from a hidden window: drop the hover keys here.
+        hover_keys::set(&app, None);
         return platform::hide(&stack).map_err(|e| e.to_string());
     }
     let floating = app
@@ -157,6 +159,8 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
 /// a slider drag is open, and hand it back after (spec §2, §5.3).
 #[tauri::command]
 pub fn stack_focus(app: AppHandle, on: bool) -> Result<(), String> {
+    // Typing into the field must never trigger a hover key.
+    hover_keys::set_keyed(&app, on);
     let Some(stack) = app.get_webview_window(STACK) else {
         return Ok(());
     };

@@ -174,3 +174,9 @@ pub fn set_stack_key(window: &WebviewWindow, on: bool) -> tauri::Result<()> {
     }
     Ok(())
 }
+
+/// Whether Ferry is the active app, i.e. one of its own windows (compare,
+/// Quick Look, Settings) has the keyboard. The non-activating stack never makes it so.
+pub fn app_is_active() -> bool {
+    NSRunningApplication::currentApplication().isActive()
+}

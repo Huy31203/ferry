@@ -10,10 +10,12 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use tauri::WebviewWindow;
 use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, HWND_TOPMOST,
+    SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW,
 };
 
 /// Whether the stack may take the keyboard: only while a text field or a
@@ -106,4 +108,14 @@ pub fn set_stack_key(window: &WebviewWindow, on: bool) -> tauri::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether one of Ferry's own windows is the foreground window.
+pub fn app_is_active() -> bool {
+    let mut pid = 0u32;
+    // SAFETY: plain queries; a null foreground window leaves `pid` at 0.
+    unsafe {
+        GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
+        pid == GetCurrentProcessId()
+    }
 }
