@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { draggable, upsert } from '../lib/cards';
+  import { draggable, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
   import type { JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
   import Card from './Card.svelte';
@@ -25,6 +25,29 @@
   // Pointer on the Drag all bar, or a drag under way: no card may fade out from under the user.
   const held = $derived(overBar || dragging > 0);
   let root = $state<HTMLDivElement>();
+
+  /** The one card tool that has the keyboard (rename, crop, fit, a slider drag). */
+  let tool = $state<OpenTool | null>(null);
+
+  // A tool whose card left (closed, faded, cleared, now busy) closes with it,
+  // so the stack never keeps the keyboard for a card that is gone.
+  $effect(() => {
+    if (tool !== null && openTool(tool, cards) === null) tool = null;
+  });
+
+  // The stack takes the keyboard only while a tool is open (spec §2).
+  let keyed = false;
+  $effect(() => {
+    const on = tool !== null;
+    if (on === keyed) return;
+    keyed = on;
+    invoke('stack_focus', { on }).catch((e) => console.warn('stack_focus', e));
+  });
+
+  function setTool(id: string, kind: Tool | null) {
+    if (kind !== null) tool = { id, kind };
+    else if (tool?.id === id) tool = null;
+  }
 
   const top = $derived(config.corner.startsWith('top'));
   const railRight = $derived(config.corner.endsWith('left'));
@@ -154,8 +177,10 @@
       compact={config.card_size === 'compact'}
       {railRight}
       autoHideSecs={config.auto_hide_secs}
+      tool={tool?.id === card.id ? tool.kind : null}
       onclose={() => close(card.id)}
       ondrag={dragState}
+      ontool={(kind) => setTool(card.id, kind)}
     />
   {/each}
   {#if cards.length > 1 && !top}

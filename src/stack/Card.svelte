@@ -2,7 +2,7 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { fade } from 'svelte/transition';
-  import { autoHides, canDrag, isBusy, railActions } from '../lib/cards';
+  import { autoHides, canDrag, isBusy, railActions, type Tool } from '../lib/cards';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import { isMac, type JobUpdate } from '../lib/ipc';
@@ -15,8 +15,10 @@
     held = false,
     hotAction = null,
     autoHideSecs,
+    tool = null,
     onclose,
     ondrag,
+    ontool,
   }: {
     card: JobUpdate;
     hovered?: boolean;
@@ -27,8 +29,12 @@
     /** The `data-action` of the button the pointer is on, if it is on this card. */
     hotAction?: string | null;
     autoHideSecs: number;
+    /** This card's open tool, if any. */
+    tool?: Tool | null;
     onclose: () => void;
     ondrag: (active: boolean) => void;
+    /** Open a tool on this card, or close it with null. */
+    ontool: (kind: Tool | null) => void;
   } = $props();
 
   let focused = $state(false);
@@ -37,11 +43,13 @@
   let copied = $state<'ok' | 'failed' | null>(null);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
   let tip = $state<{ text: string; left: number; top: number } | null>(null);
+  let renameError = $state<string | null>(null);
 
   const busy = $derived(isBusy(card.state));
   const notice = $derived(card.name === '' && card.ext === '');
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
   const rail = $derived(railActions(card));
+  const canRename = $derived(canDrag(card));
   const stateLabel = $derived(t(`card.state.${card.state.kind}` as StringKey));
   const label = $derived(
     t('card.aria', { name: notice ? t('card.notice') : fileName, state: stateLabel }),
@@ -50,7 +58,7 @@
 
   // Finished cards fade out after the configured time; hover or focus holds them (§5.5).
   $effect(() => {
-    if (!autoHides(card.state) || autoHideSecs === 0 || hovered || focused || held) return;
+    if (!autoHides(card.state) || autoHideSecs === 0 || hovered || focused || held || tool !== null) return;
     const timer = setTimeout(onclose, autoHideSecs * 1000);
     return () => clearTimeout(timer);
   });
@@ -73,8 +81,42 @@
     copiedTimer = setTimeout(() => (copied = null), 1400);
   }
 
+  $effect(() => {
+    if (tool !== 'rename') renameError = null;
+  });
+
+  function focusSelect(input: HTMLInputElement) {
+    input.focus();
+    input.select();
+  }
+
+  async function rename(stem: string) {
+    if (stem === card.name) {
+      ontool(null);
+      return;
+    }
+    try {
+      await invoke('card_rename', { id: card.id, stem });
+      ontool(null);
+    } catch (e) {
+      renameError = String(e);
+    }
+  }
+
+  function renameKey(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void rename((event.currentTarget as HTMLInputElement).value);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      ontool(null);
+    }
+  }
+
   function tipText(action: string): string {
     switch (action) {
+      case 'rename':
+        return t('card.rename');
       case 'copy':
         return copied === 'ok' ? t('card.copied') : copied === 'failed' ? t('card.copy_failed') : t('card.copy');
       case 'reveal':
@@ -233,9 +275,34 @@
   <div class="info">
     {#if !notice}
       <div class="chips">
-        <span class="name">{card.name}</span>
+        {#if tool === 'rename'}
+          <input
+            class="name name-field"
+            type="text"
+            value={card.name}
+            aria-label={t('card.rename_named', { name: fileName })}
+            aria-invalid={renameError !== null}
+            use:focusSelect
+            onkeydown={renameKey}
+            onblur={() => ontool(null)}
+          />
+        {:else if canRename}
+          <button
+            type="button"
+            class="name"
+            data-action="rename"
+            class:hot={hotAction === 'rename'}
+            aria-label={t('card.rename_named', { name: fileName })}
+            onclick={() => ontool('rename')}>{card.name}</button
+          >
+        {:else}
+          <span class="name">{card.name}</span>
+        {/if}
         {#if card.ext}<span class="ext">{card.ext}</span>{/if}
       </div>
+      {#if renameError}
+        <span class="rename-error" role="alert">{renameError}</span>
+      {/if}
     {/if}
     <div class="line">
       {#if card.state.kind === 'queued'}
@@ -463,6 +530,32 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  button.name {
+    border: 0;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    cursor: text;
+  }
+  button.name:hover,
+  button.name.hot {
+    background: rgba(255, 255, 255, 0.28);
+  }
+  .name-field {
+    width: 180px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .name-field[aria-invalid='true'] {
+    border-color: #ff453a;
+  }
+  .rename-error {
+    font-size: 11px;
+    color: #ffb3ae;
   }
   .ext {
     flex-shrink: 0;

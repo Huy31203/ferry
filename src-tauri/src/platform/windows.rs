@@ -6,23 +6,35 @@
 //! window is visible, which is why `hide` also lives here.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use tauri::WebviewWindow;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
 
+/// Whether the stack may take the keyboard: only while a text field or a
+/// slider drag is open (spec §2 "Text input in the stack").
+static KEY_WANTED: AtomicBool = AtomicBool::new(false);
+/// The window that had the keyboard before the stack took it.
+static PREVIOUS: AtomicIsize = AtomicIsize::new(0);
+
 fn apply_tool_window_style(hwnd: HWND) {
+    let no_activate = if KEY_WANTED.load(Ordering::Relaxed) {
+        0
+    } else {
+        WS_EX_NOACTIVATE
+    };
     // SAFETY: `hwnd` is a live top-level window owned by this process.
     unsafe {
-        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & !(WS_EX_NOACTIVATE as isize);
         SetWindowLongPtrW(
             hwnd,
             GWL_EXSTYLE,
-            style | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) as isize,
+            style | (no_activate | WS_EX_TOOLWINDOW) as isize,
         );
     }
 }
@@ -69,4 +81,29 @@ pub fn accent_rgb() -> Option<(u8, u8, u8)> {
 pub fn app_identifier(path: &Path) -> Option<String> {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
+}
+
+/// Let the stack take the keyboard (dropping WS_EX_NOACTIVATE) and remember
+/// the window that had it; give it back when `on` is false.
+pub fn set_stack_key(window: &WebviewWindow, on: bool) -> tauri::Result<()> {
+    KEY_WANTED.store(on, Ordering::Relaxed);
+    // tao tracks focusability itself and would put WS_EX_NOACTIVATE back.
+    window.set_focusable(on)?;
+    let hwnd = window.hwnd()?.0;
+    apply_tool_window_style(hwnd);
+    // SAFETY: both handles are top-level windows; a stale one only makes the call fail.
+    unsafe {
+        if on {
+            PREVIOUS.store(GetForegroundWindow() as isize, Ordering::Relaxed);
+            SetForegroundWindow(hwnd);
+        } else {
+            let previous = PREVIOUS.swap(0, Ordering::Relaxed) as HWND;
+            // Only while the stack still has the foreground: a click on another
+            // window (which closed the field) already put the keyboard there.
+            if !previous.is_null() && GetForegroundWindow() == hwnd {
+                SetForegroundWindow(previous);
+            }
+        }
+    }
+    Ok(())
 }

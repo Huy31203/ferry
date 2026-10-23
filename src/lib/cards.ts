@@ -42,3 +42,19 @@ export function draggable(cards: JobUpdate[]): JobUpdate[] {
 export function dragAllFiles(cards: JobUpdate[]): string[] {
   return draggable(cards).map((c) => c.output as string);
 }
+
+/** A card tool that needs the keyboard (or, for the slider, Esc). */
+export type Tool = 'rename' | 'crop' | 'fit' | 'slider';
+
+/** The one tool open in the stack, and the card it belongs to. */
+export interface OpenTool {
+  id: string;
+  kind: Tool;
+}
+
+/** `tool`, or null once its card is gone or busy: the stack must not stay key for a card that left. */
+export function openTool(tool: OpenTool | null, cards: JobUpdate[]): OpenTool | null {
+  if (tool === null) return null;
+  const owner = cards.find((c) => c.id === tool.id);
+  return owner && canDrag(owner) ? tool : null;
+}

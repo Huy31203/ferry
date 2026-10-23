@@ -153,6 +153,16 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
     platform::show_without_focus(&stack).map_err(|e| e.to_string())
 }
 
+/// Let the stack take the keyboard while a text field (rename, crop, fit) or
+/// a slider drag is open, and hand it back after (spec §2, §5.3).
+#[tauri::command]
+pub fn stack_focus(app: AppHandle, on: bool) -> Result<(), String> {
+    let Some(stack) = app.get_webview_window(STACK) else {
+        return Ok(());
+    };
+    platform::set_stack_key(&stack, on).map_err(|e| e.to_string())
+}
+
 /// Show the Settings window, creating it the first time.
 pub fn open_settings(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(SETTINGS) {

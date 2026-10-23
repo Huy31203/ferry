@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoHides, canDrag, dragAllFiles, isBusy, railActions, upsert } from './cards';
+import { autoHides, canDrag, dragAllFiles, isBusy, openTool, railActions, upsert } from './cards';
 import { card } from './card.fixture';
 
 describe('card states', () => {
@@ -62,5 +62,21 @@ describe('the stack', () => {
     ];
     expect(dragAllFiles(cards)).toEqual(['/w/1.png', '/w/4.png']);
     expect(canDrag(cards[1])).toBe(false);
+  });
+});
+
+describe('the open tool', () => {
+  const tool = { id: 'a', kind: 'rename' as const };
+
+  it('stays open while its card is finished and idle', () => {
+    expect(openTool(tool, [card({ kind: 'done' })])).toEqual(tool);
+    expect(openTool(null, [card({ kind: 'done' })])).toBeNull();
+  });
+
+  it('closes when its card is gone, busy, or has no file', () => {
+    expect(openTool(tool, [])).toBeNull();
+    expect(openTool(tool, [card({ kind: 'queued' })])).toBeNull();
+    expect(openTool(tool, [card({ kind: 'done' }, { output: null })])).toBeNull();
+    expect(openTool(tool, [card({ kind: 'done' }, { id: 'b' })])).toBeNull();
   });
 });

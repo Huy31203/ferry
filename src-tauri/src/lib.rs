@@ -63,6 +63,7 @@ pub fn run() {
             commands::card_edit,
             commands::card_convert,
             commands::card_rename,
+            windows::stack_focus,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")

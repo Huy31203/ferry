@@ -44,6 +44,8 @@
   "rename.taken": "Name taken",
   "rename.gone": "File no longer there",
   "card.no_original": "Original no longer kept",
+  "card.rename": "Rename",
+  "card.rename_named": "Rename {name}",
   "slider.scale": "{n} % · {w}×{h}",
   "slider.scale_only": "{n} %",
   "slider.quality": "q {q}",
