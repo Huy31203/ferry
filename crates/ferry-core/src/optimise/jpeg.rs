@@ -12,6 +12,7 @@ use mozjpeg_sys::{
 };
 
 use super::{OptimiseError, OptimiseOptions, quality};
+use crate::edit::raster::Raster;
 
 const EXIF_PREFIX: &[u8] = b"Exif\0\0";
 const ICC_PREFIX: &[u8] = b"ICC_PROFILE\0";
@@ -153,6 +154,142 @@ fn run(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     }
     encoder.write_scanlines(&pixels).map_err(encode_err)?;
     encoder.finish().map_err(encode_err)
+}
+
+/// The EXIF Orientation of a JPEG, read from its APP1 segments; 1 when absent.
+pub(crate) fn orientation(data: &[u8]) -> u16 {
+    let mut pos = 2; // past SOI
+    while let (Some(&0xFF), Some(&marker)) = (data.get(pos), data.get(pos + 1)) {
+        match marker {
+            0xFF => pos += 1,
+            0x01 | 0xD0..=0xD8 => pos += 2,
+            0xD9 | 0xDA => break,
+            _ => {
+                let Some(len) = data.get(pos + 2..pos + 4) else {
+                    break;
+                };
+                let len = usize::from(u16::from_be_bytes([len[0], len[1]]));
+                if marker == 0xE1
+                    && let Some(found) = data.get(pos + 4..pos + 2 + len).and_then(exif_orientation)
+                {
+                    return found;
+                }
+                pos += 2 + len;
+            }
+        }
+    }
+    1
+}
+
+/// The stored pixels as straight RGBA (not yet oriented), the ICC profile
+/// reassembled from its APP2 segments, and the EXIF orientation.
+pub(crate) fn decode_raster(input: &[u8]) -> Result<(Raster, u16), OptimiseError> {
+    if !reaches_eoi(input) {
+        return Err(OptimiseError::Decode("the JPEG is incomplete".into()));
+    }
+    let raster = catch_unwind(AssertUnwindSafe(|| read_raster(input)))
+        .map_err(|_| OptimiseError::Decode("the JPEG is corrupt".into()))??;
+    Ok((raster, orientation(input)))
+}
+
+fn read_raster(input: &[u8]) -> Result<Raster, OptimiseError> {
+    let decode_err = |e: std::io::Error| OptimiseError::Decode(e.to_string());
+    let decoder = Decompress::with_err(strict_error_mgr())
+        .with_markers(&[Marker::APP(2)])
+        .from_mem(input)
+        .map_err(decode_err)?;
+    let (width, height) = decoder.size();
+    let mut parts: Vec<(u8, Vec<u8>)> = decoder
+        .markers()
+        .filter(|m| m.data.starts_with(ICC_PREFIX) && m.data.len() > ICC_PREFIX.len() + 2)
+        .map(|m| {
+            (
+                m.data[ICC_PREFIX.len()],
+                m.data[ICC_PREFIX.len() + 2..].to_vec(),
+            )
+        })
+        .collect();
+    parts.sort_by_key(|(sequence, _)| *sequence);
+    let icc = (!parts.is_empty()).then(|| parts.into_iter().flat_map(|(_, data)| data).collect());
+    let rgba: Vec<u8> = match decoder.color_space() {
+        ColorSpace::JCS_GRAYSCALE => decoder
+            .grayscale()
+            .and_then(|mut d| d.read_scanlines::<u8>())
+            .map_err(decode_err)?
+            .into_iter()
+            .flat_map(|v| [v, v, v, 255])
+            .collect(),
+        ColorSpace::JCS_CMYK | ColorSpace::JCS_YCCK => {
+            return Err(OptimiseError::Unsupported("CMYK JPEG".into()));
+        }
+        _ => decoder
+            .rgb()
+            .and_then(|mut d| d.read_scanlines::<u8>())
+            .map_err(decode_err)?
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+    };
+    Ok(Raster {
+        width: width as u32,
+        height: height as u32,
+        rgba,
+        icc,
+    })
+}
+
+/// Edited pixels as a progressive JPEG: alpha flattened onto white, the ICC
+/// profile in APP2 segments, no EXIF (the pixels are already upright).
+pub(crate) fn encode_raster(r: &Raster, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    catch_unwind(AssertUnwindSafe(|| write_raster(r, o)))
+        .map_err(|_| OptimiseError::Encode("mozjpeg failed".into()))?
+}
+
+fn write_raster(r: &Raster, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    let encode_err = |e: std::io::Error| OptimiseError::Encode(e.to_string());
+    let rgb: Vec<u8> = r
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            let alpha = u32::from(p[3]);
+            let over_white =
+                |c: u8| ((u32::from(c) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+            [over_white(p[0]), over_white(p[1]), over_white(p[2])]
+        })
+        .collect();
+    let mut encoder = Compress::new(ColorSpace::JCS_RGB);
+    encoder.set_size(r.width as usize, r.height as usize);
+    encoder.set_quality(f32::from(quality(o)));
+    encoder.set_progressive_mode();
+    encoder.set_optimize_coding(true);
+    let mut encoder = encoder.start_compress(Vec::new()).map_err(encode_err)?;
+    if let Some(icc) = &r.icc {
+        for segment in icc_segments(icc) {
+            encoder.write_marker(Marker::APP(2), &segment);
+        }
+    }
+    encoder.write_scanlines(&rgb).map_err(encode_err)?;
+    encoder.finish().map_err(encode_err)
+}
+
+/// An ICC profile as APP2 payloads: `ICC_PROFILE\0`, sequence number (from
+/// 1), segment count, then at most 65 519 bytes each.
+fn icc_segments(icc: &[u8]) -> Vec<Vec<u8>> {
+    let parts: Vec<&[u8]> = icc.chunks(65_519).collect();
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| {
+            let mut segment = ICC_PREFIX.to_vec();
+            segment.extend_from_slice(&[i as u8 + 1, parts.len() as u8]);
+            segment.extend_from_slice(part);
+            segment
+        })
+        .collect()
 }
 
 /// The APP1 segments to write: all of them when keeping metadata, otherwise a

@@ -5,6 +5,7 @@
 use webp::{Decoder, Encoder, WebPConfig};
 
 use super::{OptimiseError, OptimiseOptions, quality};
+use crate::edit::raster::Raster;
 
 const ICC_FLAG: u8 = 0x20;
 const ALPHA_FLAG: u8 = 0x10;
@@ -19,13 +20,7 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
         return Err(OptimiseError::Cancelled);
     }
 
-    let mut config =
-        WebPConfig::new().map_err(|()| OptimiseError::Encode("libwebp config".into()))?;
-    config.lossless = 0;
-    config.quality = f32::from(quality(o));
-    config.method = 4;
-    config.alpha_compression = 1;
-    config.alpha_quality = 100;
+    let config = config(o)?;
     let encoded = Encoder::new(&image, image.layout(), image.width(), image.height())
         .encode_advanced(&config)
         .map_err(|e| OptimiseError::Encode(format!("{e:?}")))?;
@@ -50,6 +45,58 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
         image.is_alpha(),
         &extras,
     ))
+}
+
+/// Lossy, method 4, alpha kept at full quality.
+fn config(o: &OptimiseOptions) -> Result<WebPConfig, OptimiseError> {
+    let mut config =
+        WebPConfig::new().map_err(|()| OptimiseError::Encode("libwebp config".into()))?;
+    config.lossless = 0;
+    config.quality = f32::from(quality(o));
+    config.method = 4;
+    config.alpha_compression = 1;
+    config.alpha_quality = 100;
+    Ok(config)
+}
+
+/// A still WebP as straight RGBA, with its ICC profile.
+pub(crate) fn decode_raster(input: &[u8]) -> Result<Raster, OptimiseError> {
+    let image = Decoder::new(input)
+        .decode()
+        .ok_or_else(|| OptimiseError::Decode("not a still WebP".into()))?;
+    let data: &[u8] = &image;
+    let rgba = if image.is_alpha() {
+        data.to_vec()
+    } else {
+        data.as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect()
+    };
+    let icc = chunks(input)
+        .iter()
+        .find(|(name, _)| name == b"ICCP")
+        .map(|(_, data)| data.to_vec());
+    Ok(Raster {
+        width: image.width(),
+        height: image.height(),
+        rgba,
+        icc,
+    })
+}
+
+/// Edited pixels as a lossy WebP with the ICC profile.
+pub(crate) fn encode_raster(r: &Raster, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+    let encoded = Encoder::from_rgba(&r.rgba, r.width, r.height)
+        .encode_advanced(&config(o)?)
+        .map_err(|e| OptimiseError::Encode(format!("{e:?}")))?;
+    let alpha = r.rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+    let extras = Extras {
+        icc: r.icc.clone(),
+        ..Extras::default()
+    };
+    Ok(assemble(&encoded, r.width, r.height, alpha, &extras))
 }
 
 #[derive(Default)]

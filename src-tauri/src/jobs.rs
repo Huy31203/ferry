@@ -349,7 +349,22 @@ fn idle_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
 fn run_options(app: &AppHandle, cancel: CancelToken) -> RunOptions {
     let state = app.state::<AppState>();
     let settings = state.settings.read().unwrap();
-    RunOptions::new(&settings, state.gifsicle.clone(), cancel)
+    RunOptions::new(
+        &settings,
+        state.gifsicle.clone(),
+        state.work_dir.clone(),
+        move_to_trash,
+        cancel,
+    )
+}
+
+/// Move a file to the Trash / Recycle Bin. A failure leaves it where it is
+/// and is logged (spec §6).
+fn move_to_trash(path: &Path) -> std::io::Result<()> {
+    trash::delete(path).map_err(|e| {
+        warn!(path = %path.display(), "could not move to the Trash: {e}");
+        std::io::Error::other(e.to_string())
+    })
 }
 
 fn entry_name(entry: &Entry) -> String {

@@ -6,6 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::edit::Edits;
+use crate::sniff::Format;
+
 /// Unique across app launches, because it names the job's backup folder.
 /// Only `0-9`, `a-f` and `-`, so it is safe as a folder name on every OS.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -66,6 +69,20 @@ pub struct JobUpdate {
     pub can_retry: bool,
     /// The file the card's copy, drag and reveal act on, once it exists.
     pub output: Option<PathBuf>,
+    /// The original's size as shown (JPEG orientation applied).
+    pub dims_before: Option<(u32, u32)>,
+    /// The result's size when an edit changed it.
+    pub dims_after: Option<(u32, u32)>,
+    /// The current result's format; `None` on a notice.
+    pub format: Option<Format>,
+    pub converted: bool,
+    /// The edit tools apply: the original is still backed up, the job is idle,
+    /// and it is not an animated WebP or APNG.
+    pub can_edit: bool,
+    /// The recipe the sliders and popovers start from.
+    pub edits: Edits,
+    /// An amber note, such as "Couldn't reach 1 MB — try downscaling".
+    pub note: Option<String>,
 }
 
 #[cfg(test)]
@@ -123,6 +140,13 @@ mod tests {
             can_restore: true,
             can_retry: false,
             output: Some(PathBuf::from("/tmp/work/shot.png")),
+            dims_before: Some((2880, 1800)),
+            dims_after: Some((1440, 900)),
+            format: Some(Format::WebP),
+            converted: true,
+            can_edit: true,
+            edits: Edits::default(),
+            note: Some("Couldn't reach 1 MB".into()),
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains(r#""source":"clipboard""#), "{json}");
