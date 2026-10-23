@@ -38,3 +38,12 @@ One section per stream, added as each plan lands. Answer before implementation s
 7. Batch Adjust panel only has compression/Extreme, downscale %, convert-to. **Recommend: yes for this cycle.**
 - Brief mismatch: `src/lib/types.ts` does not exist; TS mirrors live in `src/lib/ipc.ts`; D adds `src/lib/drop-ipc.ts`.
 - Hooks: A/B/E extend `intake::classify`; F receives `drag:tap` and may wrap `intake::accept`; I gets `came_from_drop`. Integrator swaps D's `jobs::start` to I's `jobs::start_auto_copied` at merge.
+
+## G app-services (`plans/2026-10-23-ferry-sG-app-services.md`, 15 tasks; new dep `tauri-plugin-updater` 2.14.0 Apache-2.0/MIT, transitive all permissive)
+**User actions (implementer cannot do):** (1) `pnpm tauri signer generate -w ~/.tauri/ferry-updater.key` with a strong password, back up key and password (losing either means installed copies never update again); (2) put `~/.tauri/ferry-updater.key.pub` content into `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`; (3) add GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (releases stop at "Check updater signing" until done); (4) keep Releases public; (5) users on 0.2.0 download the first updater-enabled release by hand once.
+1. Update prompt notes come from the fixed "Unsigned build..." `releaseBody`; keep or per-version notes file? **Recommend: keep this cycle.**
+2. Check 1 min after start, then every 6 h. **Recommend: yes.**
+3. Custom rail order is applied with CSS, so Tab order differs from what is shown. **Recommend: accept now; fix the rail markup after integration, once `Card.svelte` merges settle.**
+4. No tray "update available" dot; menu item and pill show it. **Recommend: accept.**
+5. Sync split: launch at login, Dock icon, sync settings and skipped version stay local; hotkeys, hover keys and ignored apps sync only between same-OS computers. **Recommend: yes, and the integrator adds C's watched folders and H's per-type "Edit with" apps to `settings_sync::LOCAL` (both hold machine-specific paths).**
+- Windows update install built but not tested on a real desktop.

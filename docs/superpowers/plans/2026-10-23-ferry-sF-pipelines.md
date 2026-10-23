@@ -1998,6 +1998,7 @@ pub fn hide(app: &AppHandle);
 | --- | --- | --- |
 | `pipe_zones_show` | `(app)` | `Preview` mode |
 | `pipe_zones_hide` | `(app)` | |
+| `pipe_zones_drag` | `(app, entered: bool)` | The page reports drag `enter` (true) and `leave` (false), for the drag-mode hide timers |
 | `pipe_zones_ready` | `(app) -> ZonesView` | |
 | `pipe_classify` | `(paths: Vec<String>) -> Vec<Option<Media>>` | `Media::guess` on each extension |
 | `pipe_zone_drop` | `async (app, zone: u32, paths: Vec<String>)` | Per path: a folder gets the notice `pipe.zones.folder_skipped`; a file goes through `Job::file`, where `Err` is a notice and `Ok` calls `pipe_jobs::start_assigned(…, Trigger::Zone(zone), Level::Normal, None)`. Hide after 300 ms |
