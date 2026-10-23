@@ -144,8 +144,8 @@
     }
   }
 
-  /** The slider's track length in px; the thumbnail below the rail. */
-  const TRACK = 136;
+  /** The slider's track length in px; its panel (track plus 24 px padding) fits under the rail inside the card. */
+  const TRACK = $derived(compact ? 72 : 112);
   /** Fallback switch (Task 11): false if drags never reach the panel; the buttons then only step. */
   const PRESS_AND_DRAG = true;
   type SliderKind = 'downscale' | 'compression';
@@ -467,6 +467,7 @@
       label={slideLabel}
       left={slide.left}
       track={TRACK}
+      width={compact ? 220 : 300}
     />
   {/if}
 
@@ -554,7 +555,7 @@
       <span class="detail">{card.detail}</span>
     {/if}
   </div>
-  {#if tip}
+  {#if tip && !slide?.moved}
     <div class="tip" role="tooltip" style="left: {tip.left}px; top: {tip.top}px">{tip.text}</div>
   {/if}
 </article>
