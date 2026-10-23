@@ -11,7 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::state::AppState;
-use crate::{jobs, logging, platform, prefs};
+use crate::{jobs, logging, menu, platform, prefs};
 
 /// Run `work` on a blocking worker and return its result.
 async fn blocking<T: Send + 'static>(
@@ -94,6 +94,19 @@ pub async fn card_rename(app: AppHandle, id: JobId, stem: String) -> Result<(), 
 #[tauri::command]
 pub fn card_cancel(app: AppHandle, id: JobId) {
     jobs::cancel(&app, &id);
+}
+
+/// The card's ⋯ button or right-click: the native context menu at `(x, y)`
+/// in the stack page. Sync, so it runs on the main thread, as menus must.
+#[tauri::command]
+pub fn card_menu(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    id: JobId,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    menu::popup(&app, &window, &id, x, y)
 }
 
 #[tauri::command]

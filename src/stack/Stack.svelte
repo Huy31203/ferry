@@ -2,9 +2,9 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { draggable, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
+  import { draggable, isBusy, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
   import type { CropFrame } from '../lib/edits';
-  import type { EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
+  import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
   import Card from './Card.svelte';
   import CropPopover from './CropPopover.svelte';
@@ -74,6 +74,23 @@
     if (tool !== null && tool.kind !== 'slider') tool = null;
   }
 
+  // A menu item or hover key that ends here. M3c's open_compare and
+  // quick_preview reject until M3c is merged; the rejection is only logged.
+  function cardAction({ id, action }: CardAction) {
+    const card = cards.find((c) => c.id === id);
+    if (!card) return;
+    if (action === 'compare' || action === 'preview') {
+      invoke(action === 'compare' ? 'open_compare' : 'quick_preview', { id }).catch((e) =>
+        console.warn(action, e),
+      );
+    } else if (action === 'close') {
+      if (isBusy(card.state)) invoke('card_cancel', { id });
+      close(id);
+    } else {
+      setTool(id, action);
+    }
+  }
+
   const top = $derived(config.corner.startsWith('top'));
   const railRight = $derived(config.corner.endsWith('left'));
 
@@ -136,6 +153,7 @@
         pointAt(event.payload.x, event.payload.fromBottom),
       ),
       listen('stack:pointer-leave', leave),
+      listen<CardAction>('card:action', (event) => cardAction(event.payload)),
       listen<Settings>('settings:changed', (event) => {
         const { floating, images } = event.payload;
         config = {

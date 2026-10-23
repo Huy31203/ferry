@@ -160,6 +160,16 @@ pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
     Ok(())
 }
 
+/// "Copy path": the result's full path as text.
+pub fn copy_path(app: &AppHandle, id: &JobId) -> Result<(), String> {
+    let path = output(app, id).ok_or("the file is gone")?;
+    let state = app.state::<AppState>();
+    let mut log = state.clipboard.lock().unwrap();
+    let seq = platform::clipboard::write_text(&path.to_string_lossy())?;
+    log.record(seq, None);
+    Ok(())
+}
+
 /// Stop a queued or running job and leave its file as it was. A first run's
 /// card is already gone; a cancelled re-run goes back to the earlier result's
 /// card, which keeps its Restore.

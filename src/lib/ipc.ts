@@ -56,6 +56,12 @@ export interface JobUpdate {
   edit_hint: string | null;
 }
 
+/** Rust → stack: a menu item or hover key that ends in the page (`menu.rs`, `hover_keys.rs`). */
+export interface CardAction {
+  id: string;
+  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close';
+}
+
 export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
 
 /** The settings the stack page needs (commands::stack_ready). */
