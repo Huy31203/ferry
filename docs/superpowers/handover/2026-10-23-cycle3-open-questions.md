@@ -82,3 +82,12 @@ Aligned to A's plan: uses `ffmpeg::exec -> Captured`, A's refactor names (`Conte
 6. Use Apple `aac_at` on macOS when present? **Recommend: yes (better quality at the same bitrate, one start-up check).**
 7. Defaults: loudness Off; cover art Optimise (no resize); 192 kbps MP3/AAC, 128 kbps Opus; size limit 2000 MB. **Recommend: yes.**
 - Merge notes: C sets `AUDIO = true`, routes `audio_job` through `Job::file`, stops counting audio as image, and puts `selfwrite::record` in the shared `replace_with` helper. A: B's M4A brand check runs before A's `ftyp` branch. D: nothing needed.
+
+## Decisions, 2026-10-23 (user: "all go with recommended, even E")
+Every **Recommend** above is accepted for D, G, A, F, B, H, and for E when its plan lands. H question 1 (which shelf apps are installed) still needs the user's answer before H's manual check.
+Plan amendments this requires (applied in the plans themselves, since each implementer sees only its own plan):
+- A: drop x265 (HEVC by hardware encoders only); reuse F's `ferry_core::optimise::Encoder` and `Edits.encoder` instead of defining its own encoder choice.
+- B: use `aac_at` on macOS when present, native `aac` otherwise.
+- C: screenshot/recording watching default off; drop `.avi`.
+- D: Windows drop zone default is "modifier tap only", edge-tab auto-show opt-in; list keys need a click on the list first.
+Integration tasks for `feat/c3-all` (after the streams merge): C/D `jobs::start` -> I's `jobs::start_auto_copied`; FR-T3 auto-optimise copied video (A + I); F's three D edits (`drag:ended`, `start_assigned` in `intake::accept`, `pipe.zones.hint_tap`); F pipeline rail buttons on G's rail editor; C/H machine-specific keys into G's `settings_sync::LOCAL`; check F's copy step writes are recorded by C; C's video/audio hooks wired to A/B; rail Tab order fix after `Card.svelte` merges settle.
