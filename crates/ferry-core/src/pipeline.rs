@@ -6,6 +6,7 @@ use std::fmt::Display;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{Local, NaiveDateTime};
 use serde::Serialize;
@@ -126,13 +127,31 @@ struct Written {
     created: bool,
 }
 
+/// A file as Ferry left it: if either differs later, someone else changed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: SystemTime,
+}
+
+impl Stamp {
+    fn of(path: &Path) -> Option<Self> {
+        let meta = fs::metadata(path).ok()?;
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok()?,
+        })
+    }
+}
+
 /// What became of a file job's source (the original, where it came from).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceState {
     /// Ferry has not touched it.
     Untouched,
-    /// Ferry wrote its result over it.
-    Overwritten,
+    /// Ferry wrote its result over it. `None`: the file could not be read
+    /// back, so nothing can tell if it changed.
+    Overwritten(Option<Stamp>),
     /// Ferry moved it to the Trash for a conversion.
     Trashed,
 }
@@ -565,12 +584,12 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return self.fail(t("error.backup_missing"), e),
         };
-        self.edits = Edits::default();
-        self.dims_after = None;
-        self.note = None;
         if let Err((reason, cause)) = self.put_back(&original, true, o, deliver) {
             return self.fail(reason, cause);
         }
+        self.edits = Edits::default();
+        self.dims_after = None;
+        self.note = None;
         Finished {
             update: self.update(JobState::Restored, None),
             cause: None,
@@ -625,6 +644,7 @@ impl Job {
                     .map_err(|e| (t("error.clipboard_write"), e))?;
             }
             Source::File => {
+                self.check_source()?;
                 let source = self
                     .source_path
                     .clone()
@@ -670,7 +690,8 @@ impl Job {
                 if trash_source {
                     self.source_state = SourceState::Trashed;
                 } else if path == source {
-                    self.source_state = SourceState::Overwritten;
+                    // After write_file, which may set the dates back.
+                    self.source_state = SourceState::Overwritten(Stamp::of(&path));
                 }
                 self.last = Some(Written {
                     path: path.clone(),
@@ -707,6 +728,7 @@ impl Job {
                 }
             }
             Source::File => {
+                self.check_source()?;
                 if let Some(last) = self.last.clone() {
                     self.undo(&last, original, o)?;
                     self.last = None;
@@ -722,6 +744,22 @@ impl Job {
         Ok(())
     }
 
+    /// Refuse to go on when the source holds something Ferry did not write:
+    /// the user (or another app) changed it since, and a write would lose that.
+    fn check_source(&self) -> Result<(), (String, String)> {
+        if let SourceState::Overwritten(Some(wrote)) = self.source_state
+            && let Some(source) = &self.source_path
+            && let Some(now) = Stamp::of(source)
+            && now != wrote
+        {
+            return Err((
+                t("error.source_changed"),
+                format!("{} no longer matches what Ferry wrote", source.display()),
+            ));
+        }
+        Ok(())
+    }
+
     /// Take a file job's result back: a file Ferry made goes to the Trash; a
     /// source Ferry overwrote or trashed gets the original again.
     fn undo(
@@ -734,9 +772,9 @@ impl Job {
             let _ = (o.trash)(&last.path);
         }
         if self.source_state != SourceState::Untouched
-            && let Some(source) = &self.source_path
+            && let Some(source) = self.source_path.clone()
         {
-            self.write_file(source, original, source, o)?;
+            self.write_file(&source, original, &source, o)?;
             self.source_state = SourceState::Untouched;
         }
         Ok(())
@@ -1666,6 +1704,94 @@ mod tests {
         run(&mut job, Level::Normal, &options(), &env);
         job.cancel_recipe();
         assert_eq!(job.edits.scale, Some(50));
+    }
+
+    const CHANGED: &str = "File changed since Ferry wrote it";
+
+    #[test]
+    fn an_edit_refuses_a_source_changed_outside_ferry() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        fs::write(&path, b"user's newer edit").unwrap();
+        job.edit(scale(50));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            update.state,
+            JobState::Error {
+                reason: CHANGED.into()
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"user's newer edit");
+    }
+
+    #[test]
+    fn restore_refuses_a_source_changed_outside_ferry() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        fs::write(&path, b"user's newer edit").unwrap();
+        let restored = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+        assert_eq!(
+            restored.state,
+            JobState::Error {
+                reason: CHANGED.into()
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"user's newer edit");
+    }
+
+    #[test]
+    fn a_source_with_the_same_size_but_another_date_counts_as_changed() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        let times = fsutil::read_times(&path).unwrap();
+        let later = Times {
+            modified: times.modified + std::time::Duration::from_secs(60),
+            ..times
+        };
+        fsutil::set_times(&path, &later).unwrap();
+        let restored = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+        assert!(matches!(restored.state, JobState::Error { .. }));
+    }
+
+    #[test]
+    fn a_convert_refuses_to_trash_a_source_changed_outside_ferry() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        fs::write(&path, b"user's newer edit").unwrap();
+        job.edit(convert(Format::WebP));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert!(matches!(update.state, JobState::Error { .. }));
+        assert_eq!(fs::read(&path).unwrap(), b"user's newer edit");
+        assert!(
+            !env.dir.path().join("shot.webp").exists(),
+            "nothing was written"
+        );
+    }
+
+    #[test]
+    fn a_source_ferry_wrote_restores_even_after_several_edits() {
+        let env = Env::new();
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        for percent in [80, 60] {
+            job.edit(scale(percent));
+            let state = run(&mut job, Level::Normal, &options(), &env)
+                .0
+                .unwrap()
+                .update
+                .state;
+            assert_eq!(state, JobState::Done);
+        }
+        let restored = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+        assert_eq!(restored.state, JobState::Restored);
+        assert_eq!(fs::read(&path).unwrap(), input);
     }
 
     #[test]
