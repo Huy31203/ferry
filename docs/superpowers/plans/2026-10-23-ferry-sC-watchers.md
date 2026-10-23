@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ferry optimises new screenshots, new screen recordings and new files in folders the user watches. Each file is handled once it has finished writing. Ferry's own writes never trigger a watcher again. A "Watched folders" pane in Settings controls all of it.
+**Goal:** Ferry optimises new screenshots, new screen recordings and new files in folders the user watches. Screenshot and recording watching are off by default; the user turns them on in Settings. Each file is handled once it has finished writing. Ferry's own writes never trigger a watcher again. A "Watched folders" pane in Settings controls all of it.
 
 **Architecture:** `ferry-core` gains a `watch` module. It contains a raw `notify` watcher thread, Ferry's own settle state machine (its own debouncer), a router from file to source and a process-wide *self-write ledger* fed by `fsutil`. Everything except the thread is pure and unit-tested with a fake clock and a fake file system. Live tests use real temp folders and the real pipeline. When a file is ready, the Tauri app turns it into an ordinary `Job::file` and starts it through the existing `jobs::start`. Video, audio and PDF go through named hooks that return "unsupported" until streams A, B and E land.
 
@@ -50,7 +50,8 @@ These five inputs are the ones most likely to bite a real user. Each has a test 
 | --- | --- | --- |
 | Watch crate | `notify = "8.2.0"` (CC0-1.0, released 2025-08-03, MSRV 1.77), default features (`macos_fsevent`). Uses FSEvents on macOS, ReadDirectoryChangesW on Windows and inotify on Linux. | R§5 names `notify`. 8.2.0 is the newest stable; 9.0.0 is only at `-rc.6`. Transitive crates are all permissive: `notify-types` 2.x (MIT OR Apache-2.0), `fsevent-sys` 4.x (MIT, macOS), `windows-sys` 0.60.x (MIT OR Apache-2.0, Windows), `walkdir` 2.5 (Unlicense OR MIT, already in Cargo.lock), `inotify`/`inotify-sys` (ISC, Linux only), `mio` 1.x (MIT, Linux), `libc`, `log`, `bitflags` (already present). None is GPL/LGPL/AGPL or patent-encumbered. |
 | Debouncing | **Own settle state machine** (`watch::settle`), not `notify-debouncer-full` 0.7.0 or `-mini` 0.7.0 | (1) A debouncer only merges events in a time window. It does not prove a write finished. Ferry needs a size+mtime-stable check plus the Windows exclusive-open check (R§5). (2) `debouncer-full` walks every watched tree with `walkdir` at start to build its file-id cache. That costs CPU and I/O on big folders such as Downloads (NFR-R1). (3) A pure state machine with an injected clock and probe gives exact, fast, deterministic tests. (4) One dependency fewer. |
-| Recursion | Non-recursive: capture folders and watched folders only see files directly inside them | R§4.12 lists no recursion option. Subfolders hold Ferry's `.trash` test bins, app bundles, and so on. Listed as an open question. |
+| Capture defaults | `watch.captures.screenshots` and `watch.captures.recordings` default to **false** (off). `show_results` defaults to true. A settings file without a `[watch]` section (every 0.2.0 install) loads with both off. | User decision (2026-10-23): on upgrade Ferry must not start optimising Desktop screenshots in place, and macOS must not show a Desktop-access prompt, until the user asks for it. With both off, `plan::build` marks the capture folders `Paused` and never lists them, so no Desktop prompt appears. Onboarding (out of scope) may turn them on later. |
+| Recursion | Non-recursive: capture folders and watched folders only see files directly inside them | R§4.12 lists no recursion option. Subfolders hold Ferry's `.trash` test bins, app bundles, and so on. User decision: no recursion option this cycle. |
 | What starts a wait | Only `Create(_)` and rename-into (`Modify(Name(To \| Both \| Any))`) start the settle wait. Data-modify events only extend a wait already running. `Modify(Metadata(_))` and `Access(_)` are ignored. Remove events never cancel a wait: the probe drops a file that is gone. | Tagging an old file, cloud hydration or dehydration (an attribute change) and Spotlight never look like "a file arrived". Rename-into catches browser downloads (`.crdownload` → final name) and macOS screenshot temp files (`.Screenshot …` → final name). |
 | Settle (partial writes) | A file is *settled* when all of these hold: no event for it for `quiet` = 1 s; two probes at least `stable` = 1 s apart saw the same `(len, mtime)`; `len > 0`; not a cloud placeholder; and (Windows only) it opens with `share_mode(0)`. Probes run every `poll` = 500 ms. A wait with no event for `max_wait` = 30 min is dropped. At most 1,000 files wait at once. | R§2.4 "wait until a file stops changing". R§5 Windows "open without a sharing violation". Typical delay is about 2 s after the last write. |
 | Names never processed | Ignored by name: anything starting with `.` (macOS screenshot temp `.Screenshot…`, AppleDouble `._x`, `.DS_Store`, iCloud `.x.icloud`) or `~$`; anything ending, case-insensitively, in `.ferry-tmp`, `.part`, `.partial`, `.crdownload`, `.download`, `.tmp`, `.temp`; and `thumbs.db`, `desktop.ini`. | Temp and placeholder files; `.ferry-tmp` is `fsutil::atomic_replace`'s own temp. |
@@ -58,8 +59,8 @@ These five inputs are the ones most likely to bite a real user. Each has a test 
 | No feedback loops | Four layers. (1) **Self-write ledger** `ferry_core::selfwrite`: `fsutil::atomic_replace` records `(canonical path → len, mtime)` after its rename. `fsutil::set_times` refreshes an entry that already exists. `Job::rename` records the new name. A settled file whose current stamp equals its ledger stamp is Ferry's own and is dropped. Entries live 10 min; the cap is 4,096. (2) **Excluded roots**: backups, working dir, log dir and config dir are never watched and their events are dropped. (3) Names ending `.ferry-tmp` are ignored. (4) **Seen map**: a path already settled with the same stamp is never handled twice (TTL 24 h, cap 4,096). | Covers in-place overwrite, In-place convert (new `x.webp`), Same-folder and Specific-folder outputs landing in a watched folder, Restore, card Rename, and settings saves. The ledger is consulted only at *settle* time, at least 2 s after the write, so the write always records before the check. A ledger keyed by stamp (not by path alone) still lets the user's own later edit of the same file through. |
 | Path identity | `selfwrite::key(path)`: macOS/Linux use `fs::canonicalize`, falling back to canonical parent + file name, then to the path as given. Windows uses `std::path::absolute` and then the lowercased string, with no `\\?\` prefix. Every comparison (ledger, seen, routing, excluded roots) goes through `key`. | FSEvents reports `/private/var/…` for `/var/…` temp dirs and resolves symlinks. Windows paths are case-insensitive. A `\\?\` path would leak into card output paths and Explorer. |
 | macOS capture folder | Read `location` from `NSUserDefaults` initialised with suite `com.apple.screencapture` (objc2-foundation feature `NSUserDefaults`, no shelling out). Expand `~`. If the value is unset, blank or not a directory, use `~/Desktop`. Re-read on every 30 s rescan, because the user can change it in ⇧⌘5 › Options. | R§5: "Read the screenshot location setting (default Desktop)". Ferry is not sandboxed, so another domain's defaults can be read. Apple docs: `NSUserDefaults` picks up other processes' changes. |
-| macOS capture identity | The Desktop also holds other files. An image is a screenshot only if it has the xattr `com.apple.metadata:kMDItemIsScreenCapture`. A video is a recording if it has that xattr **or** its name starts with `Screen Recording` (ASCII case-insensitive). A file that fails these checks falls through to a watched-folder rule for the same folder, if there is one. | screencaptureui writes the marker (C1 §4.2 relies on it). Whether recordings carry it is unverified: the manual check settles it (open question 2). |
-| Windows capture folders | `FOLDERID_Screenshots` (`SHGetKnownFolderPath`, `KF_FLAG_DONT_VERIFY`), `FOLDERID_Videos`\\`Captures` (Game Bar) and `FOLDERID_Videos`\\`Screen Recordings` (Snipping Tool). Every image or video in them counts as a capture. Code is `cfg(windows)`. | R§5 table. These folders hold only captures. `DONT_VERIFY` returns the path even before the first capture creates the folder; it shows as "Appears after your first capture" until then. |
+| macOS capture identity | The Desktop also holds other files. An image is a screenshot only if it has the xattr `com.apple.metadata:kMDItemIsScreenCapture`. A video is a recording if it has that xattr **or** its name starts with `Screen Recording` (ASCII case-insensitive). A file that fails these checks falls through to a watched-folder rule for the same folder, if there is one. | screencaptureui writes the marker (C1 §4.2 relies on it). Whether recordings carry it is unverified. User decision: keep the name fallback for now. Task 11 item 4 records whether recordings carry the marker; this stream does not change the rule based on the answer (a later cycle decides whether to drop the fallback). |
+| Windows capture folders | `FOLDERID_Screenshots` (`SHGetKnownFolderPath`, `KF_FLAG_DONT_VERIFY`), `FOLDERID_Videos`\\`Captures` (Game Bar) and `FOLDERID_Videos`\\`Screen Recordings` (Snipping Tool). Every image or video in them counts as a capture. Code is `cfg(windows)`. | R§5 table. These folders hold only captures. `DONT_VERIFY` returns the path even before the first capture creates the folder; it shows as "Appears after your first capture" until then. User decision: use the default `Videos\Captures` only; a Game Bar folder the user moved elsewhere (registry setting) is not followed this cycle. |
 | Burst rule (FR-T5) | Per watched folder, ready files are held for a 2 s window that starts at the first ready file. At window end, if `count > max_files_at_once` (default 10, range 1–1000), **all** of them are skipped and one notice card appears (if the folder's card is on). Otherwise all start. Captures have no burst rule. | "Skip when more than N files arrive at once" needs a window. 2 s adds little latency. |
 | Quiet folders | When a folder's (or captures') "Show a card" is off, its jobs show no Queued/Optimising/Done card and stay out of tray Recent results. If one fails, its Error card shows; from then on it is a normal card. | FR-T5 "per-folder result visibility" + R§3.3 "fail visibly". |
 | Hand-off to the job flow | The watch thread emits `Notice::Ready`. The app runs `dispatch_ready` on `spawn_blocking`: image → `Job::file(path, &settings, has_gifsicle)`; video/audio/PDF → `watch::hooks::{video_job, audio_job, pdf_job}`. Then `RunState::take_automatic`, then `jobs::start(app, job, Level::Normal, None)`. `trigger.rs`, `job.rs`, `sniff.rs`, `output.rs` and `commands.rs` are not changed. | Reuses C1 §5.4 and C2 §4.4 unchanged: backups, In place / Same folder / Specific / Temporary, never-worse, `copy_xattrs` (keeps the screenshot marker, FR-T4). `Job::file` already applies `images.max_size_mb` and `images.ignored_extensions`. |
@@ -146,7 +147,7 @@ Not on the brief's list but likely touched by other streams too; same anchor dis
 
 ```jsonc
 "watch": {
-  "captures": { "screenshots": true, "recordings": true, "show_results": true },
+  "captures": { "screenshots": false, "recordings": false, "show_results": true },  // capture watching is off by default
   "folders": [
     // one per watched folder; defaults shown
     { "path": "~/Downloads",            // stored with ~ (contract_home)
@@ -186,10 +187,23 @@ Not on the brief's list but likely touched by other streams too; same anchor dis
 fn watch_defaults_match_the_plan() {
     let s = Settings::default();
     assert_eq!(serde_json::to_value(&s.watch).unwrap(), json!({
-        "captures": { "screenshots": true, "recordings": true, "show_results": true },
+        "captures": { "screenshots": false, "recordings": false, "show_results": true },
         "folders": []
     }));
     assert_eq!(s.version, 2);
+}
+
+#[test]
+fn an_upgraded_settings_file_leaves_capture_watching_off() {
+    // A 0.2.0 settings file has no [watch] section: Ferry must not start watching the Desktop.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, r#"{"version": 2, "images": {"compression": 80}}"#).unwrap();
+    let (s, _) = Settings::load(&path);
+    assert!(!s.watch.captures.screenshots);
+    assert!(!s.watch.captures.recordings);
+    assert!(s.watch.captures.show_results);
+    assert!(s.watch.folders.is_empty());
 }
 
 #[test]
@@ -239,12 +253,12 @@ fn unknown_fields_in_a_watched_folder_survive() {
 
 - [ ] **Step 2: Run the tests and check they fail**
 
-Run: `cargo test -p ferry-core settings::tests::watch -- --nocapture` and `cargo test -p ferry-core settings::tests::broken_watch`
+Run: `cargo test -p ferry-core settings::tests::watch -- --nocapture`, `cargo test -p ferry-core settings::tests::broken_watch` and `cargo test -p ferry-core settings::tests::an_upgraded_settings_file`
 Expected: compile errors (`Watch`, `Captures`, `WatchedFolder` not found).
 
 - [ ] **Step 3: Implement the structs, defaults, the `Settings.watch` field and `Watch::sanitised`**
 
-Defaults: `Captures { screenshots: true, recordings: true, show_results: true }`; `WatchedFolder { path: "", types: WatchTypes { image: true, video: true, audio: false, pdf: false }, show_results: true, ignore: [], max_files_at_once: 10, paused: false }`.
+Defaults: `Captures { screenshots: false, recordings: false, show_results: true }` (capture watching is off until the user turns it on; see Decisions › Capture defaults). Write `impl Default for Captures` by hand; do not derive it, because `show_results` must default to `true`. `WatchedFolder` defaults: `WatchedFolder { path: "", types: WatchTypes { image: true, video: true, audio: false, pdf: false }, show_results: true, ignore: [], max_files_at_once: 10, paused: false }`.
 
 `sanitised` does the following:
 - trims each `path`;
@@ -257,7 +271,7 @@ Add the one-line call in `Settings::sanitised` at the anchor.
 
 - [ ] **Step 4: Mirror in TS**
 
-Add the interfaces above to `src/lib/settings.ts` after the `hotkeys` field, with the comment `/** Stream C: mirrors ferry_core::settings::Watch. */`. Add `watch: { captures: { screenshots: true, recordings: true, show_results: true }, folders: [] }` to `sample` in `settings.fixture.ts`.
+Add the interfaces above to `src/lib/settings.ts` after the `hotkeys` field, with the comment `/** Stream C: mirrors ferry_core::settings::Watch. */`. Add `watch: { captures: { screenshots: false, recordings: false, show_results: true }, folders: [] }` to `sample` in `settings.fixture.ts` (it mirrors the Rust defaults).
 
 - [ ] **Step 5: Run the tests and check they pass**
 
@@ -388,7 +402,7 @@ git commit -m "feat(core): remember the files Ferry writes so watchers never re-
   - `pub fn is_inside(path: &Path, root: &Path) -> bool`: `selfwrite::key(path).starts_with(selfwrite::key(root))`, component-wise.
 - `watch::media`:
   - `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)] #[serde(rename_all = "snake_case")] pub enum Media { Image, Video, Audio, Pdf }`
-  - `pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mkv", "webm", "avi"];`
+  - `pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mkv", "webm"];`. No `avi`: stream A (video) does not support AVI, so an `.avi` file is not a video for the watcher and is left alone.
   - `pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "aif", "aiff", "mp3", "m4a", "ogg", "opus"];`
   - `pub fn classify(name: &str, head: &[u8]) -> Option<Media>`. In order: `sniff::sniff(head).is_some()` → `Image` (content wins over the extension); `head.starts_with(b"%PDF-")` → `Pdf`; extension (via `trigger::normalise_ext`) in `VIDEO_EXTENSIONS` → `Video`, in `AUDIO_EXTENSIONS` → `Audio`; otherwise `None`.
   - `impl Media { pub fn allowed_by(self, types: &WatchTypes) -> bool }`
@@ -437,6 +451,12 @@ git commit -m "feat(core): remember the files Ferry writes so watchers never re-
     assert_eq!(classify("song.flac", b"fLaC"), Some(Media::Audio));
     assert_eq!(classify("notes.txt", b"hello"), None);
 }
+#[test] fn avi_is_not_a_watched_video() {
+    // Stream A does not support AVI, so the watcher must not hand it over.
+    assert!(!VIDEO_EXTENSIONS.contains(&"avi"));
+    assert_eq!(classify("clip.avi", b"RIFF\x24\0\0\0AVI LIST"), None);
+    assert_eq!(classify("CLIP.AVI", b"RIFF\x24\0\0\0AVI LIST"), None);
+}
 #[test] fn types_allow_each_media() { /* WatchTypes::default(): Image, Video allowed; Audio, Pdf not */ }
 
 // capture.rs
@@ -467,7 +487,11 @@ git commit -m "feat(core): remember the files Ferry writes so watchers never re-
     assert_eq!(capture_kind(&CaptureRule::Everything, "a.png", Media::Image, false), Some(CaptureKind::Screenshot));
     assert_eq!(capture_kind(&CaptureRule::Everything, "a.pdf", Media::Pdf, false), None);
 }
-#[test] fn capture_toggles_gate_each_kind() { /* screenshots:false → wanted(Screenshot) false, wanted(Recording) true */ }
+#[test] fn capture_toggles_gate_each_kind() {
+    // Captures::default() (both off) → wanted(Screenshot) false, wanted(Recording) false.
+    // Captures { screenshots: false, recordings: true, ..Default::default() } → wanted(Screenshot) false, wanted(Recording) true.
+    // Captures { screenshots: true, recordings: false, ..Default::default() } → wanted(Screenshot) true, wanted(Recording) false.
+}
 ```
 
 - [ ] **Step 2: Run the tests and check they fail**
@@ -676,7 +700,7 @@ Engine rules:
 }
 ```
 
-`plan.rs` uses a resolve closure over a `HashMap<PathBuf, Resolve>`, with no file-system access:
+`plan.rs` uses a resolve closure over a `HashMap<PathBuf, Resolve>`, with no file-system access. Capture watching is off in `Watch::default()`, so a test that expects a capture `PlannedDir` or a `Watching` capture status turns `captures.screenshots` (or `recordings`) on first:
 
 ```rust
 #[test] fn statuses_follow_each_folder_in_settings_order() { /* Watching, Missing, Paused, Denied; folders[i].path verbatim */ }
@@ -688,7 +712,7 @@ Engine rules:
 #[test] fn roles_put_captures_first_and_skip_subfolders_and_excluded_roots() {}
 ```
 
-`engine.rs` uses a `FakeFs { files: RefCell<HashMap<PathBuf, FakeFile { probe: Probe, head: Vec<u8>, marked: bool, own: bool }>> }`, fake time, and the `SettleConfig::default()` timeline: a file that arrives at 0 settles at 2000 ms, and a folder burst flushes at 4000 ms. Helper `png_head()` returns the 8 PNG signature bytes plus a fake IHDR:
+`engine.rs` uses a `FakeFs { files: RefCell<HashMap<PathBuf, FakeFile { probe: Probe, head: Vec<u8>, marked: bool, own: bool }>> }`, fake time, and the `SettleConfig::default()` timeline: a file that arrives at 0 settles at 2000 ms, and a folder burst flushes at 4000 ms. Helper `png_head()` returns the 8 PNG signature bytes plus a fake IHDR. Capture watching is off in `Watch::default()`, so every test that expects a capture `Ready` builds its `Watch` with `captures.screenshots = true` and `captures.recordings = true` (helper `captures_on()`); `capture_toggles_gate_screenshots_and_recordings` also checks that `Watch::default()` produces no capture `Ready`:
 
 ```rust
 #[test] fn a_new_image_in_a_watched_folder_is_ready_after_the_burst_window() {
@@ -709,7 +733,10 @@ Engine rules:
     // marked png → Ready{origin: Capture{capture: Screenshot}} at 2000 (no burst wait); unmarked png → Ready{origin: Folder{index:0}} at 4000
 }
 #[test] fn a_recording_is_known_by_marker_or_name() {}
-#[test] fn capture_toggles_gate_screenshots_and_recordings() {}
+#[test] fn capture_toggles_gate_screenshots_and_recordings() {
+    // Watch::default() (both off): a marked screenshot and a marked recording → no Ready (capture dirs are Paused).
+    // screenshots on, recordings off → only the screenshot is Ready; and the reverse.
+}
 #[test] fn captures_have_no_burst_limit() { /* 5 marked screenshots within 3 s → 5 Ready */ }
 #[test] fn an_icloud_re_download_is_ignored() {
     // Gone(/w/In/.a.png.icloud) at 0, Arrived(/w/In/a.png) at 500 → nothing; same pair but Arrived at 11_000 → Ready
@@ -1021,7 +1048,7 @@ fn a_quiet_job_stays_out_of_recent_results() {
 fn a_watch_change_reloads_the_watchers() {
     let base = Settings::default();
     let mut s = base.clone();
-    s.watch.captures.screenshots = false;
+    s.watch.captures.screenshots = true; // the default is off; turning it on is the change
     assert_eq!(Effects::between(&base, &s), Effects { watch: true, ..Effects::default() });
 }
 ```
@@ -1268,7 +1295,7 @@ Expected: 0 errors, 0 warnings; tests PASS.
 - [ ] **Step 3: Manual check on this Mac** (`pnpm tauri dev`, open Settings from the tray)
 
 Look at each of these and record the result in the commit body:
-1. The sidebar shows **Watched folders** last. The pane shows the group "Screenshots and recordings" with three switches. "Optimise new screen recordings" is greyed with "Not available in this version yet". The "Capture folders" row shows `~/Desktop` (or your ⇧⌘5 location) with a green **Watching** chip.
+1. The sidebar shows **Watched folders** last. The pane shows the group "Screenshots and recordings" with three switches. On a fresh settings file "Optimise new screenshots" is **off**, "Optimise new screen recordings" is **off** and greyed with "Not available in this version yet", and "Show a card for screenshots and recordings" is on. The "Capture folders" row shows `~/Desktop` (or your ⇧⌘5 location) with a grey **Paused** chip. Turn "Optimise new screenshots" on: the chip turns green **Watching** within 1 s (macOS may first ask for Desktop access; allow it). Turn it off again: back to **Paused**.
 2. **Add folder…** opens a picker titled "Choose a folder to watch". Picking `~/Downloads` adds a row: path, Images and Videos pressed, Videos/Audio/PDFs chips disabled with that tooltip, Card on, Ignore empty, At once 10, status **Watching**.
 3. Dragging a Finder folder onto the pane adds it. Dragging the same folder again shows "Already watched". Dragging a file shows "That isn't a folder". Picking `~/Library/Application Support/io.ferry.desktop/backups` shows "Ferry's own folders can't be watched".
 4. At the minimum window width (720 px) the table fits with no horizontal page scroll. Long paths end in "…" and show in full on hover.
@@ -1298,10 +1325,10 @@ Expected: all green. Push and confirm every CI job is green: `core (macos-latest
 - [ ] **Step 2: Manual checklist** (release build: `pnpm tauri build --bundles app`, then run `Ferry.app`; watch `~/Library/Logs/io.ferry.desktop/ferry.log`)
 
 Look at each of these and record the result:
-1. **First launch:** macOS asks once whether Ferry may access the Desktop folder. After **Allow**, Settings › Watched folders › Capture folders shows **Watching** within 30 s. If you choose **Don't Allow**, it shows "No access — allow Ferry in your privacy settings" and the app keeps running.
+1. **First launch (defaults off):** start from no settings file (move `~/Library/Application Support/io.ferry.desktop/settings.json` aside) and run `tccutil reset SystemPolicyDesktopFolder io.ferry.desktop`. Launch Ferry. macOS shows **no** Desktop-access prompt. Settings › Watched folders shows "Optimise new screenshots" and "Optimise new screen recordings" off, and Capture folders shows **Paused**. Take a ⇧⌘4 screenshot: no card, the file keeps its size, and the log has no `watched file started`. Quit Ferry, put your 0.2.0 settings file back (upgrade case), run the `tccutil reset` again and relaunch: same result (no prompt, **Paused**, no job for a new screenshot). Then turn "Optimise new screenshots" on. macOS asks once whether Ferry may access the Desktop folder. After **Allow**, Capture folders shows **Watching** within 30 s. If you choose **Don't Allow**, it shows "No access — allow Ferry in your privacy settings" and the app keeps running (to try again, run the `tccutil reset` above and toggle the switch off and on). Leave "Optimise new screenshots" on for the items below.
 2. **⇧⌘4 screenshot:** once the file appears on the Desktop (after the floating thumbnail goes), a card appears within about 3 s. Finder › Get Info shows a smaller size. `xattr -l <file>` still lists `com.apple.metadata:kMDItemIsScreenCapture`. The log shows exactly one `job started` for that file and no second one in the next 30 s.
 3. **Location change:** ⇧⌘5 › Options › Other Location… → choose `~/Pictures`. Within 30 s the Capture folders row shows `~/Pictures`. The next screenshot there gets a card.
-4. **Screen recording:** ⇧⌘5 › Record Selected Portion, record 5 s, stop. The log shows `no support for this media yet` with `media=Video` and no card. Run `xattr -l` on the `.mov` and record whether `kMDItemIsScreenCapture` is present (answers open question 2).
+4. **Screen recording (answers the recording-marker question):** ⇧⌘5 › Record Selected Portion, record 5 s, stop. No card appears and the log has no `watched file started` for the `.mov` (recordings are off and unsupported until stream A merges). Run `xattr -l "<the .mov file>"` and check whether `com.apple.metadata:kMDItemIsScreenCapture` is listed. **Record the answer** as the exact line `Recordings carry kMDItemIsScreenCapture: yes` or `Recordings carry kMDItemIsScreenCapture: no` (with the macOS version) in the PR description and in the final commit message, and include the `xattr -l` output. Do not change the name fallback in `capture_kind` either way; the user decides that from your answer.
 5. **Watched Downloads:** saving an image from Safari into Downloads gives one card. Copying 15 PNGs into Downloads at once gives one card "Skipped 15 files that arrived in Downloads at once" and no other cards.
 6. **No loops with outputs beside the source:** set File handling › Optimised to **Same folder** and copy a PNG into Downloads. `x_optimised.png` appears and the log shows exactly one job. Restore on the card → no new job. Rename via the card's name chip → no new job.
 7. **Quiet folder:** turn the folder's Card off and copy a PNG in. No card appears, the file is smaller, and tray › Recent results does not list it. Then make a job fail: `mkdir ~/ro && chmod a-w ~/ro`, set File handling › Optimised to Specific folder `~/ro`, and copy another PNG in. The Error card "Can't write to ~/ro" appears. Put File handling back to In place afterwards.
@@ -1322,17 +1349,21 @@ State in the PR: "Windows: capture folders, lock check and placeholder skip are 
   - In `src-tauri/src/watch/hooks.rs`, set `pub const VIDEO: bool = true;`.
   - Replace the body of `video_job` with A's constructor for a file job on a video, e.g. `Some(Job::file(path, settings, has_gifsicle))` if A extends `Job::file`, or `Some(Job::video(…))`. Nothing else in stream C changes: recordings route automatically and the Settings chip and switch enable themselves.
   - Any file A writes into a user-visible folder must go through `fsutil::atomic_replace`, or A must call `ferry_core::selfwrite::record(&path)` once the file is final. Otherwise a watched folder sees it as new. `fsutil::set_times` refreshes recorded paths by itself.
-  - Extend `watch::media::VIDEO_EXTENSIONS` if A accepts more containers.
+  - Extend `watch::media::VIDEO_EXTENSIONS` if A accepts more containers. AVI is left out on purpose (A does not support it); do not add it back unless A adds AVI support.
+  - Recordings stay off by default after the merge (`watch.captures.recordings = false`); the merge only enables the switch.
 - **Stream B (audio):** same pattern with `AUDIO` / `audio_job` and `AUDIO_EXTENSIONS`.
 - **Stream E (PDF, TIFF/HEIC/AVIF):** `PDF` / `pdf_job`. New image formats need no watcher change, because `watch::media::classify` uses `sniff::sniff`.
 - **Stream F (pipelines):** add `pub pipeline: Option<String>` to `WatchedFolder`. Unknown fields already survive, as tested in Task 1. Branch in `src-tauri/src/watch/mod.rs::dispatch_ready` before step 2. `Ready.origin` carries `Folder { index }`.
 - **Stream I (clipboard):** "auto-copy after watched-folder optimisation" hooks at `dispatch_ready` step 7, the marked hook point.
 - **Conflicts to expect:** `settings.rs` field and `Default` lists, `lib.rs` module and handler lists, `en.json` tail, and `schema.ts` `PaneId`/`panes`/`Control`. All are additive; keep every stream's lines.
 
-## Open questions for the user
+## User decisions on the former open questions (2026-10-23)
 
-1. **Defaults:** screenshot and recording watching default to **on** (`watch.captures.screenshots/recordings = true`). On upgrade, Ferry will start optimising Desktop screenshots in place and macOS will show the Desktop-access prompt at first launch. Keep that, or default to off until onboarding (out of scope) asks?
-2. **macOS recordings:** this plan treats a `.mov` as a recording if it has the screen-capture xattr *or* its name starts with "Screen Recording" (English only). The manual check (Task 11 item 4) will show whether the xattr is present. If it is, should the name fallback be dropped?
-3. **Recursion:** watched folders are non-recursive. Should subfolders be watched, as a per-folder option?
-4. **Game Bar location:** Windows uses `Videos\Captures`. Users can move Game Bar's capture folder in Windows Settings; following that needs a registry read. Is it worth adding?
-5. **Windows eject:** watching a folder on a USB drive keeps a directory handle open, so Windows may refuse "Safely remove" until the folder is paused. Acceptable for now?
+These are settled; the tasks above already follow them.
+
+1. **Defaults:** screenshot and recording watching default to **off** (`watch.captures.screenshots/recordings = false`). Upgrading users see no change and no Desktop-access prompt until they turn it on (Task 1, Task 10 item 1, Task 11 item 1).
+2. **macOS recordings:** keep the "Screen Recording" name fallback for `.mov` (xattr *or* name). Task 11 item 4 records whether recordings carry the xattr; the user decides later whether to drop the fallback.
+3. **Recursion:** watched folders stay non-recursive. No per-folder option this cycle.
+4. **Game Bar location:** use the default `Videos\Captures`; a moved Game Bar folder is not followed this cycle.
+5. **Windows eject:** accepted. Watching a folder on a USB drive keeps a directory handle open, so Windows may refuse "Safely remove" until the folder is paused.
+6. **AVI:** `.avi` is not a watched video format, because stream A does not support AVI (Task 3).
