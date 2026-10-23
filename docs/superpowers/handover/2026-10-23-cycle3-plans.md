@@ -41,3 +41,9 @@ Stopped at the user's request. Nothing from Cycle 3 is built and **no plan was w
   ```
   A new worktree needs the git-ignored `src-tauri/binaries/` copied from the main checkout. `cargo test` takes one name filter per command.
 - After a few rapid UI edits the Tauri webview can show stale modules; restart `pnpm tauri dev` before judging the UI.
+
+## Resume after an interrupted session (2026-10-23, cloud session)
+Work continues on branch `claude/clever-cori-t3h3y2` (pushed). The nine Opus plan writers were re-dispatched there; each plan is committed and pushed as soon as its writer finishes.
+1. `git fetch origin claude/clever-cori-t3h3y2` and list `docs/superpowers/plans/2026-10-23-ferry-s*.md`.
+2. For each plan present, check it is complete (ends with the Review Focus section, every task has steps). Re-dispatch only the missing or incomplete streams, using step 1 above.
+3. Then carry on from step 2 of "What to do next".
