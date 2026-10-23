@@ -149,8 +149,9 @@ impl Stamp {
 /// What became of a file job's source (the original, where it came from).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceState {
-    /// Ferry has not touched it.
-    Untouched,
+    /// Ferry has not touched it. The stamp is the file as Ferry last saw it
+    /// (backed up, or put back by Restore); `None`: it could not be read.
+    Untouched(Option<Stamp>),
     /// Ferry wrote its result over it. `None`: the file could not be read
     /// back, so nothing can tell if it changed.
     Overwritten(Option<Stamp>),
@@ -248,7 +249,7 @@ impl Job {
             animated,
             source_path: None,
             last: None,
-            source_state: SourceState::Untouched,
+            source_state: SourceState::Untouched(None),
             stem: None,
             dims_after: None,
             note: None,
@@ -309,7 +310,7 @@ impl Job {
             animated: sniff::is_animated(&bytes, format),
             source_path: Some(path.to_owned()),
             last: None,
-            source_state: SourceState::Untouched,
+            source_state: SourceState::Untouched(None),
             stem: None,
             dims_after: None,
             note: None,
@@ -459,7 +460,7 @@ impl Job {
             animated: self.animated,
             source_path: self.source_path.clone(),
             last: None,
-            source_state: SourceState::Untouched,
+            source_state: SourceState::Untouched(None),
             stem: None,
             dims_after: None,
             note: None,
@@ -641,6 +642,7 @@ impl Job {
                         .clone()
                         .unwrap_or_else(|| self.output.clone());
                     self.times = fsutil::read_times(&source).ok();
+                    self.source_state = SourceState::Untouched(Stamp::of(&source));
                     backups.store_file(self.id.as_str(), &source)?
                 }
             };
@@ -674,7 +676,6 @@ impl Job {
                     .map_err(|e| (t("error.clipboard_write"), e))?;
             }
             Source::File => {
-                self.check_source()?;
                 let source = self
                     .source_path
                     .clone()
@@ -711,6 +712,11 @@ impl Job {
                     let reserved = self.twin.then_some(source.as_path());
                     output::unique_except(&wanted, own.as_deref(), reserved)
                 };
+                let trash_source = kind == OutputKind::Converted
+                    && o.output.converted.location == Location::InPlace
+                    && path != source
+                    && !self.twin;
+                self.check_source(path == source || trash_source)?;
                 if let Some(last) = self.last.clone().filter(|w| w.path != path) {
                     self.trash_result(&last, o);
                     self.last = None;
@@ -720,10 +726,6 @@ impl Job {
                     }
                 }
                 self.write_file(&path, bytes, &source, o)?;
-                let trash_source = kind == OutputKind::Converted
-                    && o.output.converted.location == Location::InPlace
-                    && path != source
-                    && !self.twin;
                 if trash_source && self.source_state != SourceState::Trashed {
                     // Only the original, which this job has not trashed yet.
                     let trashed = !source.exists() || (o.trash)(&source).is_ok();
@@ -776,7 +778,7 @@ impl Job {
                 self.output = Self::twin_output(&self.source_path, &self.id);
             }
             Source::File => {
-                self.check_source()?;
+                self.check_source(false)?;
                 if let Some(last) = self.last.take() {
                     self.trash_result(&last, o);
                 }
@@ -798,17 +800,24 @@ impl Job {
         Ok(())
     }
 
-    /// Refuse to go on when the source holds something Ferry did not write:
-    /// the user (or another app) changed it since, and a write would lose that.
-    fn check_source(&self) -> Result<(), (String, String)> {
-        if let SourceState::Overwritten(Some(wrote)) = self.source_state
+    /// Refuse to go on when the source holds something Ferry did not leave
+    /// there: the user (or another app) changed it since, and a write would
+    /// lose that. A source Ferry overwrote is always in play; an untouched one
+    /// only when `touching` it (overwriting or trashing it).
+    fn check_source(&self, touching: bool) -> Result<(), (String, String)> {
+        let left = match self.source_state {
+            SourceState::Overwritten(stamp) => stamp,
+            SourceState::Untouched(stamp) if touching => stamp,
+            _ => None,
+        };
+        if let Some(left) = left
             && let Some(source) = &self.source_path
             && let Some(now) = Stamp::of(source)
-            && now != wrote
+            && now != left
         {
             return Err((
                 t("error.source_changed"),
-                format!("{} no longer matches what Ferry wrote", source.display()),
+                format!("{} no longer matches what Ferry left", source.display()),
             ));
         }
         Ok(())
@@ -830,13 +839,14 @@ impl Job {
             return Ok(());
         };
         match self.source_state {
-            SourceState::Untouched => return Ok(()),
+            SourceState::Untouched(_) => return Ok(()),
             SourceState::Overwritten(_) => {}
             SourceState::Trashed => source = output::unique(&source, None),
         }
         self.write_file(&source, original, &source, o)?;
+        // After the write, which may set the dates back.
+        self.source_state = SourceState::Untouched(Stamp::of(&source));
         self.source_path = Some(source);
-        self.source_state = SourceState::Untouched;
         Ok(())
     }
 
@@ -2113,6 +2123,87 @@ mod tests {
             restored.name, "shot",
             "the card shows the file that is there"
         );
+    }
+
+    #[test]
+    fn a_restored_original_changed_outside_ferry_is_not_overwritten_by_the_next_edit() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        job.restore(&options(), &mut |_, _, _| Ok(()));
+        fs::write(&path, b"annotated in Preview").unwrap();
+        job.edit(scale(50));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            update.state,
+            JobState::Error {
+                reason: CHANGED.into()
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"annotated in Preview");
+    }
+
+    #[test]
+    fn a_convert_in_place_refuses_to_trash_an_untouched_source_changed_outside_ferry() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.output.optimised.location = Location::SameFolder;
+        let o = options_with(&settings);
+        let path = env.file("shot.png", &testutil::png(300, 200));
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        run(&mut job, Level::Normal, &o, &env);
+        let beside = env.dir.path().join("shot_optimised.png");
+        assert!(beside.exists());
+        fs::write(&path, b"annotated in Preview").unwrap();
+
+        job.edit(convert(Format::WebP));
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+
+        assert_eq!(
+            update.state,
+            JobState::Error {
+                reason: CHANGED.into()
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"annotated in Preview");
+        assert!(beside.exists(), "nothing was taken back");
+        assert!(!env.dir.path().join("shot.webp").exists());
+    }
+
+    #[test]
+    fn a_result_beside_the_source_does_not_mind_the_source_changing() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.output.optimised.location = Location::SameFolder;
+        let o = options_with(&settings);
+        let path = env.file("shot.png", &testutil::png(300, 200));
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        run(&mut job, Level::Normal, &o, &env);
+        fs::write(&path, b"annotated in Preview").unwrap();
+
+        job.edit(scale(50));
+        let update = run(&mut job, Level::Normal, &o, &env).0.unwrap().update;
+
+        assert_eq!(update.state, JobState::Done);
+        assert_eq!(fs::read(&path).unwrap(), b"annotated in Preview");
+    }
+
+    #[test]
+    fn a_gif_twin_is_a_copy_too() {
+        let env = Env::new();
+        let path = env.file("loop.gif", &testutil::gif(3));
+        let job = Job::file(&path, &Settings::default(), true).unwrap();
+        let mut twin = job.fork();
+        twin.edit(convert(Format::Gif));
+        let update = run(&mut twin, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.state, JobState::Done);
+        assert_eq!(update.output, Some(env.dir.path().join("loop (2).gif")));
+        assert!(path.exists());
     }
 
     #[test]
