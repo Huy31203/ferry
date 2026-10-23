@@ -69,6 +69,8 @@ pub fn run() {
             commands::crop_sizes_reset,
             commands::card_menu,
             commands::card_hover,
+            commands::output_preview,
+            commands::pick_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")

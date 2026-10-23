@@ -264,3 +264,21 @@ export function fitForm(fitUnder: number | null): { text: string; unit: 'kb' | '
     ? { text: String(fitUnder / 1_000_000), unit: 'mb' }
     : { text: String(Math.round(fitUnder / 1_000)), unit: 'kb' };
 }
+
+/** A saved crop size as typed in Settings: "1200×628", "1200x628" or "1200 x 628"; each side 1..MAX_SIDE. */
+export function parseSize(text: string): [number, number] | null {
+  const match = /^\s*(\d+)\s*[x×X]\s*(\d+)\s*$/.exec(text);
+  if (!match) return null;
+  const [w, h] = [Number(match[1]), Number(match[2])];
+  return w >= 1 && h >= 1 && w <= MAX_SIDE && h <= MAX_SIDE ? [w, h] : null;
+}
+
+/** "1200×628". */
+export function sizeLabel([w, h]: [number, number]): string {
+  return `${w}×${h}`;
+}
+
+/** The saved sizes with `size` first (newest first), without a duplicate. */
+export function addSize(sizes: [number, number][], size: [number, number]): [number, number][] {
+  return [size, ...sizes.filter(([w, h]) => w !== size[0] || h !== size[1])];
+}
