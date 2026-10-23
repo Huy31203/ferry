@@ -115,7 +115,14 @@ pub fn example(
 /// `path`, or `name (2).ext`, `name (3).ext`, … when another file already
 /// has it. `own` (this job's previous result) never counts as taken.
 pub fn unique(path: &Path, own: Option<&Path>) -> PathBuf {
-    if !path.exists() || own == Some(path) {
+    unique_except(path, own, None)
+}
+
+/// Like `unique`, and `reserved` counts as taken even when it is free: a
+/// twin's result must never land on its parent's source path.
+pub fn unique_except(path: &Path, own: Option<&Path>, reserved: Option<&Path>) -> PathBuf {
+    let free = |p: &Path| (!p.exists() || own == Some(p)) && reserved != Some(p);
+    if free(path) {
         return path.to_owned();
     }
     let stem = path
@@ -128,7 +135,7 @@ pub fn unique(path: &Path, own: Option<&Path>) -> PathBuf {
         .unwrap_or_default();
     (2..)
         .map(|n| path.with_file_name(format!("{stem} ({n}){ext}")))
-        .find(|candidate| !candidate.exists() || own == Some(candidate.as_path()))
+        .find(|candidate| free(candidate))
         .expect("an unused name exists")
 }
 
@@ -238,6 +245,17 @@ mod tests {
         assert_eq!(unique(&wanted, Some(&wanted)), wanted);
         fs::write(dir.path().join("shot (2).webp"), b"x").unwrap();
         assert_eq!(unique(&wanted, None), dir.path().join("shot (3).webp"));
+    }
+
+    #[test]
+    fn a_reserved_name_counts_as_taken_even_when_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("shot.png");
+        assert_eq!(
+            unique_except(&wanted, None, Some(&wanted)),
+            dir.path().join("shot (2).png")
+        );
+        assert_eq!(unique_except(&wanted, None, None), wanted);
     }
 
     fn rule(location: Location, template: &str) -> OutputRule {
