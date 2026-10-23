@@ -3,9 +3,12 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { draggable, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
-  import type { JobUpdate, StackConfig } from '../lib/ipc';
+  import type { CropFrame } from '../lib/edits';
+  import type { EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
   import Card from './Card.svelte';
+  import CropPopover from './CropPopover.svelte';
+  import FitPopover from './FitPopover.svelte';
   import DragAllBar from './DragAllBar.svelte';
 
   let cards = $state<JobUpdate[]>([]);
@@ -47,6 +50,28 @@
   function setTool(id: string, kind: Tool | null) {
     if (kind !== null) tool = { id, kind };
     else if (tool?.id === id) tool = null;
+  }
+
+  /** The crop popover's live frame, drawn on its card's thumbnail. */
+  let frame = $state<CropFrame | null>(null);
+
+  // Crop or Fit: close the popover (handing the keyboard back), then run the edit.
+  function apply(id: string, edits: EditsPatch) {
+    setTool(id, null);
+    invoke('card_edit', { id, edits }).catch((e) => console.warn('card_edit', e));
+  }
+
+  // A click elsewhere in the stack closes a popover (spec §5.3 "click-away").
+  function clickAway(event: PointerEvent) {
+    if (tool === null || (tool.kind !== 'crop' && tool.kind !== 'fit')) return;
+    const target = event.target as Element;
+    if (target.closest('[data-popover]') || target.closest(`[data-action="${tool.kind}"]`)) return;
+    tool = null;
+  }
+
+  // Another app took the keyboard: a popover or a rename field closes.
+  function windowBlur() {
+    if (tool !== null && tool.kind !== 'slider') tool = null;
   }
 
   const top = $derived(config.corner.startsWith('top'));
@@ -149,14 +174,18 @@
   }
 </script>
 
+<svelte:window onblur={windowBlur} />
+
 <!-- Native pointer events cover Windows; on macOS the panel never gets them and Rust forwards the pointer instead. -->
 <div
   class="stack"
   class:top
+  class:left={railRight}
   bind:this={root}
   role="presentation"
   onpointermove={(event) => track(event.target as Element)}
   onpointerleave={leave}
+  onpointerdown={clickAway}
 >
   <!-- The bar sits at the screen-edge end of the stack, because an overflowing stack is clipped at the far end. -->
   {#if cards.length > 1 && top}
@@ -169,20 +198,36 @@
     />
   {/if}
   {#each cards as card (card.id)}
-    <Card
-      {card}
-      hovered={card.id === hovered}
-      {held}
-      hotAction={hot?.card === card.id ? hot.action : null}
-      compact={config.card_size === 'compact'}
-      {railRight}
-      autoHideSecs={config.auto_hide_secs}
-      compression={config.compression}
-      tool={tool?.id === card.id ? tool.kind : null}
-      onclose={() => close(card.id)}
-      ondrag={dragState}
-      ontool={(kind) => setTool(card.id, kind)}
-    />
+    {@const open = tool?.id === card.id ? tool.kind : null}
+    <!-- A popover opens beside its card, toward the screen centre; the window grows to fit (spec §5.3). -->
+    <div class="row">
+      <Card
+        {card}
+        hovered={card.id === hovered}
+        {held}
+        hotAction={hot?.card === card.id ? hot.action : null}
+        compact={config.card_size === 'compact'}
+        {railRight}
+        autoHideSecs={config.auto_hide_secs}
+        compression={config.compression}
+        tool={open}
+        onclose={() => close(card.id)}
+        ondrag={dragState}
+        ontool={(kind) => setTool(card.id, kind)}
+        frame={open === 'crop' ? frame : null}
+      />
+      {#if open === 'crop'}
+        <CropPopover
+          {card}
+          sizes={config.crop_sizes}
+          onapply={(edits) => apply(card.id, edits)}
+          onclose={() => setTool(card.id, null)}
+          onframe={(next) => (frame = next)}
+        />
+      {:else if open === 'fit'}
+        <FitPopover {card} onapply={(edits) => apply(card.id, edits)} onclose={() => setTool(card.id, null)} />
+      {/if}
+    </div>
   {/each}
   {#if cards.length > 1 && !top}
     <DragAllBar
@@ -220,5 +265,15 @@
     gap: 8px;
     padding: 12px;
     width: max-content;
+  }
+  /* Cards keep to the screen edge; a popover sits on their screen-centre side. */
+  .row {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .stack.left .row {
+    flex-direction: row;
   }
 </style>

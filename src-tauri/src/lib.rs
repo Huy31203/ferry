@@ -64,6 +64,7 @@ pub fn run() {
             commands::card_convert,
             commands::card_rename,
             windows::stack_focus,
+            commands::crop_sizes_reset,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")

@@ -2,18 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { card } from './card.fixture';
 import {
   QUALITY_STOPS,
-  convertRequest,
-  formatChoices,
   SCALE_STOPS,
+  checkCrop,
+  convertRequest,
+  cropForm,
+  cropFrame,
   currentQuality,
+  fitBytes,
+  fitForm,
+  fitRatio,
+  formatChoices,
+  frameBox,
   nextQuality,
   nextScale,
   qualityLabel,
   qualityPatch,
+  scaleForm,
   scaleLabel,
   scalePatch,
   sliderIndex,
   stopIndex,
+  type CropForm,
 } from './edits';
 
 const edits = card({ kind: 'done' }).edits;
@@ -127,5 +136,101 @@ describe('format bar', () => {
     expect(convertRequest(png, 'png', false)).toBeNull();
     expect(convertRequest(png, 'webp', false)).toEqual({ format: 'webp', keepBoth: false });
     expect(convertRequest(png, 'png', true)).toEqual({ format: 'png', keepBoth: true });
+  });
+});
+
+describe('crop popover', () => {
+  const form = (extra: Partial<CropForm> = {}): CropForm => ({ ...cropForm(edits), ...extra });
+  const dims: [number, number] = [2880, 1800];
+
+  it('starts from the card’s current crop', () => {
+    expect(cropForm(edits)).toEqual({
+      aspect: null,
+      mode: 'size',
+      width: '0',
+      height: '0',
+      edge: '0',
+      framing: 'centre',
+    });
+    const cropped = { ...edits, aspect: [16, 9] as [number, number], size: { kind: 'long_edge' as const, edge: 1200 }, framing: 'smart' as const };
+    expect(cropForm(cropped)).toMatchObject({ aspect: [16, 9], mode: 'long_edge', edge: '1200', framing: 'smart' });
+  });
+
+  it('turns the fields into a size: 0 keeps the ratio', () => {
+    expect(checkCrop(form({ width: '1200', height: '628' }), dims).patch).toEqual({
+      aspect: null,
+      framing: 'centre',
+      size: { kind: 'exact', width: 1200, height: 628 },
+    });
+    expect(checkCrop(form({ width: '1440' }), dims).patch?.size).toEqual({ kind: 'width', width: 1440 });
+    expect(checkCrop(form({ height: '900' }), dims).patch?.size).toEqual({ kind: 'height', height: 900 });
+    expect(checkCrop(form({ mode: 'long_edge', edge: '1000' }), dims).patch?.size).toEqual({
+      kind: 'long_edge',
+      edge: 1000,
+    });
+  });
+
+  it('crops to a ratio alone, with no size', () => {
+    expect(checkCrop(form({ aspect: [16, 9] }), dims).patch).toEqual({
+      aspect: [16, 9],
+      framing: 'centre',
+      size: null,
+    });
+  });
+
+  it('refuses words, huge sides and an empty Free crop', () => {
+    expect(checkCrop(form({ width: '12a' }), dims)).toMatchObject({ error: 'Whole numbers only', field: 'width' });
+    expect(checkCrop(form({ height: '-5' }), dims)).toMatchObject({ error: 'Whole numbers only', field: 'height' });
+    expect(checkCrop(form({ width: '30001' }), dims)).toMatchObject({ error: 'At most 30000 px', field: 'width' });
+    expect(checkCrop(form(), dims)).toMatchObject({ error: 'Choose a ratio or a size', field: null });
+  });
+
+  it('hints when the size is larger than the original', () => {
+    expect(checkCrop(form({ width: '4000' }), dims).larger).toBe(true);
+    expect(checkCrop(form({ width: '1440' }), dims).larger).toBe(false);
+    expect(checkCrop(form({ width: '4000' }), null).larger).toBe(false);
+  });
+
+  it('halves and doubles the sizes, within 1 to 30000', () => {
+    expect(scaleForm(form({ width: '1440', height: '0' }), 0.5)).toMatchObject({ width: '720', height: '0' });
+    expect(scaleForm(form({ width: '20000', height: '1' }), 2)).toMatchObject({ width: '30000', height: '2' });
+    expect(scaleForm(form({ width: '1', edge: 'x' }), 0.5)).toMatchObject({ width: '1', edge: 'x' });
+  });
+
+  it('fits a ratio like ferry_core', () => {
+    expect(fitRatio([2880, 1800], [16, 9])).toEqual([2880, 1620]);
+    expect(fitRatio([2880, 1800], [1, 1])).toEqual([1800, 1800]);
+    expect(fitRatio([1800, 2880], [16, 9])).toEqual([1800, 1013]);
+    expect(fitRatio([3, 1], [1, 100])).toEqual([1, 1]);
+  });
+
+  it('frames the crop on the thumbnail', () => {
+    expect(cropFrame(dims, form())).toBeNull();
+    expect(cropFrame(null, form({ aspect: [1, 1] }))).toBeNull();
+    const square = cropFrame(dims, form({ aspect: [1, 1] }));
+    expect(square).toEqual({ x: 540 / 2880, y: 0, w: 1800 / 2880, h: 1 });
+    // A 2880×1800 picture in a 300×200 card is 300×187.5, 6.25 px from the top.
+    expect(frameBox(square!, dims, [300, 200])).toEqual({ left: 56.25, top: 6.25, width: 187.5, height: 187.5 });
+  });
+});
+
+describe('fit popover', () => {
+  it('reads KB and MB in decimal units', () => {
+    expect(fitBytes('1', 'mb')).toBe(1_000_000);
+    expect(fitBytes('1.5', 'mb')).toBe(1_500_000);
+    expect(fitBytes('250', 'kb')).toBe(250_000);
+  });
+
+  it('refuses zero, negatives and words', () => {
+    expect(fitBytes('0', 'mb')).toBeNull();
+    expect(fitBytes('-1', 'mb')).toBeNull();
+    expect(fitBytes('', 'kb')).toBeNull();
+    expect(fitBytes('big', 'mb')).toBeNull();
+  });
+
+  it('starts from the card’s target', () => {
+    expect(fitForm(null)).toEqual({ text: '', unit: 'mb' });
+    expect(fitForm(5_000_000)).toEqual({ text: '5', unit: 'mb' });
+    expect(fitForm(250_000)).toEqual({ text: '250', unit: 'kb' });
   });
 });

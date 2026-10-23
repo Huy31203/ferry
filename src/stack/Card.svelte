@@ -8,6 +8,7 @@
     SCALE_STOPS,
     currentQuality,
     formatChoices,
+    frameBox,
     nextQuality,
     nextScale,
     qualityLabel,
@@ -16,6 +17,7 @@
     scalePatch,
     sliderIndex,
     stopIndex,
+    type CropFrame,
   } from '../lib/edits';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
@@ -33,6 +35,7 @@
     autoHideSecs,
     compression,
     tool = null,
+    frame = null,
     onclose,
     ondrag,
     ontool,
@@ -50,6 +53,8 @@
     compression: number;
     /** This card's open tool, if any. */
     tool?: Tool | null;
+    /** The crop popover's live frame, drawn over the thumbnail. */
+    frame?: CropFrame | null;
     onclose: () => void;
     ondrag: (active: boolean) => void;
     /** Open a tool on this card, or close it with null. */
@@ -69,6 +74,11 @@
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
   const rail = $derived(railActions(card, compact));
   const canRename = $derived(canDrag(card));
+  const frameRect = $derived(
+    frame && card.dims_before
+      ? frameBox(frame, card.dims_before, compact ? [220, 150] : [300, 200])
+      : null,
+  );
   // The format bar replaces the detail line while the card is hovered (spec §5.4).
   const showFormats = $derived(hovered && rail.length > 0 && card.state.kind !== 'restored');
   const stateLabel = $derived(t(`card.state.${card.state.kind}` as StringKey));
@@ -365,6 +375,13 @@
     </svg>
   {/if}
   <div class="scrim" aria-hidden="true"></div>
+  {#if frameRect}
+    <div
+      class="frame"
+      aria-hidden="true"
+      style="left: {frameRect.left}px; top: {frameRect.top}px; width: {frameRect.width}px; height: {frameRect.height}px"
+    ></div>
+  {/if}
 
   {#if rail.length > 0}
     <div class="rail">
@@ -513,6 +530,9 @@
         <span class="reason" role="alert">{card.state.reason}</span>
       {/if}
     </div>
+    {#if card.note}
+      <span class="note" role="status">{card.note}</span>
+    {/if}
     {#if card.state.kind === 'error'}
       <div class="buttons">
         {#if card.can_retry}
@@ -736,6 +756,18 @@
   }
   .name-field[aria-invalid='true'] {
     border-color: #ff453a;
+  }
+  .frame {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px dashed #fff;
+    box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+  }
+  .note {
+    font-size: 11px;
+    font-weight: 600;
+    color: #ffd27a;
   }
   .converted {
     font-size: 11px;

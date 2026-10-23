@@ -4,7 +4,7 @@
 use ferry_core::edit::EditsPatch;
 use ferry_core::i18n::t;
 use ferry_core::job::{JobId, JobUpdate};
-use ferry_core::settings::{CardSize, Corner, Settings, TrayStyle};
+use ferry_core::settings::{CardSize, Corner, Images, Settings, TrayStyle};
 use ferry_core::sniff::Format;
 use ferry_core::{color, glyph, template};
 use serde::Serialize;
@@ -134,6 +134,12 @@ pub fn settings_get(app: AppHandle) -> Settings {
 #[tauri::command(async)]
 pub fn settings_set(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     prefs::update(&app, |current| *current = settings)
+}
+
+/// The crop popover's "Restore defaults": put the saved crop sizes back.
+#[tauri::command(async)]
+pub fn crop_sizes_reset(app: AppHandle) -> Result<Settings, String> {
+    prefs::update(&app, |s| s.images.crop_sizes = Images::default().crop_sizes)
 }
 
 /// The live example under the file-name template field, or its unknown tokens.
