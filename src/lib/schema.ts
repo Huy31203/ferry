@@ -1,11 +1,12 @@
 import type { StringKey } from './i18n';
 
-export type PaneId = 'general' | 'clipboard' | 'images' | 'floating';
+export type PaneId = 'general' | 'clipboard' | 'images' | 'files' | 'floating';
 
 export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'general', label: 'pane.general' },
   { id: 'clipboard', label: 'pane.clipboard' },
   { id: 'images', label: 'pane.images' },
+  { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
 ];
 
@@ -18,6 +19,8 @@ export type Control =
   | { kind: 'extensions' }
   | { kind: 'apps' }
   | { kind: 'tray_style' }
+  | { kind: 'output'; converted: boolean }
+  | { kind: 'sizes' }
   | { kind: 'action'; action: 'open_backups' | 'open_work' | 'force_clean'; button: StringKey };
 
 export interface Setting {
@@ -246,6 +249,33 @@ const all: Setting[] = [
     path: 'images.max_size_mb',
     control: { kind: 'number', min: 1, max: 4096, unit: SIZE_UNIT },
   },
+  {
+    id: 'crop_sizes',
+    pane: 'images',
+    label: 'images.crop_sizes',
+    help: 'images.crop_sizes.help',
+    path: 'images.crop_sizes',
+    control: { kind: 'sizes' },
+  },
+
+  {
+    id: 'output_optimised',
+    pane: 'files',
+    group: 'group.images',
+    label: 'output.optimised',
+    help: 'output.optimised.help',
+    path: 'images.output.optimised',
+    control: { kind: 'output', converted: false },
+  },
+  {
+    id: 'output_converted',
+    pane: 'files',
+    group: 'group.images',
+    label: 'output.converted',
+    help: 'output.converted.help',
+    path: 'images.output.converted',
+    control: { kind: 'output', converted: true },
+  },
 
   {
     id: 'floating_enabled',
@@ -302,6 +332,15 @@ const all: Setting[] = [
     label: 'floating.follow_cursor',
     help: 'floating.follow_cursor.help',
     path: 'floating.follow_cursor',
+    control: { kind: 'switch' },
+    depends_on: 'floating.enabled',
+  },
+  {
+    id: 'hover_hotkeys',
+    pane: 'floating',
+    label: 'floating.hover_hotkeys',
+    help: 'floating.hover_hotkeys.help',
+    path: 'floating.hover_hotkeys',
     control: { kind: 'switch' },
     depends_on: 'floating.enabled',
   },

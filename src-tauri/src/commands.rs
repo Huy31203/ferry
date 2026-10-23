@@ -4,7 +4,10 @@
 use ferry_core::edit::EditsPatch;
 use ferry_core::i18n::t;
 use ferry_core::job::{JobId, JobUpdate};
-use ferry_core::settings::{CardSize, Corner, Images, Settings, TrayStyle};
+use ferry_core::output::{self, OutputKind};
+use ferry_core::settings::{
+    CardSize, Corner, Images, OutputRule, Settings, TrayStyle, contract_home,
+};
 use ferry_core::sniff::Format;
 use ferry_core::{color, glyph, template};
 use serde::Serialize;
@@ -221,6 +224,46 @@ pub async fn pick_app(app: AppHandle) -> Result<Option<String>, String> {
         platform::app_identifier(&path)
             .map(Some)
             .ok_or_else(|| t("error.pick_app"))
+    })
+    .await
+}
+
+/// The File handling pane's live example path for an output rule, or the
+/// template's unknown tokens.
+#[tauri::command]
+pub fn output_preview(
+    app: AppHandle,
+    rule: OutputRule,
+    converted: bool,
+) -> Result<String, Vec<String>> {
+    let kind = if converted {
+        OutputKind::Converted
+    } else {
+        OutputKind::Optimised
+    };
+    let home = app.path().home_dir().unwrap_or_default();
+    let work_dir = app.state::<AppState>().work_dir.clone();
+    let today = chrono::Local::now().date_naive();
+    output::example(kind, &rule, &home, &work_dir, today)
+}
+
+/// Let the user pick the Specific folder; answered with `~` for the home
+/// folder, as settings store it. `None` when the dialog is cancelled.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    blocking(app, |app| {
+        use tauri_plugin_dialog::DialogExt;
+        let Some(path) = app
+            .dialog()
+            .file()
+            .set_title(t("output.pick_folder"))
+            .blocking_pick_folder()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(|e| e.to_string())?;
+        let home = app.path().home_dir().map_err(|e| e.to_string())?;
+        Ok(Some(contract_home(&path, &home)))
     })
     .await
 }

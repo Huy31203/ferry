@@ -3,6 +3,9 @@ import { card } from './card.fixture';
 import {
   QUALITY_STOPS,
   SCALE_STOPS,
+  addSize,
+  parseSize,
+  sizeLabel,
   checkCrop,
   convertRequest,
   cropForm,
@@ -232,5 +235,30 @@ describe('fit popover', () => {
     expect(fitForm(null)).toEqual({ text: '', unit: 'mb' });
     expect(fitForm(5_000_000)).toEqual({ text: '5', unit: 'mb' });
     expect(fitForm(250_000)).toEqual({ text: '250', unit: 'kb' });
+  });
+});
+
+describe('saved crop sizes', () => {
+  it('reads width×height with x, × or spaces', () => {
+    expect(parseSize('1200×628')).toEqual([1200, 628]);
+    expect(parseSize(' 1080 x 1080 ')).toEqual([1080, 1080]);
+    expect(parseSize('640X480')).toEqual([640, 480]);
+  });
+
+  it('refuses zero, huge sides and words', () => {
+    expect(parseSize('0×100')).toBeNull();
+    expect(parseSize('30001×10')).toBeNull();
+    expect(parseSize('wide')).toBeNull();
+    expect(parseSize('1200')).toBeNull();
+  });
+
+  it('puts a new size first and never twice', () => {
+    const sizes: [number, number][] = [
+      [1200, 628],
+      [1080, 1080],
+    ];
+    expect(addSize(sizes, [640, 480])).toEqual([[640, 480], [1200, 628], [1080, 1080]]);
+    expect(addSize(sizes, [1080, 1080])).toEqual([[1080, 1080], [1200, 628]]);
+    expect(sizeLabel([1200, 628])).toBe('1200×628');
   });
 });
