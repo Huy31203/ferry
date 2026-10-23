@@ -47,3 +47,27 @@ One section per stream, added as each plan lands. Answer before implementation s
 4. No tray "update available" dot; menu item and pill show it. **Recommend: accept.**
 5. Sync split: launch at login, Dock icon, sync settings and skipped version stay local; hotkeys, hover keys and ignored apps sync only between same-OS computers. **Recommend: yes, and the integrator adds C's watched folders and H's per-type "Edit with" apps to `settings_sync::LOCAL` (both hold machine-specific paths).**
 - Windows update install built but not tested on a real desktop.
+
+## A video (`plans/2026-10-23-ferry-sA-video.md`, 15 tasks; FFmpeg 9.0.2 sidecar built `--enable-gpl --enable-version3`, so GPL-3.0-or-later like Ferry; static x264, x265 (GPL-2.0+), LAME (LGPL-2.0+), libvpx, SVT-AV1, dav1d, Opus (BSD); Windows-only headers MIT; CI adds actions/cache@v6, msys2/setup-msys2@v2)
+Patent-encumbered: H.264, HEVC, AAC; VP9/AV1 have third-party pool claims.
+1. Patents on software encoders: (a) ship x264+x265, get legal advice before 1.0; (b) drop x265, HEVC by hardware only; (c) drop both, H.264/HEVC by hardware only. Plan assumes (a). **Recommend: (b). HEVC pools are the more aggressive, and VideoToolbox/NVENC/QSV/AMF cover HEVC on most current machines. Not legal advice.**
+2. GPL source offer: attach a third-party sources archive to each release; also adds gifsicle's licence and source, missing in 0.1.x and 0.2.0. **Recommend: yes (fixes a GPL compliance gap).**
+3. Video to GIF uses ffmpeg palette filters + gifsicle instead of gifski (AGPL-3.0). **Recommend: yes.**
+4. FR-T3 auto-optimise of copied video files is owned by no stream. **Recommend: one integration task on `feat/c3-all` after A and I merge (needs both).**
+5. First ffmpeg CI build 30-60 min per OS, cached after. **Recommend: accept; avoids trusting third-party prebuilt binaries.**
+6. Stream C accepts `.avi`, which A does not support. **Recommend: drop AVI from C.**
+- Mac setup: `brew install nasm pkgconf meson ninja cmake`; first local ffmpeg build 30-45 min. Intel Mac builds x86_64 only locally (universal in CI); VideoToolbox quality mode is Apple Silicon only, so Fast is bitrate-driven on the Intel Mac.
+- Stream C's video hook becomes `Some(Job::file(...))` at merge.
+
+## F pipelines (`plans/2026-10-23-ferry-sF-pipelines.md`, 18 tasks; new dep `ssimulacra2` 0.5.1 BSD-2-Clause, transitive MIT/BSD; avoided AGPL `dssim`)
+1. Defer `runScript`, OS automation and `copyLinkForSending` steps. **Recommend: yes (security design needed; secure send out of scope).**
+2. `images.adaptive` means adaptive compression; `switch_png_jpeg` becomes live (switch when the other format is >=10% smaller). **Recommend: yes.**
+3. Adaptive targets SSIMULACRA2 80 Normal / 70 Aggressive, quality 30-95 step 5, max 5 encodes. **Recommend: accept, tune after the manual check.**
+4. F defines `ferry_core::optimise::Encoder` and `Edits.encoder`; A also adds an encoder choice to `Edits`. **Recommend: align A's plan now to reuse F's definition, so the two do not collide at merge.**
+5. Post-merge edits to D: emit `drag:ended`; swap D's `jobs::start` in `intake::accept` to `pipe_jobs::start_assigned(..., Trigger::DropZone, ...)`; draw `pipe.zones.hint_tap` in D's zone. **Recommend: yes, as integration tasks.**
+6. C must ignore files written by F's copy step. **C records every write made through `fsutil::atomic_replace`; integrator checks F's copy step writes through it (or records the write).**
+7. Text mode `step key=value` with a suggestion list as "autocomplete". **Recommend: yes.**
+8. Clipboard pipeline that forks: clipboard keeps the main result, forks as cards. **Recommend: yes.**
+9. Pipeline rail buttons are a post-merge edit on G's rail editor. **Recommend: yes.**
+- Hook for A/B/E: `pub fn register(r: &mut crate::pipeline_steps::Registry)` in `{video,audio,pdf}_steps.rs`, one line each in `pipeline_steps::builtin()` under `// Later streams register their steps here, one line each:`.
+- C calls `pipe_jobs::start_assigned(..., Trigger::Pipeline(id), ...)`; G rail ids `pipeline:<id>` call `pipe_run`.
