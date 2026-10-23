@@ -670,25 +670,33 @@ impl Job {
                     Local::now().date_naive(),
                 );
                 let own = self.last.as_ref().map(|w| w.path.clone());
-                let path = if wanted == source && !self.twin {
+                // Over the source, unless that is gone to the Trash and
+                // something else has taken its place.
+                let source_taken = self.source_state == SourceState::Trashed && source.exists();
+                let path = if wanted == source && !self.twin && !source_taken {
                     wanted
                 } else {
                     output::unique(&wanted, own.as_deref())
                 };
                 if let Some(last) = self.last.clone().filter(|w| w.path != path) {
-                    self.undo(&last, original, o)?;
+                    self.trash_result(&last, o);
                     self.last = None;
+                    // The result leaves the source: it gets the original back.
+                    if matches!(self.source_state, SourceState::Overwritten(_)) && path != source {
+                        self.restore_source(original, o)?;
+                    }
                 }
                 self.write_file(&path, bytes, &source, o)?;
                 let trash_source = kind == OutputKind::Converted
                     && o.output.converted.location == Location::InPlace
                     && path != source
                     && !self.twin;
-                if trash_source && source.exists() {
-                    let _ = (o.trash)(&source);
-                }
-                if trash_source {
-                    self.source_state = SourceState::Trashed;
+                if trash_source && self.source_state != SourceState::Trashed {
+                    // Only the original, which this job has not trashed yet.
+                    let trashed = !source.exists() || (o.trash)(&source).is_ok();
+                    if trashed {
+                        self.source_state = SourceState::Trashed;
+                    }
                 } else if path == source {
                     // After write_file, which may set the dates back.
                     self.source_state = SourceState::Overwritten(Stamp::of(&path));
@@ -729,10 +737,10 @@ impl Job {
             }
             Source::File => {
                 self.check_source()?;
-                if let Some(last) = self.last.clone() {
-                    self.undo(&last, original, o)?;
-                    self.last = None;
+                if let Some(last) = self.last.take() {
+                    self.trash_result(&last, o);
                 }
+                self.restore_source(original, o)?;
                 if let Some(source) = &self.source_path {
                     self.output = source.clone();
                 }
@@ -760,23 +768,29 @@ impl Job {
         Ok(())
     }
 
-    /// Take a file job's result back: a file Ferry made goes to the Trash; a
-    /// source Ferry overwrote or trashed gets the original again.
-    fn undo(
-        &mut self,
-        last: &Written,
-        original: &[u8],
-        o: &RunOptions,
-    ) -> Result<(), (String, String)> {
+    /// Send the previous result to the Trash when Ferry made it.
+    fn trash_result(&self, last: &Written, o: &RunOptions) {
         if last.created && last.path.exists() {
             let _ = (o.trash)(&last.path);
         }
-        if self.source_state != SourceState::Untouched
-            && let Some(source) = self.source_path.clone()
-        {
-            self.write_file(&source, original, &source, o)?;
-            self.source_state = SourceState::Untouched;
+    }
+
+    /// Put the original back where it came from: over the result Ferry wrote
+    /// there, or, once it went to the Trash, at the same path if that is free.
+    /// Something else may have taken the path; that file stays, and the
+    /// original goes beside it (and the job follows it).
+    fn restore_source(&mut self, original: &[u8], o: &RunOptions) -> Result<(), (String, String)> {
+        let Some(mut source) = self.source_path.clone() else {
+            return Ok(());
+        };
+        match self.source_state {
+            SourceState::Untouched => return Ok(()),
+            SourceState::Overwritten(_) => {}
+            SourceState::Trashed => source = output::unique(&source, None),
         }
+        self.write_file(&source, original, &source, o)?;
+        self.source_path = Some(source);
+        self.source_state = SourceState::Untouched;
         Ok(())
     }
 
@@ -1792,6 +1806,72 @@ mod tests {
         let restored = job.restore(&options(), &mut |_, _, _| Ok(())).update;
         assert_eq!(restored.state, JobState::Restored);
         assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    const FOREIGN: &[u8] = b"someone else's file";
+
+    #[test]
+    fn restore_never_overwrites_a_new_file_at_the_trashed_source() {
+        let env = Env::new();
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        assert!(!path.exists());
+        fs::write(&path, FOREIGN).unwrap();
+
+        let restored = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+
+        let copy = env.dir.path().join("shot (2).png");
+        assert_eq!(restored.state, JobState::Restored);
+        assert_eq!(fs::read(&path).unwrap(), FOREIGN, "the new shot.png stays");
+        assert_eq!(
+            fs::read(&copy).unwrap(),
+            input,
+            "the original lands beside it"
+        );
+        assert_eq!(restored.output, Some(copy));
+    }
+
+    #[test]
+    fn a_re_convert_never_overwrites_a_new_file_at_the_trashed_source() {
+        let env = Env::new();
+        let (mut job, path) = done_file(&env, "shot.png");
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        fs::write(&path, FOREIGN).unwrap();
+
+        job.edit(convert(Format::Jpeg));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+
+        assert_eq!(update.state, JobState::Done);
+        assert_eq!(fs::read(&path).unwrap(), FOREIGN, "the new shot.png stays");
+        assert_eq!(update.output, Some(env.dir.path().join("shot.jpg")));
+        assert!(!env.dir.path().join("shot.webp").exists());
+    }
+
+    #[test]
+    fn going_back_to_the_source_format_never_overwrites_a_new_file_at_the_trashed_source() {
+        let env = Env::new();
+        let input = testutil::png(300, 200);
+        let path = env.file("shot.png", &input);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        job.edit(convert(Format::WebP));
+        run(&mut job, Level::Normal, &options(), &env);
+        fs::write(&path, FOREIGN).unwrap();
+
+        job.edit(convert(Format::Png));
+        let update = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+
+        assert_eq!(fs::read(&path).unwrap(), FOREIGN);
+        assert_eq!(update.output, Some(env.dir.path().join("shot (2).png")));
     }
 
     #[test]
