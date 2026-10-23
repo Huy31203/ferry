@@ -150,7 +150,7 @@ None is GPL/LGPL/AGPL or patent-encumbered.
 | `crates/ferry-core/src/intake.rs` (new) | `classify`, `scan`, `summarise`, `route`, `ZoneView`, `keep_source_rules`, own-output filters | 2 |
 | `crates/ferry-core/src/drag.rs` (new) | `Sample`, `DragWatch`, taps, `should_auto_show`, `is_ignored_app`, zone/tab placement | 3 |
 | `crates/ferry-core/src/batch.rs` (new) | `BatchRow`, `RowStatus`, `Adjust`, `Work`, `BatchRun`, `Tally`, `BatchStatus`, `Phase`, `Snapshot`, `pump` | 4 |
-| `src-tauri/src/drop_batch/mod.rs` (new) | `DropState`, `init`, `with_keep`, `came_from_drop`, `tray_items`, menu-event routing | 5 |
+| `src-tauri/src/drop_batch/mod.rs` (new) | `DropState`, `init`, `with_keep`, `came_from_drop`, menu-event routing | 5 |
 | `src-tauri/src/drop_batch/batch.rs` (new) | batch window, dispatcher and flush threads, `claim`/`owns`, batch commands, row menu | 5 |
 | `src-tauri/src/jobs.rs` (modify) | three hooks | 5 |
 | `src/batch.html`, `src/batch/{main.ts,Batch.svelte,BatchTable.svelte,AdjustPanel.svelte}` (new) | batch window UI | 6 |

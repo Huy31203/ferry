@@ -247,6 +247,18 @@ These need the repository owner's secrets and accounts. Ask the user to do them;
 4. **Release as before:** bump `version` in `src-tauri/tauri.conf.json`, `package.json` and the workspace `Cargo.toml`, tag `v<version>`, push the tag. Until steps 2 and 3 are done, `release.yml` stops at its "Check updater signing" step on purpose.
 5. **Repository visibility:** the updater fetches `latest.json` and the assets without a token, so the repository's Releases must be public.
 
+## Open questions for the user
+
+None of these blocks the implementation; each has the default this plan builds.
+
+1. **Signing key and secrets** (User actions 1–3): until they exist, releases stop at "Check updater signing". Default: the check stays.
+2. **Public Releases** (User action 5): if the repository or its Releases are private, the updater needs a token and this design does not work. Default: assumed public.
+3. **Release notes in the update prompt:** `latest.json`'s `notes` is `release.yml`'s `releaseBody`, today the fixed "Unsigned build…" text, so the prompt would show that. Default: unchanged, plus a "View on GitHub" link. Alternative: read the notes from a per-version file such as `docs/releases/v<version>.md`.
+4. **Check interval:** one minute after start, then every 6 hours. Default as stated.
+5. **Rail Tab order:** with a custom order, the rail's visual order and its Tab order differ (the DOM keeps the built-in order to respect the merge rule). Default: accept. Alternative: render the rail with `{#each}` after integration, which moves Card.svelte's rail lines.
+6. **Tray "update available" dot** (R§4.2): not drawn; the menu item and the stack pill carry it. Default: defer.
+7. **What syncs:** launch at login and the Dock icon stay per computer; hotkeys and ignored apps sync only between computers of the same OS; everything else syncs. Default as stated.
+
 ## Review Focus
 
 1. **A remote sync file that is half-downloaded, a cloud placeholder, hand-edited into junk, or from a newer Ferry.** Expected: local settings stay exactly as they are; the file is skipped until a later poll reads it whole; a newer format shows "{device} uses a newer Ferry…". It must never be read as "no settings" and never trigger a write that overwrites the other computer's values. Pinned in Task 2 (`a_truncated_or_foreign_file_is_rejected_not_read_as_empty`, `a_newer_format_is_named_and_not_merged`) and Task 13 (`a_half_written_file_keeps_the_last_good_copy`).
