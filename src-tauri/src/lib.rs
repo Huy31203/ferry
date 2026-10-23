@@ -60,6 +60,9 @@ pub fn run() {
             commands::open_backups,
             commands::open_work,
             commands::force_clean,
+            commands::card_edit,
+            commands::card_convert,
+            commands::card_rename,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
