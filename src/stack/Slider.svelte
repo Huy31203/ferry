@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SLIDER_TOP } from '../lib/edits';
+  import { SLIDER_INSET, SLIDER_TOP } from '../lib/edits';
 
   /** The vertical slider a press-and-drag on Downscale or Compression drops over the thumbnail (spec §5.2). */
   let {
@@ -30,7 +30,7 @@
     width?: number;
   } = $props();
 
-  /** Panel padding; the readout and the half-chip insets above and below the track add the rest (SLIDER_CHROME). */
+  /** Panel padding; the readout and the insets above and below the track add the rest (SLIDER_CHROME). */
   const PAD = 8;
   const KNOB = 14;
   const EDGE = 6;
@@ -59,7 +59,7 @@
   aria-hidden="true"
 >
   <div class="line" style="min-width: {lineMax}px" bind:clientWidth={lineWidth}>{label}</div>
-  <div class="row" class:flip={!toRight} style="padding: {CHIP / 2}px 0">
+  <div class="row" class:flip={!toRight} style="padding: {SLIDER_INSET}px 0">
     <div class="track" style="height: {track}px; width: {KNOB}px">
       <div class="rail-line"></div>
       <div class="fill" style="height: {knob}px"></div>

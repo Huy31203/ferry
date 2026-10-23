@@ -65,6 +65,11 @@ export function stopY(stops: Quality[], i: number, track: number): number {
   return span === 0 ? 0 : (track * (100 - axisValue(stops[i]))) / span;
 }
 
+/** Every stop's `stopY` over a `track` px rail: what the card hands the slider to place its knob, ticks and labels. */
+export function stopYs(stops: Quality[], track: number): number[] {
+  return stops.map((_, i) => stopY(stops, i, track));
+}
+
 /** The stop a press-and-drag lands on: the knob follows the pointer from the `start` stop's place, and the nearest stop wins. */
 export function sliderIndex(stops: Quality[], start: number, dy: number, track: number): number {
   const y = stopY(stops, start, track) + dy;
@@ -78,8 +83,11 @@ export function sliderIndex(stops: Quality[], start: number, dy: number, track: 
 /** The slider panel's top in the card, px; the rail above it ends at 42. */
 export const SLIDER_TOP = 46;
 
-/** The panel's height beyond its track, px: padding 8 + readout 16 + 8 above the track (half a chip) + 8 below + padding 8. */
-export const SLIDER_CHROME = 48;
+/** Room above and below the track inside the panel, px: the end chips (16 px, centred on the ends) reach 8 px out, and 4 more keep one off the readout. */
+export const SLIDER_INSET = 12;
+
+/** The panel's height beyond its track, px: padding 8 + readout 16 + inset 12 + inset 12 + padding 8. */
+export const SLIDER_CHROME = 8 + 16 + 2 * SLIDER_INSET + 8;
 
 /** Space kept between the panel and the card's bottom edge, px. */
 export const SLIDER_EDGE = 6;
