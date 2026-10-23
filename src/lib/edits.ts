@@ -56,17 +56,30 @@ export function qualityLabel(quality: Quality): string {
   return quality === 'extreme' ? t('slider.extreme') : t('slider.quality', { q: quality });
 }
 
-/** The stop a press-and-drag lands on: `start` moved by the drag, one stop per `track / (count - 1)` px, kept in range. */
-export function sliderIndex(start: number, dy: number, count: number, track: number): number {
-  const step = track / Math.max(1, count - 1);
-  return Math.min(count - 1, Math.max(0, start + Math.round(dy / step)));
+/** A stop's place on the slider's value axis: its number, Extreme at 0. */
+const axisValue = (stop: Quality): number => (stop === 'extreme' ? 0 : stop);
+
+/** A stop's distance from the top of a `track` px rail. The rail is the value axis: 100 at the top, the lowest stop at the bottom. */
+export function stopY(stops: Quality[], i: number, track: number): number {
+  const span = 100 - Math.min(...stops.map(axisValue));
+  return span === 0 ? 0 : (track * (100 - axisValue(stops[i]))) / span;
+}
+
+/** The stop a press-and-drag lands on: the knob follows the pointer from the `start` stop's place, and the nearest stop wins. */
+export function sliderIndex(stops: Quality[], start: number, dy: number, track: number): number {
+  const y = stopY(stops, start, track) + dy;
+  let best = 0;
+  stops.forEach((_, i) => {
+    if (Math.abs(stopY(stops, i, track) - y) < Math.abs(stopY(stops, best, track) - y)) best = i;
+  });
+  return best;
 }
 
 /** The slider panel's top in the card, px; the rail above it ends at 42. */
 export const SLIDER_TOP = 46;
 
-/** The panel's height beyond its track, px: padding 10 + readout 14 + divider 6 + 1 + 9 above the track (the knob overhangs 8) + 9 below + padding 10. */
-export const SLIDER_CHROME = 59;
+/** The panel's height beyond its track, px: padding 8 + readout 16 + 8 above the track (half a chip) + 8 below + padding 8. */
+export const SLIDER_CHROME = 48;
 
 /** Space kept between the panel and the card's bottom edge, px. */
 export const SLIDER_EDGE = 6;
@@ -77,13 +90,13 @@ export function sliderTrack(cardHeight: number): number {
 }
 
 /** The least distance between two value labels, px. */
-export const LABEL_PITCH = 14;
+export const LABEL_PITCH = 18;
 
 /** Which stops over a `track` px rail get a value label: the first, the last and the multiples of 25. Where two are closer than LABEL_PITCH the round one nearest an end goes; the first and the last stay. */
 export function labelledStops(stops: Quality[], track: number): number[] {
   const last = stops.length - 1;
   const shown = stops.flatMap((stop, i) => (i === 0 || i === last || (typeof stop === 'number' && stop % 25 === 0) ? [i] : []));
-  const y = (i: number) => (i / Math.max(1, last)) * track;
+  const y = (i: number) => stopY(stops, i, track);
   for (;;) {
     const n = shown.findIndex((i, k) => k > 0 && y(i) - y(shown[k - 1]) < LABEL_PITCH);
     if (n === -1) return shown;
