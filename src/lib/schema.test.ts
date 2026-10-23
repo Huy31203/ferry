@@ -43,4 +43,14 @@ describe('the list of settings', () => {
     const ids = panes.map((p) => p.id);
     for (const s of all) expect(ids).toContain(s.pane);
   });
+
+  it('has the File handling pane with both output rules, the hover toggle and crop sizes', () => {
+    const at = (id: string) => all.find((s) => s.id === id);
+    expect(all.filter((s) => s.pane === 'files').map((s) => s.path)).toEqual([
+      'images.output.optimised',
+      'images.output.converted',
+    ]);
+    expect(at('hover_hotkeys')?.path).toBe('floating.hover_hotkeys');
+    expect(at('crop_sizes')?.control.kind).toBe('sizes');
+  });
 });

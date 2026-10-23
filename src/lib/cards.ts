@@ -1,6 +1,14 @@
 import type { JobState, JobUpdate } from './ipc';
 
-export type RailAction = 'copy' | 'reveal' | 'restore' | 'aggressive';
+/** Rail A (spec §5.1). Show in folder, Aggressive, Rename, Preview and Fit live in the ⋯ menu. */
+export type RailAction =
+  | 'downscale'
+  | 'compression'
+  | 'crop'
+  | 'restore'
+  | 'compare'
+  | 'copy'
+  | 'more';
 
 /** Waiting for or running its encoder: no rail, and the close button cancels. */
 export function isBusy(state: JobState): boolean {
@@ -12,13 +20,21 @@ export function autoHides(state: JobState): boolean {
   return ['done', 'already_optimal', 'larger', 'restored'].includes(state.kind);
 }
 
-/** The rail's buttons for a card, in order (§7 card anatomy). */
-export function railActions(card: JobUpdate): RailAction[] {
+/** The rail's buttons for a finished card, in order; compact cards leave out Compression and Compare. */
+export function railActions(card: JobUpdate, compact = false): RailAction[] {
   if (!autoHides(card.state) || card.output === null) return [];
-  const actions: RailAction[] = ['copy', 'reveal'];
+  const actions: RailAction[] = ['downscale'];
+  if (!compact) actions.push('compression');
+  actions.push('crop');
   if (card.state.kind === 'done' && card.can_restore) actions.push('restore');
-  if (card.state.kind !== 'restored') actions.push('aggressive');
+  if (!compact) actions.push('compare');
+  actions.push('copy', 'more');
   return actions;
+}
+
+/** Rail buttons that work on the original, so `can_edit` turns them off. */
+export function needsOriginal(action: RailAction): boolean {
+  return ['downscale', 'compression', 'crop', 'compare'].includes(action);
 }
 
 /** Whether the card's file can be dragged out. */
@@ -41,4 +57,33 @@ export function draggable(cards: JobUpdate[]): JobUpdate[] {
 /** The files "Drag all" carries: every finished card's output. */
 export function dragAllFiles(cards: JobUpdate[]): string[] {
   return draggable(cards).map((c) => c.output as string);
+}
+
+/** A card tool that needs the keyboard (or, for the slider, Esc). */
+export type Tool = 'rename' | 'crop' | 'fit' | 'slider';
+
+/** The one tool open in the stack, and the card it belongs to. */
+export interface OpenTool {
+  id: string;
+  kind: Tool;
+}
+
+/** `tool`, or null once its card is gone or busy: the stack must not stay key for a card that left. */
+export function openTool(tool: OpenTool | null, cards: JobUpdate[]): OpenTool | null {
+  if (tool === null) return null;
+  const owner = cards.find((c) => c.id === tool.id);
+  return owner && canDrag(owner) ? tool : null;
+}
+
+/** The card the hover hotkeys act on (spec §4.5): the idle card under the pointer,
+ *  unless a tool has the keyboard or the setting is off. */
+export function hoverTarget(
+  hovered: string | null,
+  cards: JobUpdate[],
+  tool: OpenTool | null,
+  enabled: boolean,
+): string | null {
+  if (!enabled || tool !== null || hovered === null) return null;
+  const card = cards.find((c) => c.id === hovered);
+  return card && canDrag(card) ? card.id : null;
 }

@@ -3,9 +3,12 @@
   import { formatBytes } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import type { Setting } from '../lib/schema';
+  import type { OutputRule as Rule } from '../lib/settings';
   import Choice from './controls/Choice.svelte';
   import ListEditor from './controls/ListEditor.svelte';
   import NumberField from './controls/NumberField.svelte';
+  import OutputRule from './controls/OutputRule.svelte';
+  import SizeList from './controls/SizeList.svelte';
   import Slider from './controls/Slider.svelte';
   import Switch from './controls/Switch.svelte';
   import TemplateField from './controls/TemplateField.svelte';
@@ -126,6 +129,16 @@
         labelledby={labelId}
         onchange={onchange}
       />
+    {:else if control.kind === 'output'}
+      <OutputRule
+        value={value as Rule}
+        converted={control.converted}
+        {disabled}
+        labelledby={labelId}
+        {onchange}
+      />
+    {:else if control.kind === 'sizes'}
+      <SizeList sizes={value as [number, number][]} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'tray_style'}
       <TrayStyle value={value as string} labelledby={labelId} {onchange} />
     {:else if control.kind === 'action'}

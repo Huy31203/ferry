@@ -1,3 +1,12 @@
+export type OutputLocation = 'in_place' | 'same_folder' | 'folder' | 'temporary';
+
+/** Mirrors ferry_core::settings::OutputRule. `folder` keeps a leading `~`. */
+export interface OutputRule {
+  location: OutputLocation;
+  folder: string;
+  template: string;
+}
+
 /** Mirrors ferry_core::settings::Settings (serde snake_case). Unknown fields from a newer file ride along untouched. */
 export interface Settings {
   version: number;
@@ -26,6 +35,8 @@ export interface Settings {
     preserve_dates: boolean;
     ignored_extensions: string[];
     max_size_mb: number;
+    output: { optimised: OutputRule; converted: OutputRule };
+    crop_sizes: [number, number][];
   };
   floating: {
     enabled: boolean;
@@ -33,6 +44,7 @@ export interface Settings {
     card_size: 'default' | 'compact';
     auto_hide_secs: number;
     follow_cursor: boolean;
+    hover_hotkeys: boolean;
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };

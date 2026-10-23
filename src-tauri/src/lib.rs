@@ -2,8 +2,10 @@ mod clipboard;
 mod commands;
 mod compare;
 mod hotkeys;
+mod hover_keys;
 mod jobs;
 mod logging;
+mod menu;
 mod platform;
 mod prefs;
 mod preview;
@@ -66,6 +68,15 @@ pub fn run() {
             commands::open_backups,
             commands::open_work,
             commands::force_clean,
+            commands::card_edit,
+            commands::card_convert,
+            commands::card_rename,
+            windows::stack_focus,
+            commands::crop_sizes_reset,
+            commands::card_menu,
+            commands::card_hover,
+            commands::output_preview,
+            commands::pick_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
@@ -107,6 +118,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let registered = hotkeys::register(app);
     app.manage(registered);
     tray::build(app)?;
+    menu::init(app);
     clipboard::start(app);
     housekeeping(app);
     if let LoadStatus::Recovered { .. } = status {

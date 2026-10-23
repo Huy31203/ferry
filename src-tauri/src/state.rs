@@ -83,10 +83,12 @@ impl AppState {
 }
 
 /// A job, its cancel switch and the card it last showed. `job` stays locked
-/// while the job runs, so `output` is kept outside it.
+/// while the job runs, so its current file is kept outside it.
 pub struct Entry {
     pub job: Mutex<Job>,
-    pub output: PathBuf,
+    /// The job's current file: follows every run, conversion and rename.
+    /// Never held while taking another lock.
+    output: Mutex<PathBuf>,
     /// The clipboard copy a clipboard job came from, until its first run.
     pub source_seq: Mutex<Option<u64>>,
     pub cancel: Mutex<CancelToken>,
@@ -98,13 +100,22 @@ pub struct Entry {
 impl Entry {
     pub fn new(job: Job, source_seq: Option<u64>, last: JobUpdate) -> Self {
         Self {
-            output: job.output.clone(),
+            output: Mutex::new(job.output.clone()),
             source_seq: Mutex::new(source_seq),
             job: Mutex::new(job),
             cancel: Mutex::new(CancelToken::new()),
             last: Mutex::new(last),
             previous: Mutex::new(None),
         }
+    }
+
+    pub fn output(&self) -> PathBuf {
+        self.output.lock().unwrap().clone()
+    }
+
+    /// Call after anything that may move the job's file: a run, a restore, a rename.
+    pub fn set_output(&self, path: PathBuf) {
+        *self.output.lock().unwrap() = path;
     }
 
     pub fn is_busy(&self) -> bool {
@@ -139,8 +150,9 @@ pub fn relock<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Whether another queued or running job writes the same file as `entry`; two
 /// writers would share one temporary file.
 pub fn output_busy(jobs: &HashMap<JobId, Arc<Entry>>, entry: &Arc<Entry>) -> bool {
+    let output = entry.output();
     jobs.values()
-        .any(|e| !Arc::ptr_eq(e, entry) && e.is_busy() && e.output == entry.output)
+        .any(|e| !Arc::ptr_eq(e, entry) && e.is_busy() && e.output() == output)
 }
 
 /// Clipboard changes Ferry made itself, and the files "accumulate results" has
@@ -314,6 +326,22 @@ mod tests {
     fn a_cancelled_first_run_has_no_card_to_return_to() {
         let e = entry("/w/a.png", JobState::Queued);
         assert_eq!(e.cancel_back(), None);
+    }
+
+    #[test]
+    fn a_moved_result_moves_the_busy_check_with_it() {
+        let mut jobs = HashMap::new();
+        let busy = entry("/w/b.webp", JobState::Queued);
+        let idle = entry("/w/a.png", JobState::Done);
+        for e in [&busy, &idle] {
+            let id = e.job.lock().unwrap().id.clone();
+            jobs.insert(id, e.clone());
+        }
+        assert!(!output_busy(&jobs, &idle));
+        // The idle card was converted to b.webp, which the busy job also writes.
+        idle.set_output(PathBuf::from("/w/b.webp"));
+        assert_eq!(idle.output(), PathBuf::from("/w/b.webp"));
+        assert!(output_busy(&jobs, &idle));
     }
 
     #[test]

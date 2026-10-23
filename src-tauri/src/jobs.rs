@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ferry_core::cancel::CancelToken;
+use ferry_core::edit::EditsPatch;
 use ferry_core::i18n::{t, tf};
 use ferry_core::job::{JobId, JobState, JobUpdate, Source};
 use ferry_core::optimise::Level;
@@ -50,30 +51,92 @@ pub fn notice(app: &AppHandle, reason: String) {
 /// "Try aggressive" asks for Aggressive.
 pub fn rerun(app: &AppHandle, id: &JobId, aggressive: bool) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
-    let (queued, level) = {
-        let job = relock(&entry.job);
-        let level = if aggressive {
-            Level::Aggressive
-        } else {
-            job.level
-        };
-        (job.update(JobState::Queued, None), level)
+    let level = if aggressive {
+        Level::Aggressive
+    } else {
+        relock(&entry.job).level
     };
+    requeue(app, entry, level);
+    Ok(())
+}
+
+/// Merge what the card asked for into its recipe and run it on the original
+/// again (spec §4.5 `card_edit`).
+pub fn edit(app: &AppHandle, id: &JobId, patch: EditsPatch) -> Result<(), String> {
+    let entry = editable_entry(app, id)?;
+    let level = {
+        let mut job = relock(&entry.job);
+        job.edit(patch);
+        job.level
+    };
+    requeue(app, entry, level);
+    Ok(())
+}
+
+/// Convert the card's result (replacing its last conversion), or with
+/// `keep_both` start a twin job on the same original with its own card.
+pub fn convert(app: &AppHandle, id: &JobId, format: Format, keep_both: bool) -> Result<(), String> {
+    let patch = EditsPatch {
+        format: Some(Some(format)),
+        ..EditsPatch::default()
+    };
+    if !keep_both {
+        return edit(app, id, patch);
+    }
+    let entry = editable_entry(app, id)?;
+    let (twin, level) = {
+        let mut twin = relock(&entry.job).fork();
+        twin.edit(patch);
+        let level = twin.level;
+        (twin, level)
+    };
+    if start(app, twin, level, None) {
+        Ok(())
+    } else {
+        Err(tf("error.busy", &[("name", &entry_name(&entry))]))
+    }
+}
+
+/// Rename the card's file in its folder; the card keeps its state and sizes.
+/// `Err` is the inline message ("Name taken", …).
+pub fn rename(app: &AppHandle, id: &JobId, stem: &str) -> Result<(), String> {
+    let entry = idle_entry(app, id)?;
+    let card = {
+        let mut job = relock(&entry.job);
+        job.rename(stem).map_err(|e| e.message())?;
+        entry.set_output(job.output.clone());
+        let last = entry.last.lock().unwrap().clone();
+        job.update(last.state, last.after)
+    };
+    *entry.last.lock().unwrap() = card.clone();
+    app.state::<AppState>().remember(&card);
+    show(app, card);
+    tray::rebuild(app);
+    Ok(())
+}
+
+/// Show the job's Queued card and run it again at `level`.
+fn requeue(app: &AppHandle, entry: Arc<Entry>, level: Level) {
+    let queued = relock(&entry.job).update(JobState::Queued, None);
     *entry.cancel.lock().unwrap() = CancelToken::new();
     entry.begin_rerun(queued.clone());
     show(app, queued);
     tray::refresh(app);
     spawn(app, entry, level);
-    Ok(())
 }
 
 /// Put the original back (§5.5).
 pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let options = run_options(app, CancelToken::new());
-    let finished = relock(&entry.job).restore(&options, &mut |format, bytes, file| {
-        deliver(app, format, bytes, file, None)
-    });
+    let finished = {
+        let mut job = relock(&entry.job);
+        let finished = job.restore(&options, &mut |format, bytes, file| {
+            deliver(app, format, bytes, file, None)
+        });
+        entry.set_output(job.output.clone());
+        finished
+    };
     finish(app, &entry, finished.update, finished.cause, None);
     Ok(())
 }
@@ -93,6 +156,16 @@ pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
         }
         Source::File => platform::clipboard::write_files(std::slice::from_ref(&job.output))?,
     };
+    log.record(seq, None);
+    Ok(())
+}
+
+/// "Copy path": the result's full path as text.
+pub fn copy_path(app: &AppHandle, id: &JobId) -> Result<(), String> {
+    let path = output(app, id).ok_or("the file is gone")?;
+    let state = app.state::<AppState>();
+    let mut log = state.clipboard.lock().unwrap();
+    let seq = platform::clipboard::write_text(&path.to_string_lossy())?;
     log.record(seq, None);
     Ok(())
 }
@@ -127,7 +200,7 @@ pub fn cancel(app: &AppHandle, id: &JobId) {
 /// The output file of a card, for "Show in folder".
 pub fn output(app: &AppHandle, id: &JobId) -> Option<std::path::PathBuf> {
     let state = app.state::<AppState>();
-    let path = state.jobs.lock().unwrap().get(id)?.output.clone();
+    let path = state.jobs.lock().unwrap().get(id)?.output();
     path.exists().then_some(path)
 }
 
@@ -139,7 +212,7 @@ pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, 
     let (keep, busy) = {
         let mut jobs = state.jobs.lock().unwrap();
         jobs.retain(|_, entry| entry.is_busy());
-        let keep: Vec<std::path::PathBuf> = jobs.values().map(|e| e.output.clone()).collect();
+        let keep: Vec<std::path::PathBuf> = jobs.values().map(|e| e.output()).collect();
         let busy: Vec<JobUpdate> = jobs
             .values()
             .map(|e| e.last.lock().unwrap().clone())
@@ -286,6 +359,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
         },
         &mut |format, bytes, file| deliver(app, format, bytes, file, source),
     );
+    entry.set_output(job.output.clone());
     drop(job);
     match finished {
         Some(f) => finish(app, entry, f.update, f.cause, Some(started)),
@@ -346,6 +420,16 @@ fn idle_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
     Ok(entry)
 }
 
+/// An idle card whose edit tools apply; `Err` is why not ("Original no longer kept").
+fn editable_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
+    let entry = idle_entry(app, id)?;
+    let last = entry.last.lock().unwrap().clone();
+    if !last.can_edit {
+        return Err(last.edit_hint.unwrap_or_else(|| t("card.no_original")));
+    }
+    Ok(entry)
+}
+
 fn run_options(app: &AppHandle, cancel: CancelToken) -> RunOptions {
     let state = app.state::<AppState>();
     let settings = state.settings.read().unwrap();
@@ -369,7 +453,7 @@ fn move_to_trash(path: &Path) -> std::io::Result<()> {
 
 fn entry_name(entry: &Entry) -> String {
     entry
-        .output
+        .output()
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()

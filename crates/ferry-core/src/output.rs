@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
-use crate::settings::{self, Location, Output};
+use crate::settings::{self, Location, Output, OutputRule};
 use crate::template;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +76,40 @@ pub fn resolve(
             .join(t.job)
             .join(format!("{stem}.{}", t.ext)),
     }
+}
+
+/// The File handling pane's live example: where `~/Desktop/shot.png`
+/// (1920×1080) goes under `rule`, as a WebP when `kind` is Converted, with
+/// `~` for the home folder. `Err` lists the template's unknown tokens, when
+/// the location uses the template.
+pub fn example(
+    kind: OutputKind,
+    rule: &OutputRule,
+    home: &Path,
+    work_dir: &Path,
+    today: NaiveDate,
+) -> Result<String, Vec<String>> {
+    if matches!(rule.location, Location::SameFolder | Location::Folder) {
+        template::validate(&rule.template)?;
+    }
+    let rules = Output {
+        optimised: rule.clone(),
+        converted: rule.clone(),
+        ..Output::default()
+    };
+    let source = home.join("Desktop").join("shot.png");
+    let target = Target {
+        source: &source,
+        job: "example",
+        ext: match kind {
+            OutputKind::Optimised => "png",
+            OutputKind::Converted => "webp",
+        },
+        dims: (1920, 1080),
+        kind,
+    };
+    let path = resolve(&target, &rules, work_dir, home, today);
+    Ok(settings::contract_home(&path, home))
 }
 
 /// `path`, or `name (2).ext`, `name (3).ext`, … when another file already
@@ -204,5 +238,58 @@ mod tests {
         assert_eq!(unique(&wanted, Some(&wanted)), wanted);
         fs::write(dir.path().join("shot (2).webp"), b"x").unwrap();
         assert_eq!(unique(&wanted, None), dir.path().join("shot (3).webp"));
+    }
+
+    fn rule(location: Location, template: &str) -> OutputRule {
+        OutputRule {
+            location,
+            template: template.into(),
+            ..OutputRule::default()
+        }
+    }
+
+    fn example_of(kind: OutputKind, rule: &OutputRule) -> Result<String, Vec<String>> {
+        example(kind, rule, Path::new("/h"), Path::new("/w"), today())
+    }
+
+    #[test]
+    fn the_example_shows_where_a_desktop_screenshot_goes() {
+        let in_place = rule(Location::InPlace, "%f.%e");
+        assert_eq!(
+            example_of(OutputKind::Optimised, &in_place).unwrap(),
+            "~/Desktop/shot.png"
+        );
+        assert_eq!(
+            example_of(OutputKind::Converted, &in_place).unwrap(),
+            "~/Desktop/shot.webp"
+        );
+        assert_eq!(
+            example_of(
+                OutputKind::Optimised,
+                &rule(Location::SameFolder, "%f_optimised.%e")
+            )
+            .unwrap(),
+            "~/Desktop/shot_optimised.png"
+        );
+        let folder = OutputRule {
+            folder: "~/Pictures/Ferry".into(),
+            ..rule(Location::Folder, "%f_%z.%e")
+        };
+        assert_eq!(
+            example_of(OutputKind::Converted, &folder).unwrap(),
+            "~/Pictures/Ferry/shot_1920x1080.webp"
+        );
+    }
+
+    #[test]
+    fn the_example_names_unknown_tokens_only_where_the_template_is_used() {
+        assert_eq!(
+            example_of(
+                OutputKind::Optimised,
+                &rule(Location::SameFolder, "%f%q.%e")
+            ),
+            Err(vec!["%q".to_string()])
+        );
+        assert!(example_of(OutputKind::Optimised, &rule(Location::InPlace, "%q")).is_ok());
     }
 }

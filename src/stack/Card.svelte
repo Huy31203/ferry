@@ -2,10 +2,28 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { fade } from 'svelte/transition';
-  import { autoHides, canDrag, isBusy, railActions } from '../lib/cards';
+  import { autoHides, canDrag, isBusy, needsOriginal, railActions, type RailAction, type Tool } from '../lib/cards';
+  import {
+    QUALITY_STOPS,
+    SCALE_STOPS,
+    currentQuality,
+    formatChoices,
+    frameBox,
+    nextQuality,
+    nextScale,
+    qualityLabel,
+    qualityPatch,
+    scaleLabel,
+    scalePatch,
+    sliderIndex,
+    stopIndex,
+    type CropFrame,
+  } from '../lib/edits';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
-  import { isMac, type JobUpdate } from '../lib/ipc';
+  import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
+  import FormatBar from './FormatBar.svelte';
+  import Slider from './Slider.svelte';
 
   let {
     card,
@@ -15,8 +33,12 @@
     held = false,
     hotAction = null,
     autoHideSecs,
+    compression,
+    tool = null,
+    frame = null,
     onclose,
     ondrag,
+    ontool,
   }: {
     card: JobUpdate;
     hovered?: boolean;
@@ -27,8 +49,16 @@
     /** The `data-action` of the button the pointer is on, if it is on this card. */
     hotAction?: string | null;
     autoHideSecs: number;
+    /** The settings' compression quality: where the Compression slider starts on a card without its own. */
+    compression: number;
+    /** This card's open tool, if any. */
+    tool?: Tool | null;
+    /** The crop popover's live frame, drawn over the thumbnail. */
+    frame?: CropFrame | null;
     onclose: () => void;
     ondrag: (active: boolean) => void;
+    /** Open a tool on this card, or close it with null. */
+    ontool: (kind: Tool | null) => void;
   } = $props();
 
   let focused = $state(false);
@@ -37,11 +67,20 @@
   let copied = $state<'ok' | 'failed' | null>(null);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
   let tip = $state<{ text: string; left: number; top: number } | null>(null);
+  let renameError = $state<string | null>(null);
 
   const busy = $derived(isBusy(card.state));
   const notice = $derived(card.name === '' && card.ext === '');
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
-  const rail = $derived(railActions(card));
+  const rail = $derived(railActions(card, compact));
+  const canRename = $derived(canDrag(card));
+  const frameRect = $derived(
+    frame && card.dims_before
+      ? frameBox(frame, card.dims_before, compact ? [220, 150] : [300, 200])
+      : null,
+  );
+  // The format bar replaces the detail line while the card is hovered (spec §5.4).
+  const showFormats = $derived(hovered && rail.length > 0 && card.state.kind !== 'restored');
   const stateLabel = $derived(t(`card.state.${card.state.kind}` as StringKey));
   const label = $derived(
     t('card.aria', { name: notice ? t('card.notice') : fileName, state: stateLabel }),
@@ -50,7 +89,7 @@
 
   // Finished cards fade out after the configured time; hover or focus holds them (§5.5).
   $effect(() => {
-    if (!autoHides(card.state) || autoHideSecs === 0 || hovered || focused || held) return;
+    if (!autoHides(card.state) || autoHideSecs === 0 || hovered || focused || held || tool !== null) return;
     const timer = setTimeout(onclose, autoHideSecs * 1000);
     return () => clearTimeout(timer);
   });
@@ -73,18 +112,157 @@
     copiedTimer = setTimeout(() => (copied = null), 1400);
   }
 
+  $effect(() => {
+    if (tool !== 'rename') renameError = null;
+  });
+
+  function focusSelect(input: HTMLInputElement) {
+    input.focus();
+    input.select();
+  }
+
+  async function rename(stem: string) {
+    if (stem === card.name) {
+      ontool(null);
+      return;
+    }
+    try {
+      await invoke('card_rename', { id: card.id, stem });
+      ontool(null);
+    } catch (e) {
+      renameError = String(e);
+    }
+  }
+
+  function renameKey(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void rename((event.currentTarget as HTMLInputElement).value);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      ontool(null);
+    }
+  }
+
+  /** The slider's track length in px; the thumbnail below the rail. */
+  const TRACK = 136;
+  /** Fallback switch (Task 11): false if drags never reach the panel; the buttons then only step. */
+  const PRESS_AND_DRAG = true;
+  type SliderKind = 'downscale' | 'compression';
+  let slide = $state<{
+    kind: SliderKind;
+    startY: number;
+    start: number;
+    index: number;
+    moved: boolean;
+    left: number;
+  } | null>(null);
+  const quality = $derived(currentQuality(card.edits, compression));
+  const slideLabel = $derived.by(() => {
+    if (!slide) return '';
+    return slide.kind === 'downscale'
+      ? scaleLabel(SCALE_STOPS[slide.index], card.dims_before, card.edits)
+      : qualityLabel(QUALITY_STOPS[slide.index]);
+  });
+
+  function edit(edits: EditsPatch) {
+    void act('card_edit', { edits });
+  }
+
+  function step(kind: SliderKind) {
+    edit(kind === 'downscale' ? scalePatch(nextScale(card.edits.scale)) : qualityPatch(nextQuality(quality)));
+  }
+
+  // Press and hold: a drag of a few px turns the press into a slider; a plain click is one step.
+  function press(kind: SliderKind, event: PointerEvent) {
+    if (!PRESS_AND_DRAG || event.button !== 0 || !card.can_edit) return;
+    const button = event.currentTarget as HTMLElement;
+    button.setPointerCapture(event.pointerId);
+    const box = cardEl?.getBoundingClientRect();
+    const rect = button.getBoundingClientRect();
+    const start =
+      kind === 'downscale' ? stopIndex(SCALE_STOPS, card.edits.scale ?? 100) : stopIndex(QUALITY_STOPS, quality);
+    slide = {
+      kind,
+      startY: event.clientY,
+      start,
+      index: start,
+      moved: false,
+      left: rect.left + rect.width / 2 - (box?.left ?? 0),
+    };
+  }
+
+  function slideMove(event: PointerEvent) {
+    if (!slide) return;
+    const dy = event.clientY - slide.startY;
+    if (!slide.moved && Math.abs(dy) < 4) return;
+    if (!slide.moved) ontool('slider');
+    const count = slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length;
+    slide = { ...slide, moved: true, index: sliderIndex(slide.start, dy, count, TRACK) };
+  }
+
+  // Release applies; releasing back at the start value changes nothing.
+  function release() {
+    const done = slide;
+    slide = null;
+    if (!done) return;
+    if (!done.moved) {
+      step(done.kind);
+      return;
+    }
+    ontool(null);
+    if (done.index === done.start) return;
+    edit(
+      done.kind === 'downscale'
+        ? scalePatch(SCALE_STOPS[done.index])
+        : qualityPatch(QUALITY_STOPS[done.index]),
+    );
+  }
+
+  function cancelSlide() {
+    if (slide?.moved) ontool(null);
+    slide = null;
+  }
+
+  // Enter or Space on a focused button: one step (a pointer press is handled by `release`).
+  function keyStep(kind: SliderKind, event: MouseEvent) {
+    if ((event.detail === 0 || !PRESS_AND_DRAG) && card.can_edit) step(kind);
+  }
+
+
+  function convert(format: Format, keepBoth: boolean) {
+    void act('card_convert', { format, keepBoth });
+  }
+
+  function formatTip(format: string): string {
+    if (!card.can_edit) return card.edit_hint ?? t('card.no_original');
+    const choice = formatChoices(card).find((c) => c.format === format);
+    if (!choice) return '';
+    if (choice.firstFrame) return t('card.first_frame');
+    return t(isMac ? 'format.tip.mac' : 'format.tip.windows', { format: choice.label });
+  }
+
+
   function tipText(action: string): string {
+    if (action.startsWith('format-')) return formatTip(action.slice('format-'.length));
+    if (needsOriginal(action as RailAction) && !card.can_edit) return card.edit_hint ?? t('card.no_original');
     switch (action) {
+      case 'downscale':
+        return t('card.downscale');
+      case 'compression':
+        return t('card.compression');
+      case 'crop':
+        return t('card.crop');
+      case 'compare':
+        return t('card.compare');
+      case 'rename':
+        return t('card.rename');
       case 'copy':
         return copied === 'ok' ? t('card.copied') : copied === 'failed' ? t('card.copy_failed') : t('card.copy');
-      case 'reveal':
-        return t(isMac ? 'card.reveal.mac' : 'card.reveal.windows');
       case 'restore':
         return t('card.restore');
-      case 'aggressive':
-        return t('card.aggressive');
       case 'more':
-        return t('card.more');
+        return t('card.menu');
       case 'close':
         return t(busy ? 'card.cancel' : 'card.close');
       case 'retry':
@@ -112,12 +290,20 @@
     }
     const box = cardEl.getBoundingClientRect();
     const rect = button.getBoundingClientRect();
+    // Under the button, or above it near the bottom edge (the format bar) so the card does not clip it.
+    const below = rect.bottom - box.top + 6;
     tip = {
       text: tipText(action),
       left: Math.max(8, rect.left - box.left),
-      top: rect.bottom - box.top + 6,
+      top: below + 24 > box.height ? rect.top - box.top - 28 : below,
     };
   });
+
+  // The ⋯ button opens the native menu just under itself; right-click opens it at the pointer.
+  function openMenu(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    void act('card_menu', { x: rect.left, y: rect.bottom + 4 });
+  }
 
   function close() {
     if (busy) act('card_cancel');
@@ -150,6 +336,12 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === 'Escape' && slide) cancelSlide();
+  }}
+/>
+
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <article
   class="card"
@@ -162,6 +354,10 @@
   bind:this={cardEl}
   aria-label={label}
   onmousedown={drag}
+  oncontextmenu={(event) => {
+    event.preventDefault();
+    void act('card_menu', { x: event.clientX, y: event.clientY });
+  }}
   onfocusin={() => (focused = true)}
   onfocusout={() => (focused = false)}
   out:fade={{ duration: motionOut }}
@@ -183,9 +379,63 @@
     </svg>
   {/if}
   <div class="scrim" aria-hidden="true"></div>
+  {#if frameRect}
+    <div
+      class="frame"
+      aria-hidden="true"
+      style="left: {frameRect.left}px; top: {frameRect.top}px; width: {frameRect.width}px; height: {frameRect.height}px"
+    ></div>
+  {/if}
 
   {#if rail.length > 0}
     <div class="rail">
+      {#if rail.includes('downscale')}
+        <button
+          type="button"
+          data-action="downscale"
+          class:hot={hotAction === 'downscale'}
+          aria-label={tipText('downscale')}
+          disabled={!card.can_edit}
+          onpointerdown={(event) => press('downscale', event)}
+          onpointermove={slideMove}
+          onpointerup={release}
+          onpointercancel={cancelSlide}
+          onclick={(event) => keyStep('downscale', event)}
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="m14 10 7-7" /><path d="m3 21 7-7" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('compression')}
+        <button
+          type="button"
+          data-action="compression"
+          class:hot={hotAction === 'compression'}
+          aria-label={tipText('compression')}
+          disabled={!card.can_edit}
+          onpointerdown={(event) => press('compression', event)}
+          onpointermove={slideMove}
+          onpointerup={release}
+          onpointercancel={cancelSlide}
+          onclick={(event) => keyStep('compression', event)}
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('crop')}
+        <button type="button" data-action="crop" class:hot={hotAction === 'crop'} aria-label={tipText('crop')} disabled={!card.can_edit} onclick={() => ontool(tool === 'crop' ? null : 'crop')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14" /><path d="M18 22V8a2 2 0 0 0-2-2H2" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('restore')}
+        <button type="button" data-action="restore" class:hot={hotAction === 'restore'} aria-label={tipText('restore')} onclick={() => act('card_restore')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('compare')}
+        <button type="button" data-action="compare" class:hot={hotAction === 'compare'} aria-label={tipText('compare')} disabled={!card.can_edit} onclick={() => act('open_compare')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18" /></svg>
+        </button>
+      {/if}
       {#if rail.includes('copy')}
         <button
           type="button"
@@ -203,27 +453,21 @@
           {/if}
         </button>
       {/if}
-      {#if rail.includes('reveal')}
-        <button type="button" data-action="reveal" class:hot={hotAction === 'reveal'} aria-label={tipText('reveal')} onclick={() => act('card_reveal')}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
-        </button>
-      {/if}
-      {#if rail.includes('restore')}
-        <button type="button" data-action="restore" class:hot={hotAction === 'restore'} aria-label={tipText('restore')} onclick={() => act('card_restore')}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
-        </button>
-      {/if}
-      {#if rail.includes('aggressive')}
-        <button type="button" data-action="aggressive" class:hot={hotAction === 'aggressive'} aria-label={tipText('aggressive')} onclick={() => act('card_rerun', { aggressive: true })}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" /></svg>
-        </button>
-      {/if}
-      {#if !compact}
-        <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} disabled>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+      {#if rail.includes('more')}
+        <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} onclick={(event) => openMenu(event)}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
         </button>
       {/if}
     </div>
+  {/if}
+  {#if slide?.moved}
+    <Slider
+      index={slide.index}
+      count={slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length}
+      label={slideLabel}
+      left={slide.left}
+      track={TRACK}
+    />
   {/if}
 
   <button class="close" class:hot={hotAction === 'close'} type="button" data-action="close" aria-label={tipText('close')} onclick={close}>
@@ -233,9 +477,35 @@
   <div class="info">
     {#if !notice}
       <div class="chips">
-        <span class="name">{card.name}</span>
+        {#if tool === 'rename'}
+          <input
+            class="name name-field"
+            type="text"
+            value={card.name}
+            aria-label={t('card.rename_named', { name: fileName })}
+            aria-invalid={renameError !== null}
+            use:focusSelect
+            onkeydown={renameKey}
+            onblur={() => ontool(null)}
+          />
+        {:else if canRename}
+          <button
+            type="button"
+            class="name"
+            data-action="rename"
+            class:hot={hotAction === 'rename'}
+            aria-label={t('card.rename_named', { name: fileName })}
+            onclick={() => ontool('rename')}>{card.name}</button
+          >
+        {:else}
+          <span class="name">{card.name}</span>
+        {/if}
         {#if card.ext}<span class="ext">{card.ext}</span>{/if}
+        {#if card.converted}<span class="converted">{t('card.converted')}</span>{/if}
       </div>
+      {#if renameError}
+        <span class="rename-error" role="alert">{renameError}</span>
+      {/if}
     {/if}
     <div class="line">
       {#if card.state.kind === 'queued'}
@@ -264,6 +534,9 @@
         <span class="reason" role="alert">{card.state.reason}</span>
       {/if}
     </div>
+    {#if card.note}
+      <span class="note" role="status">{card.note}</span>
+    {/if}
     {#if card.state.kind === 'error'}
       <div class="buttons">
         {#if card.can_retry}
@@ -275,6 +548,8 @@
       <div class="buttons">
         <button type="button" data-action="reoptimise" class:hot={hotAction === 'reoptimise'} onclick={() => act('card_rerun', { aggressive: false })}>{t('card.reoptimise')}</button>
       </div>
+    {:else if showFormats}
+      <FormatBar {card} {hotAction} onconvert={convert} />
     {:else if card.state.kind === 'done' && card.detail && !compact}
       <span class="detail">{card.detail}</span>
     {/if}
@@ -463,6 +738,48 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  button.name {
+    border: 0;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    cursor: text;
+  }
+  button.name:hover,
+  button.name.hot {
+    background: rgba(255, 255, 255, 0.28);
+  }
+  .name-field {
+    width: 180px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  .name-field[aria-invalid='true'] {
+    border-color: #ff453a;
+  }
+  .frame {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px dashed #fff;
+    box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+  }
+  .note {
+    font-size: 11px;
+    font-weight: 600;
+    color: #ffd27a;
+  }
+  .converted {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.82);
+  }
+  .rename-error {
+    font-size: 11px;
+    color: #ffb3ae;
   }
   .ext {
     flex-shrink: 0;

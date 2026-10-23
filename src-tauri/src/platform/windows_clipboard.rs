@@ -180,6 +180,15 @@ pub fn write_files(paths: &[PathBuf]) -> Result<u64, String> {
     Ok(seq())
 }
 
+/// Put plain text on the clipboard ("Copy path"). `set_string` empties it first.
+pub fn write_text(text: &str) -> Result<u64, String> {
+    {
+        let _open = Clipboard::new_attempts(ATTEMPTS).map_err(|e| e.to_string())?;
+        raw::set_string(text).map_err(|e| e.to_string())?;
+    }
+    Ok(seq())
+}
+
 /// Send the sequence number on `tx` after every clipboard change. The listener
 /// window must live on the thread that waits on it.
 pub fn watch(tx: Sender<u64>) {
