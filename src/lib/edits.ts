@@ -62,6 +62,33 @@ export function sliderIndex(start: number, dy: number, count: number, track: num
   return Math.min(count - 1, Math.max(0, start + Math.round(dy / step)));
 }
 
+/** The slider panel's top in the card, px; the rail above it ends at 42. */
+export const SLIDER_TOP = 46;
+
+/** The panel's height beyond its track, px: padding 6 + live line 14 + 8 for the knob's overhang above and below + padding 6. */
+export const SLIDER_CHROME = 42;
+
+/** Space kept between the panel and the card's bottom edge, px. */
+export const SLIDER_EDGE = 6;
+
+/** The longest track that keeps the whole panel inside a card of `cardHeight` px. */
+export function sliderTrack(cardHeight: number): number {
+  return cardHeight - SLIDER_EDGE - SLIDER_TOP - SLIDER_CHROME;
+}
+
+/** The least distance between two value labels, px. */
+export const LABEL_PITCH = 14;
+
+/** Which of `count` stops over a `track` px rail get a value label: all of them where they are far enough apart, else every Nth; always the first and the last. */
+export function labelledStops(count: number, track: number): number[] {
+  const last = count - 1;
+  if (last <= 0) return [0];
+  const every = Math.max(1, Math.ceil(LABEL_PITCH / (track / last)));
+  const shown: number[] = [];
+  for (let i = 0; i < last; i += every) if (last - i >= every || i === 0) shown.push(i);
+  return [...shown, last];
+}
+
 /** Where a stop list holds `value`; the nearest stop below it when it falls between stops. */
 export function stopIndex<T extends number | string>(stops: T[], value: T): number {
   const exact = stops.indexOf(value);
