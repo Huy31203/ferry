@@ -27,3 +27,14 @@ One section per stream, added as each plan lands. Answer before implementation s
 4. macOS manual checks need the built `Ferry.app` in `/Applications`, replacing installed 0.2.0. **Recommend: OK; reinstall from the v0.2.0 release if needed.**
 5. With no editor chosen, Cmd+E opens the default app and the menu offers a one-click chooser. **Recommend: as planned.**
 - Known risks to accept: Windows hides the verb for >15 selected files; a cold start opening several files from Explorer can lose some to the single-instance race; macOS Services may need enabling in System Settings or `pbs -update`. **Recommend: accept for this cycle.**
+
+## D drop-batch (`plans/2026-10-23-ferry-sD-drop-batch.md`, 11 tasks; no new deps, features only: objc2-app-kit `NSEvent`, windows-sys `Win32_UI_Input_KeyboardAndMouse`)
+1. Windows has no drag-start signal; plan shows an edge tab after any left-press moving 24 px for 300 ms, which also flashes on window moves and text selection. **Recommend: default to "modifier tap only" on Windows; keep auto-show as an opt-in.**
+2. Keep-originals modifier is Shift (Option/Alt is the zone tap). **Recommend: yes.**
+3. No separate backup phase in the batch; each original is backed up before its own write, so "Backing up N of M" never shows. **Recommend: yes.**
+4. Batch threshold 20 files; cards before compact list stays 5. **Recommend: yes.**
+5. List keys (Cmd+A, Esc, arrows, Shift+arrows) taken from the frontmost app while hovering the list. **Recommend: require a click on the list first; those keys are too common in other apps to take on hover.**
+6. Drop onto the menu-bar icon deferred (Tauri tray has no drop API). **Recommend: yes, defer.**
+7. Batch Adjust panel only has compression/Extreme, downscale %, convert-to. **Recommend: yes for this cycle.**
+- Brief mismatch: `src/lib/types.ts` does not exist; TS mirrors live in `src/lib/ipc.ts`; D adds `src/lib/drop-ipc.ts`.
+- Hooks: A/B/E extend `intake::classify`; F receives `drag:tap` and may wrap `intake::accept`; I gets `came_from_drop`. Integrator swaps D's `jobs::start` to I's `jobs::start_auto_copied` at merge.

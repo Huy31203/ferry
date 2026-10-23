@@ -123,17 +123,25 @@ This applies on plain runs only, when the setting is on and the source is a stil
 
 A zone is `{id, name, icon, pipelines: {image, video, audio, pdf}}` in `pipelines.zones`. F owns the zones overlay window (`zones`) and everything inside it: tiles filtered to the dragged media, hover, drop, and the right-click menu Edit / Go to pipeline / Remove.
 
-**Seam with D (D's files are not edited):** F listens in Rust (`app.listen_any`) for two app events, which D emits from its modifier-tap handler:
+**Seam with D, taken from D's plan (`2026-10-23-ferry-sD-drop-batch.md`, "Cross-stream hooks"); D's files are not edited.** D's `DragWatch` emits every modifier tap during a drag, other than its own zone modifier, as the app-wide Tauri event `drag:tap` with payload `{ "modifier": "alt" | "shift" | "control" | "command" }`. F listens in Rust with `app.listen_any("drag:tap", …)`:
 
 | Event | Payload | F does |
 | --- | --- | --- |
-| `drop:preset_zones_show` | `{ "paths": [string] }` (may be empty) | Shows the zones window centred on the cursor, in drag mode |
-| `drop:preset_zones_hide` | `null` | Hides it unless a drop is in progress |
+| `drag:tap` with `modifier == "control"` (the preset modifier on both OSes, R§2.10 "Tap Control" / "Tap Ctrl") | as above | Toggle: shows the zones window centred on the cursor in drag mode, or hides it when it is already showing |
+| `drag:tap`, any other modifier | | Ignored |
+| `drag:ended` (requested from D, see Open questions; not in D's plan yet) | `null` | Hides it unless a drop is in progress |
+
+D emits no drag-end event today, so drag mode also hides itself:
+- 1.5 s after the webview's drag `leave`, unless the drag re-enters;
+- 5 s after showing, if no drag ever entered the window;
+- 300 ms after a drop.
 
 Other seams:
 
 - D's Drop zone settings pane opens F's zone editor by invoking the command `pipe_open_editor` with `{ pipeline: null, tab: "zones" }`.
-- The pipeline assigned to the drop zone is stored by F (`pipelines.drop_zone`). D's drop handler starts its jobs with `crate::pipe_jobs::start_assigned(app, job, Trigger::DropZone, level, None)` instead of `jobs::start(…)`. This is a one-line change in D's code, made by whichever stream merges second.
+- The pipeline assigned to the drop zone is stored by F (`pipelines.drop_zone`). D's `drop_batch::intake::accept(app, paths, keep)` starts one job per accepted file. After both streams merge, whichever merges second changes the single `jobs::start(app, job, level, None)` call inside D's `accept` to `crate::pipe_jobs::start_assigned(app, job, crate::pipe_jobs::Trigger::DropZone, level, None)`. Until then, drop-zone drops run the plain optimise, and the editor's "Drop zone" assignment is stored but has no effect.
+- D asks F to add the zone's hint row ("Tap Ctrl for presets"). F supplies the string as `pipe.zones.hint_tap`. Drawing it inside D's `drop.html` is the same post-merge integration edit, because F does not edit D's files.
+- Preset-zone drops stay F's own (`pipe_zone_drop`), and they do not go through D's `accept`: a zone runs one pipeline per file, with no batch window.
 
 Until D merges, the overlay opens from the editor's **Preview on screen** button, which has a Done tile. A Finder drag onto a tile works natively, because the window accepts OS file drops through Tauri's webview drag-drop events.
 
@@ -1974,7 +1982,10 @@ pub const TILE: (f64, f64) = (148.0, 100.0); pub const GAP: f64 = 8.0; pub const
 pub fn zones_size(tiles: usize) -> (f64, f64);
 /// Top-left that centres `size` on `cursor`, kept 16 px inside `work` (all logical).
 pub fn zones_origin(cursor: (f64, f64), size: (f64, f64), work: (f64, f64, f64, f64)) -> (f64, f64);
-pub fn init(app: &AppHandle);   // listen_any for drop:preset_zones_show / _hide; on_menu_event for "pipezone:" items
+pub fn init(app: &AppHandle);   // listen_any for "drag:tap" (toggle on "control") and "drag:ended"; on_menu_event for "pipezone:" items
+#[derive(Deserialize)] pub struct Tap { pub modifier: String }
+/// Whether a `drag:tap` toggles the zones: only the preset modifier.
+pub fn is_preset_tap(tap: &Tap) -> bool;   // modifier == "control"
 pub fn show(app: &AppHandle, mode: Mode, paths: Vec<PathBuf>);
 pub fn hide(app: &AppHandle);
 #[derive(Serialize)] pub struct ZoneTile { pub id: u32, pub name: String, pub icon: String, pub pipelines: PerMedia, pub captions: HashMap<Media, String> }
@@ -2030,6 +2041,12 @@ fn the_grid_grows_to_four_columns_then_wraps() {
     assert_eq!(zones_size(1), (12.0 * 2.0 + 148.0, 12.0 * 2.0 + 100.0));
     assert_eq!(zones_size(4), (24.0 + 4.0 * 148.0 + 3.0 * 8.0, 124.0));
     assert_eq!(zones_size(5), (24.0 + 4.0 * 148.0 + 3.0 * 8.0, 24.0 + 2.0 * 100.0 + 8.0));
+}
+#[test]
+fn only_a_control_tap_toggles_the_zones() {
+    let tap = |m: &str| serde_json::from_value::<Tap>(serde_json::json!({ "modifier": m })).unwrap();
+    assert!(is_preset_tap(&tap("control")));
+    assert!(!is_preset_tap(&tap("alt")) && !is_preset_tap(&tap("command")) && !is_preset_tap(&tap("shift")));
 }
 #[test]
 fn the_grid_centres_on_the_cursor_and_stays_on_screen() {
@@ -2247,6 +2264,7 @@ The common steps `copy`, `fork` and `if_name_contains` are already registered fo
 | `pipe.zones.menu.pipeline` | Go to pipeline |
 | `pipe.zones.folder_skipped` | Drop files, not folders, on a preset zone |
 | `pipe.zones.untitled` | Zone |
+| `pipe.zones.hint_tap` | Tap Ctrl for presets |
 | `pipe.zone.none` | No pipeline for {media} |
 | `pipe.zone.no_pipeline` | “{zone}” has no pipeline for {media} |
 
