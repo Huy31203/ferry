@@ -49,6 +49,11 @@ export function upsert(cards: JobUpdate[], card: JobUpdate): JobUpdate[] {
   return cards.map((c, i) => (i === at ? card : c));
 }
 
+/** The stack without the card with `id` (closed here, or by the app). */
+export function remove(cards: JobUpdate[], id: string): JobUpdate[] {
+  return cards.filter((c) => c.id !== id);
+}
+
 /** The cards "Drag all" carries: every finished one. */
 export function draggable(cards: JobUpdate[]): JobUpdate[] {
   return cards.filter(canDrag);

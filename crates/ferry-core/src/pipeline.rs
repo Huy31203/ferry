@@ -423,10 +423,7 @@ impl Job {
                 .unwrap_or(Path::new(""))
                 .join(id.as_str())
                 .join(format!("{}.{}", self.name, self.source_ext)),
-            Source::File => self
-                .source_path
-                .clone()
-                .unwrap_or_else(|| self.output.clone()),
+            Source::File => Self::twin_output(&self.source_path, &id),
         };
         Job {
             id,
@@ -455,6 +452,21 @@ impl Job {
             changed: false,
             twin: true,
         }
+    }
+
+    /// Where a file twin's card points until it has a result of its own: a
+    /// name no file has, never its parent's.
+    fn twin_output(source: &Option<PathBuf>, id: &JobId) -> PathBuf {
+        let name = format!(".ferry-twin-{}", id.as_str());
+        match source {
+            Some(source) => source.with_file_name(name),
+            None => PathBuf::from(name),
+        }
+    }
+
+    /// A "Convert and keep both" copy: Restore closes its card.
+    pub fn is_twin(&self) -> bool {
+        self.twin
     }
 
     /// Apply the recipe at `level` to the original, write the result and
@@ -496,7 +508,8 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return Some(self.fail(tf("error.backup", &[("why", &describe(&e))]), e)),
         };
-        let plain = self.edits.is_plain();
+        // A twin is a copy the user asked for: it always writes, never "no gain".
+        let plain = self.edits.is_plain() && !self.twin;
         let step = t(match (plain, self.source_format) {
             (false, _) => "card.step.edit",
             (true, Format::Png) => "card.step.png",
@@ -736,6 +749,13 @@ impl Job {
                     deliver(self.source_format, original, &self.output)
                         .map_err(|e| (t("error.clipboard_write"), e))?;
                 }
+            }
+            Source::File if self.twin => {
+                // Only its own copy goes; the source is the parent's.
+                if let Some(last) = self.last.take() {
+                    self.trash_result(&last, o);
+                }
+                self.output = Self::twin_output(&self.source_path, &self.id);
             }
             Source::File => {
                 self.check_source()?;
@@ -1914,6 +1934,77 @@ mod tests {
             .update;
         assert_eq!(update.output, Some(env.dir.path().join("shot (2).png")));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_twin_card_never_shows_its_parents_file() {
+        let env = Env::new();
+        let (job, path) = done_file(&env, "shot.png");
+        let twin = job.fork();
+        assert_ne!(twin.output, path);
+        assert_eq!(twin.update(JobState::Queued, None).output, None);
+        let other = job.fork();
+        assert_ne!(
+            twin.output, other.output,
+            "queued twins are not busy on each other"
+        );
+    }
+
+    #[test]
+    fn a_twin_that_fails_does_not_point_at_its_parents_file() {
+        let env = Env::new();
+        let blocker = env.file("blocker", b"not a folder");
+        let mut settings = Settings::default();
+        settings.images.output.converted.location = Location::Folder;
+        settings.images.output.converted.folder =
+            blocker.join("sub").to_string_lossy().into_owned();
+        let o = options_with(&settings);
+        let (job, path) = done_file(&env, "shot.png");
+        let mut twin = job.fork();
+        twin.edit(convert(Format::WebP));
+        let update = run(&mut twin, Level::Normal, &o, &env).0.unwrap().update;
+        assert!(matches!(update.state, JobState::Error { .. }));
+        assert_ne!(update.output, Some(path));
+    }
+
+    #[test]
+    fn restoring_a_twin_trashes_its_copy_and_leaves_the_parent_alone() {
+        let env = Env::new();
+        let (job, path) = done_file(&env, "shot.png");
+        let parent = fs::read(&path).unwrap();
+        let mut twin = job.fork();
+        twin.edit(convert(Format::WebP));
+        run(&mut twin, Level::Normal, &options(), &env);
+        let copy = env.dir.path().join("shot.webp");
+        assert!(copy.exists());
+
+        let restored = twin.restore(&options(), &mut |_, _, _| Ok(())).update;
+
+        assert_eq!(restored.state, JobState::Restored);
+        assert!(!copy.exists(), "the copy went to the Trash");
+        assert_eq!(restored.output, None, "not the parent's file");
+        assert_eq!(fs::read(&path).unwrap(), parent);
+        assert_eq!(twin.rename("x"), Err(RenameError::Gone));
+        assert!(path.exists(), "renaming the twin moved the parent's file");
+    }
+
+    #[test]
+    fn a_twin_always_writes_its_copy_even_when_it_cannot_shrink() {
+        let env = Env::new();
+        let input = testutil::jpeg(400, 300, 50, &testutil::JpegExtras::default());
+        let path = env.file("photo.jpg", &input);
+        let job = Job::file(&path, &Settings::default(), true).unwrap();
+        let high = RunOptions {
+            compression: 100,
+            ..options()
+        };
+        let mut twin = job.fork();
+        twin.edit(convert(Format::Jpeg));
+        assert!(twin.edits.is_plain(), "same format: nothing asked for");
+        let update = run(&mut twin, Level::Normal, &high, &env).0.unwrap().update;
+        assert_eq!(update.state, JobState::Done);
+        assert_eq!(update.output, Some(env.dir.path().join("photo (2).jpg")));
+        assert_eq!(fs::read(&path).unwrap(), input, "the parent's file stays");
     }
 
     #[test]

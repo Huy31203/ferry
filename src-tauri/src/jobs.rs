@@ -129,16 +129,35 @@ fn requeue(app: &AppHandle, entry: Arc<Entry>, level: Level) {
 pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let options = run_options(app, CancelToken::new());
-    let finished = {
+    let (finished, twin) = {
         let mut job = relock(&entry.job);
         let finished = job.restore(&options, &mut |format, bytes, file| {
             deliver(app, format, bytes, file, None)
         });
         entry.set_output(job.output.clone());
-        finished
+        (finished, job.is_twin())
     };
+    // A "keep both" copy has no original of its own to go back to: restoring
+    // it removes the copy, so its card goes too. A failure stays on the card.
+    if twin && finished.update.state == JobState::Restored {
+        info!(job = finished.update.id.as_str(), "keep-both copy removed");
+        close_card(app, &finished.update.id);
+        return Ok(());
+    }
     finish(app, &entry, finished.update, finished.cause, None);
     Ok(())
+}
+
+/// Forget a job and take its card off the stack.
+fn close_card(app: &AppHandle, id: &JobId) {
+    let state = app.state::<AppState>();
+    state.jobs.lock().unwrap().remove(id);
+    state.recent.lock().unwrap().retain(|u| &u.id != id);
+    state.stack.lock().unwrap().pending.retain(|u| &u.id != id);
+    if let Err(e) = app.emit_to(STACK, "job:close", id.as_str()) {
+        warn!("could not close a card: {e}");
+    }
+    tray::rebuild(app);
 }
 
 /// Copy the card's result again: the image for a clipboard job, the file for a file job.

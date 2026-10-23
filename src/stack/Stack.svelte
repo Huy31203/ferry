@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { draggable, hoverTarget, isBusy, openTool, upsert, type OpenTool, type Tool } from '../lib/cards';
+  import { draggable, hoverTarget, isBusy, openTool, remove, upsert, type OpenTool, type Tool } from '../lib/cards';
   import type { CropFrame } from '../lib/edits';
   import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
@@ -174,6 +174,10 @@
           hover_hotkeys: floating.hover_hotkeys,
         };
       }),
+      // A restored keep-both copy is gone, and its card goes with it.
+      listen<string>('job:close', (event) => {
+        cards = remove(cards, event.payload);
+      }),
       listen('stack:clear', () => {
         cards = [];
       }),
@@ -192,7 +196,7 @@
   });
 
   function close(id: string) {
-    cards = cards.filter((card) => card.id !== id);
+    cards = remove(cards, id);
   }
 
   function clearAll() {
