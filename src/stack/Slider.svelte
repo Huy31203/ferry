@@ -4,7 +4,7 @@
   /** The vertical slider a press-and-drag on Downscale or Compression drops over the thumbnail (spec §5.2). */
   let {
     index,
-    count,
+    ys,
     label,
     stops,
     labelled,
@@ -14,7 +14,8 @@
   }: {
     /** The stop under the pointer, 0 at the top. */
     index: number;
-    count: number;
+    /** Every stop's distance from the track's top in px: the track is the value axis, so round values sit evenly. */
+    ys: number[];
     /** The live target, such as "50 % · 1440×900" or "q 60". */
     label: string;
     /** Every stop's short value, top to bottom, such as "50 %" or "q 60". */
@@ -29,15 +30,14 @@
     width?: number;
   } = $props();
 
-  /** Panel padding; the readout, divider and the track's knob room add the rest (SLIDER_CHROME). */
-  const PAD = 10;
-  const KNOB = 16;
+  /** Panel padding; the readout and the half-chip insets above and below the track add the rest (SLIDER_CHROME). */
+  const PAD = 8;
+  const KNOB = 14;
   const EDGE = 6;
   /** A value chip's height; it is centred on its stop. */
-  const CHIP = 13;
+  const CHIP = 16;
 
-  const stopY = (i: number) => (i / Math.max(1, count - 1)) * track;
-  const knob = $derived(stopY(index));
+  const knob = $derived(ys[index] ?? 0);
   let panelWidth = $state(0);
   // The live line grows with its text; keep the widest it has been so the panel does not jitter while dragging.
   let lineWidth = $state(0);
@@ -59,20 +59,20 @@
   aria-hidden="true"
 >
   <div class="line" style="min-width: {lineMax}px" bind:clientWidth={lineWidth}>{label}</div>
-  <div class="row" class:flip={!toRight}>
+  <div class="row" class:flip={!toRight} style="padding: {CHIP / 2}px 0">
     <div class="track" style="height: {track}px; width: {KNOB}px">
       <div class="rail-line"></div>
       <div class="fill" style="height: {knob}px"></div>
       <div class="knob" style="top: {knob}px"></div>
     </div>
     <div class="marks" style="height: {track}px">
-      {#each stops as _, i (i)}
-        <div class="tick" class:long={labelled.includes(i)} style="top: {stopY(i) - 1}px"></div>
+      {#each ys as y, i (i)}
+        <div class="tick" class:long={labelled.includes(i)} style="top: {y - 1}px"></div>
       {/each}
     </div>
     <div class="chips" style="height: {track}px">
       {#each labelled as i (i)}
-        <div class="chip" style="transform: translateY({stopY(i) - CHIP / 2}px)">{stops[i]}</div>
+        <div class="chip" style="transform: translateY({ys[i] - CHIP / 2}px)">{stops[i]}</div>
       {/each}
     </div>
   </div>
@@ -83,7 +83,7 @@
     position: absolute;
     display: flex;
     flex-direction: column;
-    border-radius: 12px;
+    border-radius: 8px;
     background: var(--rail-bg);
     color: var(--rail-fg);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 0 0.5px var(--rail-line);
@@ -95,21 +95,21 @@
   .line {
     box-sizing: border-box;
     width: max-content;
-    height: 14px;
+    height: 16px;
     font-size: 12px;
     font-weight: 600;
-    line-height: 14px;
+    font-variant-numeric: tabular-nums;
+    line-height: 16px;
     white-space: nowrap;
   }
   .row {
     display: flex;
     align-items: flex-start;
-    margin-top: 6px;
-    padding: 9px 0;
-    border-top: 1px solid var(--rail-line);
+    align-self: flex-start;
   }
   .row.flip {
     flex-direction: row-reverse;
+    align-self: flex-end;
   }
   .track {
     position: relative;
@@ -120,8 +120,8 @@
     position: absolute;
     left: 5px;
     top: 0;
-    width: 6px;
-    border-radius: 3px;
+    width: 4px;
+    border-radius: 2px;
   }
   .rail-line {
     height: 100%;
@@ -133,9 +133,9 @@
   .knob {
     position: absolute;
     left: 0;
-    width: 16px;
-    height: 16px;
-    margin-top: -8px;
+    width: 14px;
+    height: 14px;
+    margin-top: -7px;
     border-radius: 50%;
     background: #fff;
     box-shadow:
@@ -143,27 +143,28 @@
       0 0 0 0.5px rgba(0, 0, 0, 0.3),
       0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
   }
-  /* The ticks start at the track's edge: the column overlaps the track's 5 px of knob room. */
+  /* The ticks start 3 px off the 4 px track (centred in the 14 px knob column): the column overlaps it by 2 px. */
   .marks {
     position: relative;
     flex: none;
-    width: 12px;
-    margin-left: -5px;
+    width: 8px;
+    margin-left: -2px;
+    margin-right: 4px;
   }
   .row.flip .marks {
-    margin-left: 0;
-    margin-right: -5px;
+    margin-left: 4px;
+    margin-right: -2px;
   }
   .tick {
     position: absolute;
     left: 0;
-    width: 6px;
+    width: 5px;
     height: 2px;
     border-radius: 1px;
     background: var(--rail-line);
   }
   .tick.long {
-    width: 10px;
+    width: 8px;
     background: var(--rail-fg);
     opacity: 0.55;
   }
@@ -171,21 +172,23 @@
     left: auto;
     right: 0;
   }
+  /* One grid cell: every chip is as wide as the widest, so the labels read as one aligned block. */
   .chips {
     display: grid;
   }
   .chip {
     grid-area: 1 / 1;
     align-self: start;
-    height: 13px;
+    height: 16px;
     padding: 0 6px;
     box-sizing: border-box;
-    border-radius: 5px;
+    border-radius: 8px;
     background: var(--rail-line);
     font-size: 11px;
     font-weight: 500;
     font-variant-numeric: tabular-nums;
-    line-height: 13px;
+    line-height: 16px;
+    text-align: left;
     white-space: nowrap;
   }
 </style>

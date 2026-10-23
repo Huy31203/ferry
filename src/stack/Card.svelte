@@ -16,6 +16,7 @@
     scaleLabel,
     scalePatch,
     sliderIndex,
+    stopY,
     sliderTrack,
     labelledStops,
     stopIndex,
@@ -175,6 +176,12 @@
       : QUALITY_STOPS.map(qualityLabel),
   );
 
+  /** Every stop's distance from the track's top, px: the track is the value axis. */
+  const slideYs = $derived.by(() => {
+    const stops = slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS;
+    return stops.map((_, i) => stopY(stops, i, TRACK));
+  });
+
   /** The stops that get a value label (round ones, spaced for the track). */
   const slideLabelled = $derived(labelledStops(slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS, TRACK));
 
@@ -210,8 +217,8 @@
     const dy = event.clientY - slide.startY;
     if (!slide.moved && Math.abs(dy) < 4) return;
     if (!slide.moved) ontool('slider');
-    const count = slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length;
-    slide = { ...slide, moved: true, index: sliderIndex(slide.start, dy, count, TRACK) };
+    const stops = slide.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS;
+    slide = { ...slide, moved: true, index: sliderIndex(stops, slide.start, dy, TRACK) };
   }
 
   // Release applies; releasing back at the start value changes nothing.
@@ -477,7 +484,7 @@
   {#if slide?.moved}
     <Slider
       index={slide.index}
-      count={slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length}
+      ys={slideYs}
       label={slideLabel}
       stops={slideStops}
       labelled={slideLabelled}

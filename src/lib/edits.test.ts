@@ -26,6 +26,7 @@ import {
   scaleLabel,
   scalePatch,
   sliderIndex,
+  stopY,
   stopIndex,
   type CropForm,
 } from './edits';
@@ -93,11 +94,38 @@ describe('compression steps', () => {
 });
 
 describe('slider drag', () => {
-  it('moves one stop per step of the track and stays in range', () => {
-    expect(sliderIndex(0, 0, 18, 136)).toBe(0);
-    expect(sliderIndex(0, 8, 18, 136)).toBe(1);
-    expect(sliderIndex(5, -400, 18, 136)).toBe(0);
-    expect(sliderIndex(5, 400, 18, 136)).toBe(17);
+  // A 90 px Downscale track puts each stop at y = 100 - value; a 100 px Compression track at y = 100 - q (Extreme 100).
+  it('follows the pointer and snaps to the nearest stop, 100 to 90 included', () => {
+    expect(sliderIndex(SCALE_STOPS, 0, 0, 90)).toBe(0);
+    expect(sliderIndex(SCALE_STOPS, 0, 4, 90)).toBe(0);
+    expect(sliderIndex(SCALE_STOPS, 0, 6, 90)).toBe(1);
+    expect(sliderIndex(SCALE_STOPS, 0, 12, 90)).toBe(1);
+    expect(sliderIndex(SCALE_STOPS, 0, 13, 90)).toBe(2);
+  });
+
+  it('starts from the current stop, not from the top', () => {
+    // 50 % is stop 9 at y 50; 45 % is stop 10 at y 55
+    expect(sliderIndex(SCALE_STOPS, 9, 2, 90)).toBe(9);
+    expect(sliderIndex(SCALE_STOPS, 9, 3, 90)).toBe(10);
+    expect(sliderIndex(SCALE_STOPS, 9, -3, 90)).toBe(8);
+  });
+
+  it('reaches the ends and no further', () => {
+    expect(sliderIndex(SCALE_STOPS, 5, -400, 90)).toBe(0);
+    expect(sliderIndex(SCALE_STOPS, 5, 400, 90)).toBe(17);
+    expect(sliderIndex(SCALE_STOPS, 0, 90, 90)).toBe(17);
+    expect(sliderIndex(QUALITY_STOPS, 0, 100, 100)).toBe(20);
+    expect(sliderIndex(QUALITY_STOPS, 0, 96, 100)).toBe(19);
+    expect(sliderIndex(QUALITY_STOPS, 20, -400, 100)).toBe(0);
+  });
+
+  it('puts each stop at its value on the axis', () => {
+    expect(stopY(SCALE_STOPS, 0, 90)).toBe(0);
+    expect(stopY(SCALE_STOPS, 1, 90)).toBe(10);
+    expect(stopY(SCALE_STOPS, 17, 90)).toBe(90);
+    expect(stopY(QUALITY_STOPS, 5, 100)).toBe(25);
+    expect(stopY(QUALITY_STOPS, 19, 100)).toBe(95);
+    expect(stopY(QUALITY_STOPS, 20, 100)).toBe(100);
   });
 
   it('finds where a value sits, or the stop just below it', () => {
@@ -109,34 +137,34 @@ describe('slider drag', () => {
 });
 
 describe('slider labels', () => {
-  it('sizes the track so the panel (46 px down, 59 px of chrome) ends 6 px above the card bottom', () => {
-    expect(sliderTrack(200)).toBe(89);
-    expect(sliderTrack(150)).toBe(39);
+  it('sizes the track so the panel (46 px down, 48 px of chrome) ends 6 px above the card bottom', () => {
+    expect(sliderTrack(200)).toBe(100);
+    expect(sliderTrack(150)).toBe(50);
   });
 
-  it('labels the first, the last and the multiples of 25 where they are 14 px or more apart', () => {
-    // 100, 90, 85 … 10: 75 is stop 4, 50 stop 9, 25 stop 14
-    expect(labelledStops(SCALE_STOPS, 89)).toEqual([0, 4, 9, 14, 17]);
-    // 100, 95 … 5, Extreme: 75 is stop 5, 50 stop 10, 25 stop 15
-    expect(labelledStops(QUALITY_STOPS, 89)).toEqual([0, 5, 10, 15, 20]);
+  it('labels the first, the last and the multiples of 25 where they are 18 px or more apart', () => {
+    // Downscale: 100 at 0, 75 at 27.8, 50 at 55.6, 25 at 83.3, 10 at 100: 25 is 16.7 px from 10 and goes
+    expect(labelledStops(SCALE_STOPS, 100)).toEqual([0, 4, 9, 17]);
+    // Compression: q 100, 75, 50, 25, Extreme sit 25 px apart
+    expect(labelledStops(QUALITY_STOPS, 100)).toEqual([0, 5, 10, 15, 20]);
   });
 
-  it('drops the round stop nearest an end when two labels are too close, on a compact card', () => {
-    expect(labelledStops(SCALE_STOPS, 39)).toEqual([0, 9, 17]);
-    expect(labelledStops(QUALITY_STOPS, 39)).toEqual([0, 10, 20]);
+  it('drops round stops that crowd on a compact card', () => {
+    expect(labelledStops(SCALE_STOPS, 50)).toEqual([0, 9, 17]);
+    expect(labelledStops(QUALITY_STOPS, 50)).toEqual([0, 10, 20]);
   });
 
-  it('never labels two stops closer than 14 px', () => {
+  it('never labels two stops closer than 18 px', () => {
     for (const stops of [SCALE_STOPS, QUALITY_STOPS]) {
       for (const track of [sliderTrack(200), sliderTrack(150)]) {
-        const at = labelledStops(stops, track).map((i) => (i / (stops.length - 1)) * track);
-        at.slice(1).forEach((y, n) => expect(y - at[n]).toBeGreaterThanOrEqual(14));
+        const at = labelledStops(stops, track).map((i) => stopY(stops, i, track));
+        at.slice(1).forEach((y, n) => expect(y - at[n]).toBeGreaterThanOrEqual(18));
       }
     }
   });
 
   it('labels a lone stop', () => {
-    expect(labelledStops([100], 89)).toEqual([0]);
+    expect(labelledStops([100], 100)).toEqual([0]);
   });
 });
 
