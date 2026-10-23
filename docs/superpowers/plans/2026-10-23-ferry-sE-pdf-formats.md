@@ -289,3 +289,588 @@ Then the environment block from Global Constraints.
 | `src-tauri/src/{lib,pdf_commands,compare,menu,hover_keys,clipboard}.rs`, `platform/{macos,windows}_clipboard.rs` (modify/create) | app wiring | 1, 3, 6, 7, 9, 12–19 |
 | `src/lib/{ipc,edits,cards,pdf,pdfConfig.svelte,schema,settings,settings.fixture,card.fixture}.ts` | types and pure helpers | 1, 2, 3, 15–19 |
 | `src/stack/{Card,Stack,FormatBar,PdfCropPopover,PagesPopover}.svelte`, `src/compare/{Compare.svelte,view.ts}`, `src/settings/{Row.svelte,controls/OutputRule.svelte,controls/DeviceList.svelte}` | UI | 3, 4, 15–19 |
+
+---
+
+## Foundation
+
+### Task 1: TIFF, HEIC, AVIF and PDF are recognised
+
+**Files:**
+- Modify: `crates/ferry-core/src/sniff.rs`
+- Create: `crates/ferry-core/src/isobmff.rs`
+- Modify: `crates/ferry-core/src/lib.rs` (`pub mod isobmff;` after `pub mod i18n;`)
+- Modify: `crates/ferry-core/src/optimise/mod.rs` (`encode` arms)
+- Modify: `crates/ferry-core/src/edit/raster.rs` (`decode`, `encode`, `display_dims` arms)
+- Modify: `crates/ferry-core/src/pipeline.rs` (step-label `match` in `run_recipe`)
+- Modify: `crates/ferry-core/src/bitmap.rs` (`decode_rgba` arm)
+- Modify: `crates/ferry-core/src/trigger.rs` (`normalise_ext`)
+- Modify: `crates/ferry-core/src/testutil.rs`
+- Modify: `src-tauri/src/platform/macos_clipboard.rs` (`fn uti`)
+- Modify: `src-tauri/src/platform/windows_clipboard.rs` (`fn format_name`; `cfg(windows)`, CI-verified only)
+- Modify: `src-tauri/src/menu.rs` (`FORMATS`)
+- Modify: `src/lib/ipc.ts`
+- Modify: `src/lib/edits.ts` (`FORMAT_LABELS`)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces:
+  - `sniff::Format::{Tiff, Heic, Avif, Pdf}`, added after `WebP,` under a `// sE pdf-formats` comment.
+    - `extension()`: `"tiff" "heic" "avif" "pdf"`.
+    - `label()`: `"TIFF" "HEIC" "AVIF" "PDF"`.
+    - serde: `"tiff" "heic" "avif" "pdf"`.
+  - `Format::ALL: [Format; 8]` = `[Png, Jpeg, Gif, WebP, Tiff, Heic, Avif, Pdf]`.
+  - `sniff::tiff_page_count(bytes: &[u8]) -> u32`: 0 when not a classic TIFF.
+  - `sniff::tiff_orientation(bytes: &[u8]) -> u16`: IFD0 tag 274, else 1.
+  - `isobmff::brands(bytes: &[u8]) -> Option<([u8; 4], Vec<[u8; 4]>)>`: the major brand and the compatible brands.
+  - `isobmff::image_format(bytes: &[u8]) -> Option<Format>`.
+  - `isobmff::is_sequence(bytes: &[u8]) -> bool`.
+  - `isobmff::primary_size(bytes: &[u8]) -> Option<(u32, u32)>`.
+  - `testutil::ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8>`.
+  - `testutil::heif(major: &[u8; 4], sizes: &[(u32, u32)], irot: Option<u8>) -> Vec<u8>`: `ftyp` + `meta` → `iprp` → `ipco` holding one `ispe` per size and an optional `irot`.
+  - `testutil::tiff_ifds(pages: &[(u32, u32)], extra_tag: Option<u16>) -> Vec<u8>`: a little-endian TIFF header and one IFD per page, holding tags 256/257 (LONG) and `extra_tag` (SHORT 1). No pixel data.
+
+**Sniff rules**, checked after the existing four, in this order:
+1. **TIFF:** `II*\0`, `MM\0*` or BigTIFF `II+\0`/`MM\0+` → `Tiff`, unless the file is camera RAW: bytes 8..10 are `CR`, or IFD0 holds tag 50706 (DNGVersion) or 330 (SubIFDs). RAW → `None`.
+2. **ISOBMFF:** a box at offset 0 of type `ftyp`. Brands: any `avif` or `avis` → `Avif`; else any of `heic heix heim heis hevc hevx mif1 msf1` → `Heic`; else `None` (an MP4 is not an image).
+3. **PDF:** `%PDF-` anywhere in the first 1024 bytes → `Pdf`.
+
+**IFD reading** (classic TIFF only; BigTIFF gives page count 1 and no tags):
+- Byte order from bytes 0..2. The first IFD offset is u32 at 4.
+- Each IFD is a u16 entry count, 12-byte entries (tag u16, type u16, count u32, value u32; a SHORT value sits in the entry's first two value bytes in the file's byte order), then the next IFD's u32 offset.
+- Stop at offset 0, an offset out of range, an offset already seen, or after 10 000 IFDs.
+
+**Other rules:**
+- `is_animated`: `Tiff` and `Pdf` → false; `Heic` and `Avif` → `isobmff::is_sequence` (major brand `avis`, `msf1`, `hevc` or `hevx`).
+- `dimensions`: `Tiff` → IFD0 tags 256/257; `Heic`/`Avif` → `isobmff::primary_size`; `Pdf` → `None`.
+- `primary_size`: walk `meta` (a full box: skip 4 bytes of version/flags) → `iprp` → `ipco`, and take the largest `ispe` by area. Swap the sides when an `irot` with angle 1 or 3 is present.
+- `raster::display_dims`: for `Tiff`, swap when `tiff_orientation` is 5..=8.
+
+- [ ] **Step 1: Write the failing tests** in `sniff.rs` `mod tests` and a new `isobmff.rs` `mod tests`
+
+```rust
+#[test]
+fn detects_tiff_in_both_byte_orders() {
+    assert_eq!(sniff(&testutil::tiff_ifds(&[(4, 3)], None)), Some(Format::Tiff));
+    let mut be = b"MM\0*\0\0\0\x08".to_vec();
+    be.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    assert_eq!(sniff(&be), Some(Format::Tiff));
+}
+
+#[test]
+fn camera_raw_files_are_not_tiff() {
+    assert_eq!(sniff(b"II*\0\x10\0\0\0CR\x02\0\0\0\0\0"), None);
+    assert_eq!(sniff(&testutil::tiff_ifds(&[(4, 3)], Some(50706))), None);
+    assert_eq!(sniff(&testutil::tiff_ifds(&[(4, 3)], Some(330))), None);
+}
+
+#[test]
+fn detects_heic_and_avif_by_brand() {
+    assert_eq!(sniff(&testutil::ftyp(b"heic", &[b"mif1", b"heic"])), Some(Format::Heic));
+    assert_eq!(sniff(&testutil::ftyp(b"avif", &[b"mif1", b"miaf"])), Some(Format::Avif));
+    assert_eq!(sniff(&testutil::ftyp(b"mif1", &[b"avif"])), Some(Format::Avif));
+    assert_eq!(sniff(&testutil::ftyp(b"isom", &[b"mp41"])), None);
+}
+
+#[test]
+fn detects_pdf_even_after_leading_bytes() {
+    assert_eq!(sniff(b"%PDF-1.7\n%\xE2\xE3"), Some(Format::Pdf));
+    let mut junk = vec![b' '; 100];
+    junk.extend_from_slice(b"%PDF-1.4\n");
+    assert_eq!(sniff(&junk), Some(Format::Pdf));
+    let mut late = vec![b' '; 1100];
+    late.extend_from_slice(b"%PDF-1.4\n");
+    assert_eq!(sniff(&late), None);
+}
+
+#[test]
+fn image_sequences_are_animated() {
+    assert!(is_animated(&testutil::ftyp(b"avis", &[b"avif"]), Format::Avif));
+    assert!(is_animated(&testutil::ftyp(b"msf1", &[b"heic"]), Format::Heic));
+    assert!(!is_animated(&testutil::ftyp(b"heic", &[b"mif1"]), Format::Heic));
+    assert!(!is_animated(&testutil::tiff_ifds(&[(4, 3), (4, 3)], None), Format::Tiff));
+}
+
+#[test]
+fn every_format_has_a_name_an_extension_and_a_serde_name() {
+    let names: Vec<_> = Format::ALL.iter().map(|f| serde_json::to_value(f).unwrap()).collect();
+    assert_eq!(names, ["png", "jpeg", "gif", "webp", "tiff", "heic", "avif", "pdf"]);
+    assert_eq!(
+        (Format::Tiff.extension(), Format::Heic.label(), Format::Pdf.extension()),
+        ("tiff", "HEIC", "pdf")
+    );
+}
+
+#[test]
+fn tiff_size_pages_and_orientation_come_from_the_ifds() {
+    let two = testutil::tiff_ifds(&[(40, 30), (20, 10)], None);
+    assert_eq!(dimensions(&two, Format::Tiff), Some((40, 30)));
+    assert_eq!(tiff_page_count(&two), 2);
+    assert_eq!(tiff_orientation(&two), 1);
+    assert_eq!(tiff_page_count(b"not a tiff"), 0);
+}
+
+// isobmff.rs
+#[test]
+fn the_largest_ispe_is_the_primary_size_and_irot_turns_it() {
+    let thumb_and_full = testutil::heif(b"heic", &[(8, 6), (64, 48)], None);
+    assert_eq!(primary_size(&thumb_and_full), Some((64, 48)));
+    assert_eq!(primary_size(&testutil::heif(b"heic", &[(64, 48)], Some(1))), Some((48, 64)));
+    assert_eq!(primary_size(&testutil::ftyp(b"heic", &[])), None);
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core sniff` then `cargo test -p ferry-core isobmff`
+Expected: compile errors (`Format::Tiff`, `testutil::ftyp`, `isobmff` not defined).
+
+- [ ] **Step 3: Implement the variants, sniff rules, `isobmff` and the test helpers as specified above**
+
+The compiler then lists every non-exhaustive `match`. Fill each one:
+
+| Site | Arm |
+| --- | --- |
+| `optimise::encode` | new formats → `Err(OptimiseError::Unsupported(tf("pdf.read_unsupported", &[("format", format.label())])))` |
+| `raster::decode` | the same |
+| `raster::encode` | `Tiff \| Heic \| Avif \| Pdf` → `Unsupported(tf("pdf.write_unsupported", …))` |
+| step label in `run_recipe` | `(true, Format::Tiff \| Format::Heic \| Format::Avif \| Format::Pdf) => "card.step.edit"` (Tasks 6, 7, 9 and 13 replace it) |
+| `bitmap::decode_rgba` | `Err(format!("no bitmap for {}", format.label()))` |
+| `macos_clipboard.rs` `fn uti` | rewrite as an exhaustive `match`: the four existing UTIs plus `Tiff → "public.tiff"`, `Heic → "public.heic"`, `Avif → "public.avif"`, `Pdf → "com.adobe.pdf"`. `IMAGE_TYPES` is unchanged in this task |
+| `windows_clipboard.rs` `fn format_name` | `Tiff → "image/tiff"`, `Heic → "image/heic"`, `Avif → "image/avif"`, `Pdf → "application/pdf"` |
+
+Further edits:
+- `menu.rs`: replace `const FORMATS: [Format; 4] = …;` with `const FORMATS: [Format; 8] = Format::ALL;`.
+- `trigger::normalise_ext`: also maps `"tif"` → `"tiff"` and `"heif"` → `"heic"` (add one test `tif_and_heif_count_as_tiff_and_heic`).
+- `src/lib/ipc.ts`: `export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'tiff' | 'heic' | 'avif' | 'pdf';`.
+- `src/lib/edits.ts`: `FORMAT_LABELS` gains `tiff: 'TIFF', heic: 'HEIC', avif: 'AVIF', pdf: 'PDF'`.
+
+Create the `pdf.*` block in `en.json`:
+
+```json
+  "pdf.read_unsupported": "Ferry can't open {format} files on this computer",
+  "pdf.write_unsupported": "Ferry can't save {format} files on this computer",
+```
+
+- [ ] **Step 4: Run the tests and the checks**
+
+Run: `cargo test -p ferry-core sniff`, `cargo test -p ferry-core isobmff`, `cargo test -p ferry-core trigger`, `cargo test -p ferry-core` (all), `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm check`, `pnpm test`
+Expected: all PASS, no warnings.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src-tauri/src src/lib
+git commit -m "feat(core): recognise TIFF, HEIC, AVIF and PDF by content"
+```
+
+The message also states that `windows_clipboard.rs` is CI-verified only.
+
+---
+
+### Task 2: `[pdf]` and `[formats]` settings sections
+
+**Files:**
+- Modify: `crates/ferry-core/src/settings.rs` (anchors in the shared-file table)
+- Modify: `src/lib/settings.ts`, `src/lib/settings.fixture.ts` (after the `hotkeys` entries)
+
+**Interfaces:**
+- Consumes: `settings::{Output, OutputRule, Location}`, `edit::MAX_SIDE`, `sniff::Format`, `template::validate`.
+- Produces:
+  - `settings::Pdf` (`#[serde(default)]`, flattened `extra`):
+    - `dpi: u16` (150), `dpi_aggressive: u16` (100), `extract_dpi: u16` (150), `max_size_mb: u32` (500);
+    - `output: Output` (optimised `{ InPlace, "~/Documents/Ferry", "%f_optimised.%e" }`, converted `{ SameFolder, "~/Documents/Ferry", "%f.%e" }`);
+    - `devices: Vec<Device>`.
+  - `settings::Device { name: String, width: u32, height: u32 }` (serde default). The default list, in order:
+
+    | Name | Size |
+    | --- | --- |
+    | `"iPhone"` | 1179×2556 |
+    | `"iPhone Pro Max"` | 1320×2868 |
+    | `"iPad"` | 1640×2360 |
+    | `"iPad Pro 13-inch"` | 2064×2752 |
+    | `"Kindle"` | 1236×1648 |
+    | `"reMarkable"` | 1404×1872 |
+
+  - `settings::Formats` (`#[serde(default)]`, flattened `extra`): `heic_to: ConvertTo` (`Jpeg`), `tiff_to: ConvertTo` (`Jpeg`), `avif_to: ConvertTo` (`Keep`).
+  - `settings::ConvertTo { Keep, Jpeg, Png, WebP }` (serde snake_case `"keep" "jpeg" "png" "web_p"`; add `#[serde(rename = "webp")]` on `WebP`), with `ConvertTo::format(self) -> Option<Format>`.
+  - `Settings.pdf: Pdf`, `Settings.formats: Formats`.
+  - `Settings::sanitised_pdf_formats(self) -> Self`, called from `sanitised` at the anchor:
+    - the three DPI values are clamped to `36..=1200`;
+    - `max_size_mb` is at least 1;
+    - the PDF output templates and folders get the same repair as `images.output` (an invalid template → the `Pdf::default()` one);
+    - devices are trimmed, and a device with an empty name or a side outside `1..=MAX_SIDE` is dropped.
+  - TS: `Settings.pdf: { dpi: number; dpi_aggressive: number; extract_dpi: number; max_size_mb: number; output: { optimised: OutputRule; converted: OutputRule }; devices: Device[] }`, `Settings.formats: { heic_to: ConvertTo; tiff_to: ConvertTo; avif_to: ConvertTo }`, `export type ConvertTo = 'keep' | 'jpeg' | 'png' | 'webp'`, `export interface Device { name: string; width: number; height: number }`. `sample` in `settings.fixture.ts` mirrors the Rust defaults.
+
+- [ ] **Step 1: Write the failing tests** (end of `settings.rs` `mod tests`)
+
+```rust
+#[test]
+fn pdf_and_format_defaults() {
+    let s = Settings::default();
+    assert_eq!((s.pdf.dpi, s.pdf.dpi_aggressive, s.pdf.extract_dpi, s.pdf.max_size_mb), (150, 100, 150, 500));
+    assert_eq!(s.pdf.output.optimised.location, Location::InPlace);
+    assert_eq!(s.pdf.output.optimised.template, "%f_optimised.%e");
+    assert_eq!(s.pdf.output.converted.location, Location::SameFolder);
+    assert_eq!(s.pdf.output.converted.folder, "~/Documents/Ferry");
+    assert_eq!(s.pdf.devices.len(), 6);
+    assert_eq!((s.pdf.devices[2].name.as_str(), s.pdf.devices[2].width, s.pdf.devices[2].height), ("iPad", 1640, 2360));
+    assert_eq!((s.formats.heic_to, s.formats.tiff_to, s.formats.avif_to), (ConvertTo::Jpeg, ConvertTo::Jpeg, ConvertTo::Keep));
+    assert_eq!(s.version, 2);
+}
+
+#[test]
+fn a_version_2_file_without_the_new_sections_gets_their_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, br#"{"version":2,"images":{"compression":70}}"#).unwrap();
+    let (s, _) = Settings::load(&path);
+    assert_eq!((s.pdf, s.formats, s.images.compression), (Pdf::default(), Formats::default(), 70));
+}
+
+#[test]
+fn pdf_values_are_sanitised() {
+    let mut s = Settings::default();
+    s.pdf.dpi = 5;
+    s.pdf.extract_dpi = 60_000;
+    s.pdf.max_size_mb = 0;
+    s.pdf.output.converted.template = "%q".into();
+    s.pdf.devices.push(Device { name: "  ".into(), width: 10, height: 10, ..Device::default() });
+    s.pdf.devices.push(Device { name: "Huge".into(), width: 40_000, height: 10, ..Device::default() });
+    let s = s.sanitised();
+    assert_eq!((s.pdf.dpi, s.pdf.extract_dpi, s.pdf.max_size_mb), (36, 1200, 1));
+    assert_eq!(s.pdf.output.converted.template, "%f.%e");
+    assert_eq!(s.pdf.devices.len(), 6);
+}
+
+#[test]
+fn convert_to_names_a_format_or_keeps_it() {
+    assert_eq!(ConvertTo::Keep.format(), None);
+    assert_eq!(ConvertTo::Jpeg.format(), Some(Format::Jpeg));
+    assert_eq!(serde_json::to_value(ConvertTo::WebP).unwrap(), "webp");
+}
+
+#[test]
+fn the_new_sections_reach_the_ui_as_plain_json() {
+    let json = serde_json::to_value(Settings::default()).unwrap();
+    assert_eq!(json["pdf"]["devices"][0], json!({ "name": "iPhone", "width": 1179, "height": 2556 }));
+    assert_eq!(json["formats"]["heic_to"], "jpeg");
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core settings`
+Expected: FAIL (`Pdf`, `Formats`, `ConvertTo`, `Device` not defined).
+
+- [ ] **Step 3: Implement the structs, defaults and `sanitised_pdf_formats` as specified**
+
+Add `#[derive(Default)]`-style `impl Default` blocks matching the listed values. `Device` gets a flattened `extra` map like the other settings structs, so the test's `..Device::default()` is valid.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core settings`, `pnpm check`, `pnpm test`
+Expected: PASS. `src/lib/schema.test.ts` and `settings.test.ts` stay green with the extended fixture.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core/src/settings.rs src/lib/settings.ts src/lib/settings.fixture.ts
+git commit -m "feat(core): pdf and formats settings sections"
+```
+
+---
+
+### Task 3: The recipe and the card learn about the new formats
+
+**Files:**
+- Modify: `crates/ferry-core/src/edit/mod.rs` (`Edits`, `EditsPatch`, `merge`, `is_plain`, tests)
+- Create: `crates/ferry-core/src/formats.rs`; `crates/ferry-core/src/lib.rs` (`pub mod formats;` after `pub mod edit;`)
+- Create: `crates/ferry-core/src/oscodec/mod.rs` (skeleton); `lib.rs` (`pub mod oscodec;` after `pub mod optimise;`)
+- Modify: `crates/ferry-core/src/job.rs` (three `JobUpdate` fields at the end of the struct, under `// sE pdf-formats`)
+- Modify: `crates/ferry-core/src/pipeline.rs`:
+  - `Job` fields `poster`, `pages` at the end of the struct;
+  - `Job::clipboard` and `Job::file` set `pages`;
+  - `Job::file` calls `with_default_conversion`;
+  - new `with_default_conversion` after `fn fork`;
+  - `edit()` validation;
+  - `update()` fills the new fields;
+  - `fork()` copies them;
+  - `notice()` sets them empty.
+- Modify: `src-tauri/src/clipboard.rs` (`start_clipboard_job`: `Job::clipboard(…)` gets `.with_default_conversion(&state.settings.read().unwrap().formats)`)
+- Modify: `src-tauri/src/menu.rs` (`convert_formats` body; `enabled` for `Convert`; test `a_gif_card_can_convert_back_to_gif`)
+- Modify: `src/lib/ipc.ts`, `src/lib/card.fixture.ts`, `src/lib/edits.ts` (`formatChoices`), `src/lib/edits.test.ts`, `src/stack/Card.svelte` (`formatTip`), `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: `settings::{Formats, ConvertTo}` (Task 2), `sniff::tiff_page_count` (Task 1).
+- Produces:
+  - `edit::PageRange { first: u32, last: u32 }` (Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize), 1-based and inclusive.
+  - `edit::MIN_DPI: u16 = 36`, `edit::MAX_DPI: u16 = 1200`.
+  - `Edits` gains, after `level`:
+    - `pub dpi: Option<u16>`: image resolution for a PDF, or render resolution for extracted pages;
+    - `pub pages: Option<PageRange>`: which pages to extract; `None` = all;
+    - `pub uncrop: bool`.
+  - `EditsPatch` gains `dpi: Option<Option<u16>>`, `pages: Option<Option<PageRange>>` (both `deserialize_with = "present"`) and `uncrop: Option<bool>`.
+  - `merge`: `dpi` is clamped to `MIN_DPI..=MAX_DPI`; `pages` with `first == 0` or `last < first` becomes `None`; `uncrop` is set.
+  - `is_plain()` is also false when `dpi.is_some()` or `uncrop`. `pages` alone does not count.
+  - `formats::ConvertChoice { pub format: Format, pub first_only: bool }` (Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug).
+  - `formats::choices(source: Format, animated: bool, pages: u32, heic_encoder: bool) -> Vec<ConvertChoice>`:
+    - `Pdf` → `[Pdf, Png, Jpeg]`;
+    - otherwise `standard = [Png, Jpeg, WebP, Avif]` plus `Heic` when `heic_encoder`. The result is `source` first when `source` is not in `standard`, then `standard`;
+    - `first_only` is true for a target other than the source when the source is animated (except `WebP`, which keeps animation; the source `Gif` keeps it too), or the source is `Tiff` with `pages > 1`.
+  - `formats::default_target(source: Format, pages: u32, f: &settings::Formats) -> Option<Format>`: `Heic` → `f.heic_to.format()`, `Tiff` → `f.tiff_to.format()` only when `pages <= 1`, `Avif` → `f.avif_to.format()`, others `None`.
+  - `oscodec::can_encode(format: Format) -> bool` (false for now; Task 7 fills it), `oscodec::decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError>` (Unsupported for now).
+  - `JobUpdate` gains `pub poster: Option<PathBuf>`, `pub pages: Option<u32>` and `pub choices: Vec<ConvertChoice>`.
+  - `Job` gains `poster: Option<PathBuf>` (Task 4 fills it) and `pages: Option<u32>` (a TIFF's page count when above 1 at creation; a PDF's after its first run, in Task 13).
+  - `Job::with_default_conversion(self, formats: &settings::Formats) -> Job`: sets `edits.format` to `default_target`, if that format is in `choices`. `Job::file` calls it itself.
+  - `Job::edit` now drops:
+    - `format` when it is the source format or not in `choices` (this replaces today's "or GIF" rule; GIF is not in a non-GIF source's choices);
+    - `dpi`, `pages` and `uncrop` for a non-PDF source;
+    - `size` and `scale` for a PDF source.
+  - TS:
+    - `ConvertChoice { format: Format; first_only: boolean }`, `PageRange { first: number; last: number }`;
+    - `Edits` adds `dpi: number | null; pages: PageRange | null; uncrop: boolean`;
+    - `JobUpdate` adds `poster: string | null; pages: number | null; choices: ConvertChoice[]`;
+    - `FormatChoice` adds `firstPage: boolean`;
+    - `formatChoices(card)` maps `card.choices` (label from `FORMAT_LABELS`, `current = card.format === format`). `firstFrame = first_only && source !== 'tiff'`, `firstPage = first_only && source === 'tiff'`.
+  - Rust `menu::convert_formats(card)` returns `card.choices` formats; `enabled(Convert(f))` additionally needs `f` in `card.choices`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`edit/mod.rs`. Also update `the_card_sees_the_recipe_as_plain_json`: its expected JSON gains `"dpi": null, "pages": null, "uncrop": false`.
+
+```rust
+#[test]
+fn dpi_pages_and_uncrop_merge_and_clamp() {
+    let mut e = Edits::default();
+    e.merge(patch(json!({ "dpi": 10 })));
+    assert_eq!(e.dpi, Some(36));
+    e.merge(patch(json!({ "dpi": 5000 })));
+    assert_eq!(e.dpi, Some(1200));
+    e.merge(patch(json!({ "dpi": null, "pages": { "first": 2, "last": 5 }, "uncrop": true })));
+    assert_eq!((e.dpi, e.pages, e.uncrop), (None, Some(PageRange { first: 2, last: 5 }), true));
+    for bad in [json!({ "first": 0, "last": 2 }), json!({ "first": 3, "last": 1 })] {
+        e.merge(patch(json!({ "pages": bad })));
+        assert_eq!(e.pages, None);
+    }
+}
+
+#[test]
+fn dpi_and_uncrop_are_explicit_edits_but_a_page_range_alone_is_not() {
+    assert!(!Edits { dpi: Some(150), ..Edits::default() }.is_plain());
+    assert!(!Edits { uncrop: true, ..Edits::default() }.is_plain());
+    assert!(Edits { pages: Some(PageRange { first: 1, last: 1 }), ..Edits::default() }.is_plain());
+}
+```
+
+`formats.rs`:
+
+```rust
+fn formats(c: &[ConvertChoice]) -> Vec<Format> { c.iter().map(|c| c.format).collect() }
+
+#[test]
+fn a_png_offers_the_standard_targets() {
+    assert_eq!(formats(&choices(Format::Png, false, 1, false)), [Format::Png, Format::Jpeg, Format::WebP, Format::Avif]);
+    assert_eq!(formats(&choices(Format::Png, false, 1, true)), [Format::Png, Format::Jpeg, Format::WebP, Format::Avif, Format::Heic]);
+    assert!(choices(Format::Jpeg, false, 1, true).iter().all(|c| !c.first_only));
+}
+
+#[test]
+fn an_unusual_source_comes_first() {
+    assert_eq!(formats(&choices(Format::Tiff, false, 1, false))[0], Format::Tiff);
+    assert_eq!(formats(&choices(Format::Heic, false, 1, false)), [Format::Heic, Format::Png, Format::Jpeg, Format::WebP, Format::Avif]);
+    assert_eq!(formats(&choices(Format::Gif, true, 1, false)), [Format::Gif, Format::Png, Format::Jpeg, Format::WebP, Format::Avif]);
+}
+
+#[test]
+fn a_pdf_converts_only_to_page_images() {
+    assert_eq!(formats(&choices(Format::Pdf, false, 12, true)), [Format::Pdf, Format::Png, Format::Jpeg]);
+}
+
+#[test]
+fn stills_from_a_sequence_say_so() {
+    let first = |c: &[ConvertChoice], f: Format| c.iter().find(|c| c.format == f).unwrap().first_only;
+    let gif = choices(Format::Gif, true, 1, false);
+    assert!(first(&gif, Format::Png) && first(&gif, Format::Avif));
+    assert!(!first(&gif, Format::WebP) && !first(&gif, Format::Gif));
+    let webp = choices(Format::WebP, true, 1, false);
+    assert!(first(&webp, Format::Jpeg) && !first(&webp, Format::WebP));
+    let tiff = choices(Format::Tiff, false, 3, false);
+    assert!(first(&tiff, Format::Png) && !first(&tiff, Format::Tiff));
+    assert!(!first(&choices(Format::Gif, false, 1, false), Format::Png));
+}
+
+#[test]
+fn default_targets_follow_the_settings() {
+    let f = settings::Formats::default();
+    assert_eq!(default_target(Format::Heic, 1, &f), Some(Format::Jpeg));
+    assert_eq!(default_target(Format::Tiff, 1, &f), Some(Format::Jpeg));
+    assert_eq!(default_target(Format::Tiff, 2, &f), None);
+    assert_eq!(default_target(Format::Avif, 1, &f), None);
+    let png = settings::Formats { avif_to: settings::ConvertTo::Png, ..f.clone() };
+    assert_eq!(default_target(Format::Avif, 1, &png), Some(Format::Png));
+    assert_eq!(default_target(Format::Png, 1, &f), None);
+}
+```
+
+`pipeline.rs` (use the existing `Env` / `options()` helpers):
+
+```rust
+#[test]
+fn a_heic_file_starts_with_its_default_conversion() {
+    let env = Env::new();
+    let path = env.file("photo.heic", &testutil::heif(b"heic", &[(64, 48)], None));
+    let job = Job::file(&path, &Settings::default(), true).unwrap();
+    assert_eq!(job.edits.format, Some(Format::Jpeg));
+    let card = job.update(JobState::Queued, None);
+    assert_eq!(card.choices[0].format, Format::Heic);
+    assert_eq!(card.dims_before, Some((64, 48)));
+}
+
+#[test]
+fn a_multi_page_tiff_is_not_converted_by_default() {
+    let env = Env::new();
+    let path = env.file("fax.tiff", &testutil::tiff_ifds(&[(8, 8), (8, 8)], None));
+    let job = Job::file(&path, &Settings::default(), true).unwrap();
+    assert_eq!((job.edits.format, job.update(JobState::Queued, None).pages), (None, Some(2)));
+}
+
+#[test]
+fn a_conversion_the_source_cannot_take_is_dropped() {
+    let env = Env::new();
+    let (mut job, _) = clipboard_png(&env, "%f");
+    job.edit(convert(Format::Pdf));
+    assert_eq!(job.edits.format, None);
+    job.edit(convert(Format::Avif));
+    assert_eq!(job.edits.format, Some(Format::Avif));
+}
+
+#[test]
+fn pdf_only_edits_are_dropped_on_images() {
+    let env = Env::new();
+    let (mut job, _) = clipboard_png(&env, "%f");
+    job.edit(serde_json::from_value(serde_json::json!({ "dpi": 150, "uncrop": true })).unwrap());
+    assert_eq!((job.edits.dpi, job.edits.uncrop), (None, false));
+}
+```
+
+Helpers used here and in later pipeline tests are the existing ones in `pipeline.rs` `mod tests`: `Env::new()`, `env.file(name, bytes)`, `env.work()`, `env.backups`, `options()`, `options_with(&settings)`, `run(&mut job, level, &o, &env)`, `scale(n)`, `convert(format)` and `clipboard_png(&env, template)`.
+
+`menu.rs`: rewrite `a_gif_card_can_convert_back_to_gif` so `done()` carries `choices: formats::choices(Format::Png, false, 1, false)`. It asserts `convert_formats` equals those formats, and with `choices(Format::Gif, true, 1, false)` the list starts with GIF and `enabled(Convert(Gif))` holds. Add `a_format_the_card_does_not_offer_is_disabled`: `!enabled(&card, Action::Convert(Format::Pdf))` on a PNG card.
+
+`src/lib/edits.test.ts`: replace the three `formatChoices` expectations with ones built from `card(…, { choices: [...] })`. `formatChoices(card({kind:'done'}, { source_format: 'tiff', format: 'tiff', choices: [{format:'tiff',first_only:false},{format:'png',first_only:true}] }))` gives `[{ format: 'tiff', label: 'TIFF', current: true, firstFrame: false, firstPage: false }, { format: 'png', label: 'PNG', current: false, firstFrame: false, firstPage: true }]`. A GIF card with `first_only` PNG gives `firstFrame: true`.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core formats`, `cargo test -p ferry-core edit::tests`, `cargo test -p ferry-core pipeline`, `pnpm test`
+Expected: FAIL (missing types and fields).
+
+- [ ] **Step 3: Implement as specified**
+
+Details:
+- `Job::update` computes `choices = formats::choices(self.source_format, self.animated, self.pages.unwrap_or(1), oscodec::can_encode(Format::Heic))`.
+- `Job::clipboard` and `Job::file` set `pages = Some(n)` when `self.source_format == Tiff` and `n = sniff::tiff_page_count(&bytes) > 1`.
+- `card.fixture.ts` gains `poster: null, pages: null, choices: [png, jpeg, webp, avif]` (all `first_only: false`) and the three new `edits` fields.
+- In `Card.svelte` `formatTip`, add `if (choice.firstPage) return t('pdf.first_page');` directly after the `firstFrame` line.
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.first_page": "First page only",
+```
+
+- [ ] **Step 4: Run the tests and checks**
+
+Run: `cargo test -p ferry-core`, `cargo test -p ferry` (after `pnpm build`), `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm check`, `pnpm test`
+Expected: PASS.
+
+**Manual check (ask the user first):** with `pnpm tauri dev`, hover a PNG clipboard card. The format bar shows `PNG · JPEG · WebP · AVIF`. Clicking AVIF fails with "Ferry can't save AVIF files on this computer" (filled in by Task 9). That is expected at this point.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src-tauri/src src/lib src/stack/Card.svelte
+git commit -m "feat(core): recipe dpi/pages/uncrop, per-source convert choices, default conversions"
+```
+
+---
+
+### Task 4: Posters for originals the webviews can't draw
+
+**Files:**
+- Create: `crates/ferry-core/src/poster.rs`; `lib.rs` (`pub mod poster;` after `pub mod output;`)
+- Create: `crates/ferry-core/src/pipeline_formats.rs`
+- Modify: `crates/ferry-core/src/pipeline.rs`:
+  - `#[path = "pipeline_formats.rs"] mod formats_run;` directly after the `use` block, under `// sE pdf-formats`;
+  - one call in `run_recipe` right after `let original = match self.original(backups) { … };`;
+  - `update()` sets `poster`;
+  - `fork()` copies `poster`.
+- Modify: `src/stack/Card.svelte` (thumbnail `src`; page badge)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: `edit::raster::{decode, cut}`, `edit::geometry::Rect`, `Backups::store_bytes`.
+- Produces:
+  - `poster::CARD_EDGE: u32 = 600` and `poster::VIEW_EDGE: u32 = 2400`.
+  - `poster::needs_poster(format: Format) -> bool`: true for `Tiff`, `Heic`, `Pdf`. WKWebView and WebView2 both draw PNG, JPEG, GIF, WebP and AVIF.
+  - `poster::png(bytes: &[u8], format: Format, page: u32, long_edge: u32) -> Result<(Vec<u8>, (u32, u32)), OptimiseError>`:
+    - a PNG (png crate, `Compression::Fast`, RGBA8) scaled so its long side is at most `long_edge` (never upscaled), and its size;
+    - `Pdf` renders `page` (1-based) through `pdf::render`. Until Task 12 that arm returns `Unsupported`; every other format uses `raster::decode`.
+  - Private `Job::capture_poster(&mut self, original: &[u8], backups: &Backups)` in `pipeline_formats.rs`:
+    - when `needs_poster(self.source_format)` and `self.poster` is `None`, it stores the poster with `backups.store_bytes(self.id.as_str(), ".ferry-poster.png", &png)`;
+    - it sets `self.poster`. Any error leaves `poster` `None` and is not a job error;
+    - it lives in the backup folder, so the asset scope (`$APPDATA/backups/**`) already allows it, and pruning removes it.
+  - Card: `<img src={convertFileSrc(card.poster ?? card.thumb_path)} …>` (the `{#if card.thumb_path}` guard becomes `{#if card.poster ?? card.thumb_path}`). A badge `<span class="pages" aria-hidden="true">{t('pdf.badge.pages', { n: card.pages })}</span>` shows when `card.pages !== null && card.pages > 1`, top-left, 11 px, on `rgba(0,0,0,.55)`.
+
+- [ ] **Step 1: Write the failing tests** (`poster.rs`)
+
+```rust
+#[test]
+fn a_poster_fits_its_long_edge_and_keeps_the_ratio() {
+    let (png, size) = png(&testutil::png(1200, 800), Format::Png, 1, CARD_EDGE).unwrap();
+    assert_eq!(size, (600, 400));
+    assert_eq!(crate::sniff::dimensions(&png, Format::Png), Some((600, 400)));
+}
+
+#[test]
+fn a_small_picture_is_never_enlarged() {
+    assert_eq!(png(&testutil::png(120, 80), Format::Png, 1, CARD_EDGE).unwrap().1, (120, 80));
+}
+
+#[test]
+fn only_formats_the_webviews_cannot_draw_need_a_poster() {
+    let need: Vec<Format> = Format::ALL.into_iter().filter(|&f| needs_poster(f)).collect();
+    assert_eq!(need, [Format::Tiff, Format::Heic, Format::Pdf]);
+}
+
+#[test]
+fn an_unreadable_file_has_no_poster() {
+    assert!(png(b"II*\0garbage", Format::Tiff, 1, CARD_EDGE).is_err());
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core poster`
+Expected: FAIL (module missing).
+
+- [ ] **Step 3: Implement `poster.rs`, `capture_poster` and the Card changes as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.badge.pages": "{n} pages",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core poster`, `cargo test -p ferry-core pipeline`, `pnpm check`
+Expected: PASS. Task 5 adds the end-to-end `a_tiff_card_gets_a_poster` once TIFF decodes.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src/stack/Card.svelte src/lib/i18n/en.json
+git commit -m "feat(core): poster thumbnails for TIFF, HEIC and PDF cards"
+```

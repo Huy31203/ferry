@@ -12,10 +12,13 @@
 
 ## Start condition
 
-**Start B only after stream A's ffmpeg task group is merged into the branch you start from.** B needs these from A:
+**Start B only after stream A's ffmpeg task group is merged into the branch you start from.** That group is A's Tasks 1–4 in `docs/superpowers/plans/2026-10-23-ferry-sA-video.md`. B needs these from it:
 
-- `crates/ferry-core/src/ffmpeg.rs` with `pub fn locate() -> Result<PathBuf, FerryError>` and `pub fn run(args: &[OsString], cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<(), FerryError>` (progress 0.0..=1.0).
-- The `src-tauri/binaries/ffmpeg-<triple>` sidecar, and the env var A's tests use to find it (expected `FERRY_FFMPEG`; read `ffmpeg.rs` for the real name).
+- Task 1: `crates/ferry-core/src/ffmpeg.rs` with `locate`, `run`, `exec`, `capture`, `Exec`, `Captured`, and `FerryError` in `crates/ferry-core/src/error.rs` (re-exported as `ffmpeg::FerryError`).
+- Task 2: the `src-tauri/binaries/ffmpeg-<triple>` sidecar (FFmpeg 9.0.2 with LAME and Opus).
+- Task 3: CI sets `FERRY_FFMPEG` in the `core` job.
+- Task 4: the video variants in `sniff::Format`, so `sniff.rs` merges without conflict.
+- A's Task 9 is the same change as B's Task 9. Whichever lands second is skipped.
 
 **ffmpeg's log.** `ffmpeg::run` returns `()`, but loudness measurement needs ffmpeg's log: `loudnorm` prints its pass-1 JSON to stderr, and ffmpeg has no option to write it to a file. Stream information (codec, bitrate, sample rate, cover) also comes only from the log. A's plan (`2026-10-23-ferry-sA-video.md`, Task 1) covers this with `pub fn exec(program: &Path, args: &[OsString], how: &Exec, cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<Captured, FerryError>`, where `Captured { code, stderr }` holds the last 1 MiB of stderr. B's production tool calls `ffmpeg::exec(&ffmpeg::locate()?, args, &Exec::default(), cancel, on_progress)` and returns `Captured::stderr`. B changes nothing in `ffmpeg.rs`. A's `exec` puts `-hide_banner -nostdin -y -nostats -progress pipe:1 -stats_period 0.5` before the caller's arguments, so **B's argument lists never contain those flags**. Its stall limit (`STALL`, 120 s without an output line) is never reached, because `-progress` prints every 0.5 s.
 
@@ -419,11 +422,13 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       assert_eq!(sniff(&ftyp(b"M4B ", &[])), Some(Format::M4a));
   }
   #[test] fn video_and_raw_streams_are_not_audio() {           // Review Focus 4
-      assert_eq!(sniff(&ftyp(b"isom", &[b"isom", b"iso2", b"avc1", b"mp41"])), None);
-      assert_eq!(sniff(&ftyp(b"qt  ", &[b"qt  "])), None);
-      assert_eq!(sniff(&[0xFF, 0xF1, 0x50, 0x80, 0, 0]), None); // ADTS AAC (layer bits 00)
-      assert_eq!(sniff(b"RIFF\x24\0\0\0AVI LIST"), None);
-      assert_eq!(sniff(&ogg(b"\x80theora")), None);
+      // Stream A may claim the MP4/MOV ones as video; they must never be audio.
+      let not_audio = |b: &[u8]| !sniff(b).is_some_and(Format::is_audio);
+      assert!(not_audio(&ftyp(b"isom", &[b"isom", b"iso2", b"avc1", b"mp41"])));
+      assert!(not_audio(&ftyp(b"qt  ", &[b"qt  "])));
+      assert!(not_audio(&[0xFF, 0xF1, 0x50, 0x80, 0, 0]));     // ADTS AAC (layer bits 00)
+      assert!(not_audio(b"RIFF\x24\0\0\0AVI LIST"));
+      assert!(not_audio(&ogg(b"\x80theora")));
       assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(Format::Jpeg));
   }
   #[test] fn audio_formats_have_names_and_no_pixels() {
@@ -1046,7 +1051,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   pub struct Job { …, audio: Option<AudioJob> }            // Some for audio jobs
   ```
   Behaviour:
-  - **`Job::file`** reads the first `sniff::HEAD` bytes. An unreadable file gives the same `error.read` text. If `sniff(head)` is an audio format, it returns `Job::audio_file(...)`. Otherwise the existing image path runs unchanged.
+  - **`Job::file`** reads the first `sniff::HEAD` bytes. An unreadable file gives the same `error.read` text. If `sniff(head)` is an audio format, it returns `Job::audio_file(...)`. Otherwise the existing image path runs unchanged. If A's Task 10 already added a video branch (`Job::video_file`) to `Job::file`, put the audio branch beside it, comment `// stream B: audio`. Both branches only look at the head, so their order does not matter.
   - **`audio_file`** applies `settings.audio.ignored_extensions` (via `is_ignored_extension`) and then `settings.audio.max_size_mb` (`Skip::TooLarge`). It never reads the whole file.
   - **`update()`:** `thumb_path` is `audio.cover_file` for audio jobs (backup otherwise). `audio` is `Some(self.audio_card())` for audio jobs.
   - **`audio_card`:**
@@ -1116,7 +1121,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
 
 **Files:** Modify `crates/ferry-core/src/pipeline/audio.rs`, and `crates/ferry-core/src/pipeline.rs` at these anchors:
 - `run_recipe`, first lines after the cancel check: `if self.audio.is_some() { return self.run_audio(level, o, backups, emit); }`;
-- `restore()`: `if let Some(a) = self.audio.as_mut() { a.reset_result(); }` next to the existing resets.
+- `restore()`, first line: `if self.audio.is_some() { return self.restore_audio(o); }` (comment `// stream B: audio`; A adds the same line for video).
 
 **Interfaces:**
 - Consumes: Tasks 3, 4, 7, 8, 9 and 10 as named there; `Backups::store_bytes`; `output::unique`; `bytes_label` (make it `pub(crate)`).
@@ -1124,6 +1129,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   ```rust
   impl Job {
       pub(super) fn run_audio(&mut self, level: Level, o: &RunOptions, backups: &Backups, emit: &mut dyn FnMut(JobUpdate)) -> Option<Finished>;
+      pub(super) fn restore_audio(&mut self, o: &RunOptions) -> Finished;   // put_back(Content::File(backup), true, audio_o, no deliver); clear edits, dims_after, note; audio.reset_result(); Restored. A missing backup gives the same Error as restore()
       pub fn extract_cover(&self) -> Result<PathBuf, String>;   // copies cover_file to "<output dir>/<name> cover.<ext>" (unique); Err(t("audio.cover.none"))
   }
   ```
@@ -1168,7 +1174,7 @@ The algorithm is the order of side effects that tests cannot fully pin. Follow i
 15 cleanup: remove the whole work/audio/<job id> folder (best effort); return Finished
 ```
 
-"Note" means `self.note = self.note.take().or(Some(text))`, so the first note wins, except where step 11 says it overrides. Progress updates are built from a snapshot `let base = self.update(JobState::Queued, None);`. Each update clones `base` and sets `state`, so the callback never borrows `self`. Updates are emitted only when progress has moved by at least 0.01 since the last one, or reaches 1.0.
+"Note" means `self.note = self.note.take().or(Some(text))`, so the first note wins, except where step 11 says it overrides. Progress updates are built from a snapshot `let base = self.update(JobState::Queued, None);`. Each update clones `base` and sets `state`, so the callback never borrows `self`. Updates are emitted only when progress has moved by at least 0.01 since the last one, or reaches 1.0. A step with progress above 0 is shown as `tf("audio.step.progress", step, n = round(progress × 100))`, for example "Encoding MP3 · 50 %". This matches A's `video.step.progress`, so `Card.svelte` needs no percentage of its own.
 
 - [ ] **Step 1: Write the failing tests** with `FakeTool` (`o.audio.tool = Some(fake.clone())`; `options()` uses `test_trash` and a temp work dir). `wav(env)` writes `tone.wav` with `wav_tone(&[(1.0, 0.5)], 44100, 2)`, and the fake writes 1000 bytes as the MP3.
   ```rust
@@ -1182,14 +1188,14 @@ The algorithm is the order of side effects that tests cannot fully pin. Follow i
       assert!(!env.dir.path().join("tone.wav").exists() && env.dir.path().join(".trash/tone.wav").exists());
       assert_eq!(u.detail, "192 kbps · MP3");
       assert_eq!(u.audio.unwrap().bitrate_after, Some(192));
-      assert!(seen.iter().any(|s| matches!(&s.state, JobState::Optimising { progress, step } if *progress == 0.5 && step == "Encoding MP3")));
+      assert!(seen.iter().any(|s| matches!(&s.state, JobState::Optimising { progress, step } if *progress == 0.5 && step == "Encoding MP3 · 50 %")));
       assert!(!o.work_dir.join("audio").join(job.id.as_str()).exists());
   }
   #[test] fn loudness_runs_two_passes_and_reports_progress_across_both() {
       // script: probe log, measure log (loudness::samples::MEASURED), encode Write with log PASS2_DYNAMIC
       // edits.loudness = Some(Streaming)
       // assert: 3 calls; call 2 contains "-af" with "print_format=json" and "-f","null"; call 3 contains "measured_I=-27.61";
-      // Optimising progress 0.15 with "Step 1 of 2 · Measuring loudness" and 0.65 with "Step 2 of 2 · Encoding MP3";
+      // Optimising progress 0.15 with "Step 1 of 2 · Measuring loudness · 15 %" and 0.65 with "Step 2 of 2 · Encoding MP3 · 65 %";
       // u.note == Some("Peaks limited to reach −14 LUFS"); u.detail == "192 kbps · MP3 · −14 LUFS"
   }
   #[test] fn an_unmeasurable_file_keeps_its_loudness_and_says_so() {   // Review Focus 1
@@ -1212,7 +1218,7 @@ The algorithm is the order of side effects that tests cannot fully pin. Follow i
       // o.audio.tool = None → Error{reason: "ffmpeg missing — reinstall Ferry"}, source untouched
   }
   #[test] fn restore_brings_the_wav_back_and_trashes_the_mp3() {
-      // after the first test's run: job.restore(&o, &mut no_deliver) → Restored; tone.wav back with original bytes; tone.mp3 in .trash;
+      // after the first test's run: job.restore(&o, &mut no_deliver) → Restored (through restore_audio: the backup is never read into memory); tone.wav back with original bytes; tone.mp3 in .trash;
       // update.audio.bitrate_after == None
   }
   #[test] fn fit_under_retries_with_a_lower_bitrate_then_notes_a_miss() {
@@ -1446,7 +1452,6 @@ The algorithm is the order of side effects that tests cannot fully pin. Follow i
   - (a) the `quality`, `slideLabel`, `slideStops`, `slideYs`, `slideLabelled`, `press` start index, `release` patch and `step` use the `compression*` helpers instead of `QUALITY_STOPS`/`qualityLabel`/`qualityPatch`/`nextQuality`/`currentQuality`. They pass `compressionRound(card)` to `labelledStops`.
   - (b) `tipText`: `downscale` → `t('audio.card.cover_downscale')` and `compression` → `t('audio.card.bitrate')` when `card.audio`.
   - (c) the placeholder: when `card.audio` and no `thumb_path`, show the Lucide `audio-waveform` icon (`<path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2" />`) instead of the image icon.
-  - (d) the optimising line: `{card.state.step}…` followed by ` {t('audio.card.percent', { n: Math.round(card.state.progress * 100) })}` when `progress > 0`. Image jobs report 0, so they look the same. **Skip (d) if stream A already shows a percentage.**
 - [ ] **Step 4: Run** `pnpm test`, then `pnpm check`. Expected: PASS, with 0 svelte-check errors.
 - [ ] **Step 5: Commit** `feat(ui): audio cards with bitrate slider, cover downscale and waveform placeholder`.
 
@@ -1570,9 +1575,10 @@ The job then runs once through `Job::run` → `run_audio`, so a file is encoded 
 ## Cross-stream notes (for merges into `feat/c3-all`)
 
 - **A (video):**
-  - B's `sniff` M4A check must sit above A's generic `ftyp` check.
+  - B's `sniff` M4A check must sit above A's `ftyp` branch. A gives `mp42` with a compatible `M4A ` brand to `Mp4`; B claims it as `M4a` first.
   - If A also added a file-backed write path, keep one (Task 9 skip rule).
-  - If A also added a percentage to the Card's optimising line, keep one (Task 14 (d)).
+  - B's tool calls A's `ffmpeg::exec` and passes none of the global flags `exec` prepends. A's Task 9 and B's Task 9 are the same change (`Content`, `backup_path`, `atomic_replace_from`), so whichever lands second is a no-op.
+  - `restore()` gets one dispatch line from each stream (`restore_video`, `restore_audio`); keep both.
   - A's ffmpeg build must contain the components in Global Constraints.
 - **C (watchers):**
   - In `src-tauri/src/watch/hooks.rs`, set `pub const AUDIO: bool = true;` and make `audio_job` return `Some(Job::file(path, settings, state.gifsicle.is_some()))`. `Job::file` dispatches audio itself.
@@ -1583,7 +1589,7 @@ The job then runs once through `Job::run` → `run_audio`, so a file is encoded 
 
 ## Open questions for the user
 
-1. **ffmpeg contract:** B needs ffmpeg's log, both for the loudnorm JSON and for stream info. Should A's plan add `run_logged` itself (recommended, since A owns the file), or should B's Task 1 add it as written?
+1. **Order of merging A and B:** B needs A's Task 1 (`ffmpeg::exec`), Task 2 (the sidecar build with LAME and Opus), Task 3 (CI sets `FERRY_FFMPEG`) and Task 4 (video variants in `Format`, to merge `sniff.rs` cleanly). It also shares Task 9 with A. Should B start after A's Tasks 1–4 and 9 are merged (recommended), or right after Task 1, accepting the duplicate Task 9 and a `sniff.rs` conflict?
 2. **Ogg Vorbis inputs** default to Opus (`.ogg` becomes `.opus`), because B does not ask A for libvorbis. Should they default to MP3 instead, or should A add libvorbis (BSD-3-Clause) so Ogg stays Ogg?
 3. **Broadcast target:** EBU R 128 (−23 LUFS, −1 dBTP) only. Should B add a US "ATSC A/85" option (−24 LKFS, −2 dBTP)?
 4. **Audio A/B compare** (R§4.11) is not in B's brief scope, so ⌘D is disabled on audio cards. Should it be a Cycle 4 item, or added to B now (one transport, A/B switch, two waveforms)?
