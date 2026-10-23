@@ -109,23 +109,34 @@ describe('slider drag', () => {
 });
 
 describe('slider labels', () => {
-  it('sizes the track so the panel (46 px down, 42 px of chrome) ends 6 px above the card bottom', () => {
-    expect(sliderTrack(200)).toBe(106);
-    expect(sliderTrack(150)).toBe(56);
+  it('sizes the track so the panel (46 px down, 59 px of chrome) ends 6 px above the card bottom', () => {
+    expect(sliderTrack(200)).toBe(89);
+    expect(sliderTrack(150)).toBe(39);
   });
 
-  it('labels every stop where a stop is 14 px or more apart', () => {
-    expect(labelledStops(5, 56)).toEqual([0, 1, 2, 3, 4]);
-    expect(labelledStops(1, 56)).toEqual([0]);
+  it('labels the first, the last and the multiples of 25 where they are 14 px or more apart', () => {
+    // 100, 90, 85 … 10: 75 is stop 4, 50 stop 9, 25 stop 14
+    expect(labelledStops(SCALE_STOPS, 89)).toEqual([0, 4, 9, 14, 17]);
+    // 100, 95 … 5, Extreme: 75 is stop 5, 50 stop 10, 25 stop 15
+    expect(labelledStops(QUALITY_STOPS, 89)).toEqual([0, 5, 10, 15, 20]);
   });
 
-  it('labels every Nth stop, always the first and the last, and drops one too close to the last', () => {
-    // 18 stops over 106 px: 6.2 px apart, so every 3rd; stop 15 is only 2 stops from the last
-    expect(labelledStops(18, 106)).toEqual([0, 3, 6, 9, 12, 17]);
-    // 21 stops over 106 px: 5.3 px apart, so every 3rd; stop 18 is only 2 from the last
-    expect(labelledStops(21, 106)).toEqual([0, 3, 6, 9, 12, 15, 20]);
-    // 18 stops over 56 px: 3.3 px apart, so every 5th
-    expect(labelledStops(18, 56)).toEqual([0, 5, 10, 17]);
+  it('drops the round stop nearest an end when two labels are too close, on a compact card', () => {
+    expect(labelledStops(SCALE_STOPS, 39)).toEqual([0, 9, 17]);
+    expect(labelledStops(QUALITY_STOPS, 39)).toEqual([0, 10, 20]);
+  });
+
+  it('never labels two stops closer than 14 px', () => {
+    for (const stops of [SCALE_STOPS, QUALITY_STOPS]) {
+      for (const track of [sliderTrack(200), sliderTrack(150)]) {
+        const at = labelledStops(stops, track).map((i) => (i / (stops.length - 1)) * track);
+        at.slice(1).forEach((y, n) => expect(y - at[n]).toBeGreaterThanOrEqual(14));
+      }
+    }
+  });
+
+  it('labels a lone stop', () => {
+    expect(labelledStops([100], 89)).toEqual([0]);
   });
 });
 
