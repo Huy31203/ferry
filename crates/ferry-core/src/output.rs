@@ -25,6 +25,10 @@ pub struct Target<'a> {
     /// The result's size, for `%z`.
     pub dims: (u32, u32),
     pub kind: OutputKind,
+    /// The name the user gave the result by renaming it (a stem). It replaces
+    /// the whole file name wherever a template or the source's stem would
+    /// have made one.
+    pub stem: Option<&'a str>,
 }
 
 /// The path a result should have, before `unique`. A path equal to the
@@ -40,11 +44,12 @@ pub fn resolve(
         OutputKind::Optimised => &rules.optimised,
         OutputKind::Converted => &rules.converted,
     };
-    let stem = t
-        .source
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let stem = t.stem.map(str::to_owned).unwrap_or_else(|| {
+        t.source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
     let folder = t.source.parent().unwrap_or(Path::new(""));
     let named = |dir: &Path| {
         let parent = folder
@@ -59,10 +64,13 @@ pub fn resolve(
             parent: &parent,
             date: today,
         };
-        dir.join(template::safe_file_name(&template::render(
-            &rule.template,
-            &ctx,
-        )))
+        match t.stem {
+            Some(stem) => dir.join(format!("{stem}.{}", t.ext)),
+            None => dir.join(template::safe_file_name(&template::render(
+                &rule.template,
+                &ctx,
+            ))),
+        }
     };
     match rule.location {
         Location::InPlace => match t.kind {
@@ -107,6 +115,7 @@ pub fn example(
         },
         dims: (1920, 1080),
         kind,
+        stem: None,
     };
     let path = resolve(&target, &rules, work_dir, home, today);
     Ok(settings::contract_home(&path, home))
@@ -158,6 +167,7 @@ mod tests {
             ext,
             dims: (300, 200),
             kind,
+            stem: None,
         };
         resolve(&target, rules, Path::new("/w"), Path::new("/h"), today())
     }
@@ -245,6 +255,36 @@ mod tests {
         assert_eq!(unique(&wanted, Some(&wanted)), wanted);
         fs::write(dir.path().join("shot (2).webp"), b"x").unwrap();
         assert_eq!(unique(&wanted, None), dir.path().join("shot (3).webp"));
+    }
+
+    #[test]
+    fn a_name_the_user_gave_replaces_the_whole_file_name() {
+        let named = |location, kind, ext| {
+            let mut rules = Output::default();
+            rules.optimised.location = location;
+            rules.converted.location = location;
+            let target = Target {
+                source: Path::new("/u/Desktop/shot.png"),
+                job: "j1",
+                ext,
+                dims: (300, 200),
+                kind,
+                stem: Some("hero"),
+            };
+            resolve(&target, &rules, Path::new("/w"), Path::new("/h"), today())
+        };
+        assert_eq!(
+            named(Location::SameFolder, OutputKind::Optimised, "png"),
+            Path::new("/u/Desktop/hero.png")
+        );
+        assert_eq!(
+            named(Location::InPlace, OutputKind::Converted, "webp"),
+            Path::new("/u/Desktop/hero.webp")
+        );
+        assert_eq!(
+            named(Location::Temporary, OutputKind::Converted, "webp"),
+            Path::new("/w/files/j1/hero.webp")
+        );
     }
 
     #[test]
