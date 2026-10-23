@@ -101,6 +101,8 @@ pub struct Job {
     source_path: Option<PathBuf>,
     /// A file job's current result, so the next run can take it back.
     last: Option<Written>,
+    /// What became of the source file on disk.
+    source_state: SourceState,
     dims_after: Option<(u32, u32)>,
     note: Option<String>,
     /// The original, once stored. Every run starts from it (R§2.4).
@@ -122,8 +124,17 @@ struct Written {
     path: PathBuf,
     /// Ferry made this file; it is not the source.
     created: bool,
-    /// The source was overwritten or trashed for it.
-    source_changed: bool,
+}
+
+/// What became of a file job's source (the original, where it came from).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceState {
+    /// Ferry has not touched it.
+    Untouched,
+    /// Ferry wrote its result over it.
+    Overwritten,
+    /// Ferry moved it to the Trash for a conversion.
+    Trashed,
 }
 
 /// Why a rename was refused; the card shows `message()` inline.
@@ -216,6 +227,7 @@ impl Job {
             animated,
             source_path: None,
             last: None,
+            source_state: SourceState::Untouched,
             dims_after: None,
             note: None,
             backup: None,
@@ -275,6 +287,7 @@ impl Job {
             animated: sniff::is_animated(&bytes, format),
             source_path: Some(path.to_owned()),
             last: None,
+            source_state: SourceState::Untouched,
             dims_after: None,
             note: None,
             backup: None,
@@ -414,6 +427,7 @@ impl Job {
             animated: self.animated,
             source_path: self.source_path.clone(),
             last: None,
+            source_state: SourceState::Untouched,
             dims_after: None,
             note: None,
             backup: self.backup.clone(),
@@ -653,13 +667,14 @@ impl Job {
                 if trash_source && source.exists() {
                     let _ = (o.trash)(&source);
                 }
-                let source_changed = path == source
-                    || trash_source
-                    || self.last.as_ref().is_some_and(|w| w.source_changed);
+                if trash_source {
+                    self.source_state = SourceState::Trashed;
+                } else if path == source {
+                    self.source_state = SourceState::Overwritten;
+                }
                 self.last = Some(Written {
                     path: path.clone(),
                     created: path != source,
-                    source_changed,
                 });
                 self.output = path;
             }
@@ -710,7 +725,7 @@ impl Job {
     /// Take a file job's result back: a file Ferry made goes to the Trash; a
     /// source Ferry overwrote or trashed gets the original again.
     fn undo(
-        &self,
+        &mut self,
         last: &Written,
         original: &[u8],
         o: &RunOptions,
@@ -718,10 +733,11 @@ impl Job {
         if last.created && last.path.exists() {
             let _ = (o.trash)(&last.path);
         }
-        if last.source_changed
+        if self.source_state != SourceState::Untouched
             && let Some(source) = &self.source_path
         {
             self.write_file(source, original, source, o)?;
+            self.source_state = SourceState::Untouched;
         }
         Ok(())
     }
