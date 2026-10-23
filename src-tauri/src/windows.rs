@@ -52,13 +52,14 @@ pub fn follows_screenshot_setting(label: &str) -> bool {
 }
 
 /// Hide Ferry's floating UI from screenshots and screen sharing, or show it
-/// (R§3.1): every open window that follows the setting.
+/// (R§3.1): every open window that follows the setting, and Quick Look.
 pub fn set_content_protected(app: &AppHandle, protected: bool) {
     for (label, window) in app.webview_windows() {
         if follows_screenshot_setting(&label) {
             let _ = window.set_content_protected(protected);
         }
     }
+    platform::preview::set_protected(app, protected);
 }
 
 /// Fit the stack window to its content and pin it to the chosen corner of the
