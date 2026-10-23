@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Files enter Ferry by drag and drop: a drop zone that appears while files are dragged (or on a modifier tap), a batch window that runs hundreds or thousands of files with progress, pause, cancel, re-run and roll back, and a compact results list with multi-select and a selection bar, all over the existing `Job` / `JobUpdate` card model.
+**Goal:** Files enter Ferry by drag and drop: a drop zone that appears while files are dragged (or on a modifier tap; on Windows, by default, only on a modifier tap), a batch window that runs hundreds or thousands of files with progress, pause, cancel, re-run and roll back, and a compact results list with multi-select and a selection bar, all over the existing `Job` / `JobUpdate` card model.
 
 **Architecture:** Pure logic goes in three new `ferry-core` modules: `intake` (classify, folder scan, drop summary, routing), `drag` (drag and modifier-tap detection from polled samples, zone placement) and `batch` (rows, bounded work queue, tally, pace). The app gets one module tree, `src-tauri/src/drop_batch/`, plus `platform/{macos,windows}_drop.rs`. It owns a hidden non-activating **drop zone** window, a polling **drag watcher** thread, a normal **batch** window fed by a dispatcher thread, and compact-list commands. Batch rows are ordinary jobs started through `jobs::start`. A three-line hook in `jobs.rs` sends their updates to the batch window instead of the stack. The compact list is a second layout of the same `JobUpdate[]` inside the stack page.
 
@@ -14,22 +14,22 @@
 
 | Topic | Decision | Why |
 | --- | --- | --- |
-| What the drop zone is | A floating, transparent, **non-activating** webview window (`drop`), created hidden at startup like the stack. It is 220 × 140 content inside a 244 × 164 window (12 px of padding leaves room for the 1.04 hover scale and the shadow). It sits near the results corner, or centred under the pointer when summoned by a tap. It is not a tray target and not a permanent screen-edge strip | R§4.8 says a panel near the results corner or under the cursor. The window is a real drop target, so Tauri's own `DragDropEvent` supplies the paths, the hover and the drop on both OSes with no native drop code. Dropping onto the menu-bar icon (R§4.1) is deferred: Tauri's tray has no drop API (see Open questions) |
+| What the drop zone is | A floating, transparent, **non-activating** webview window (`drop`), created hidden at startup like the stack. It is 220 × 140 content inside a 244 × 164 window (12 px of padding leaves room for the 1.04 hover scale and the shadow). It sits near the results corner, or centred under the pointer when summoned by a tap. It is not a tray target and not a permanent screen-edge strip | R§4.8 says a panel near the results corner or under the cursor. The window is a real drop target, so Tauri's own `DragDropEvent` supplies the paths, the hover and the drop on both OSes with no native drop code. Dropping onto the menu-bar icon (R§4.1) is deferred: Tauri's tray has no drop API (user decision, see "Questions decided by the user") |
 | Seeing a drag start (macOS) | A watcher thread polls `NSEvent.pressedMouseButtons`, `NSEvent.modifierFlags` (class properties) and the drag pasteboard's `changeCount`. It polls every 100 ms while the button is up and every 30 ms while it is down. A pasteboard change while the button is held means a drag started. The drag pasteboard's `public.file-url` items say whether it carries files and which ones | R§5 names exactly this ("poll the drag pasteboard plus a global mouse monitor"). The class properties need no Input Monitoring or Accessibility permission, unlike a global event monitor or `CGEventTap`. About 10 cheap reads a second while idle keeps NFR-R1 (under 1 % CPU) |
-| Seeing a drag start (Windows) | No public drag-start signal exists (R§5, high risk). `GetAsyncKeyState` and `GetCursorPos` are polled the same way. A left-button press that moves 24 px and lasts 300 ms, and that did not start on a Ferry window, shows a **slim tab** (a 24 × 140 window) at the results edge. A drag that enters the tab turns it into the full zone. A modifier tap while the button is held shows the zone under the pointer | This is the requirements' own fallback ("modifier tap or a slim screen-edge tab"). It needs no hooks and no DLL injection. It is unverified on a real desktop (C1 §1); see Open questions |
+| Seeing a drag start (Windows) | No public drag-start signal exists (R§5, high risk). `GetAsyncKeyState` and `GetCursorPos` are polled the same way. **Default: modifier tap only** (user decision, 2026-10-23): `drop_zone.show_on` defaults to `"modifier"` on Windows (`"any_drag"` on macOS), so the zone appears only when the zone modifier is tapped while the button is held, centred under the pointer. **Opt-in edge tab:** with `show_on = "any_drag"` on Windows, a left-button press that moves 24 px and lasts 300 ms, and that did not start on a Ferry window, shows a **slim tab** (a 24 × 140 window) at the results edge; a drag that enters the tab turns it into the full zone. The tap works in both modes | Both are the requirements' own fallback ("modifier tap or a slim screen-edge tab"). A moving press also happens on window moves and text selection, so as a default the tab would flash all day; it stays available for users who want it. No hooks, no DLL injection. Unverified on a real desktop (C1 §1) |
 | Modifier taps | A pure `DragWatch` state machine turns samples into `DragStarted`, `PressMoved`, `DragEnded` and `Tap(Modifier)`. A tap is one modifier alone, pressed and released within 350 ms while the mouse button stays down. Taps of the zone modifier (default Option/Alt, R§2.10) toggle the zone. Every other tap is re-emitted app-wide as `drag:tap` for stream F's preset zones | Testable without a desktop; F needs the same signal for "Tap Control" |
 | Keep originals | Holding the keep modifier (default **Shift**) at the drop marks the jobs. Their runs and restores use the File handling rules with `In place` replaced by `Same folder` (`%f_optimised.%e` / `%f.%e`), so the source file is never written | FR-T6 "holding a modifier while dropping keeps the original untouched". Reuses Cycle 2's output rules instead of a new write path |
 | Routing a drop | `route`: any folder, or more top-level files than `drop_zone.batch_threshold` (default 20), goes to the batch window. Otherwise each file becomes a file job with its own card, exactly like a hotkey file job (`Job::file` + `jobs::start`) | FR-T8. Small drops behave like today's copied files |
 | Folder recursion | `intake::scan` walks folders itself with no new crate. It does not follow symlinked folders, and it skips hidden entries (leading `.`), macOS packages by extension (`.app`, `.photoslibrary`, …) and Windows system folders, plus Ferry's own backups and working folders. It reads only the first 64 bytes of each file to sniff its type (content, never extension), dedupes by canonical path and stops at 10 000 files | Recursing into a `.photoslibrary` and optimising in place would corrupt the Photos library (R§3.3 "original is sacred"). Reading heads, not whole files, keeps a 5 000-file scan to seconds (NFR-P7) |
 | Supported types | Only what `intake::classify` accepts, which today is `sniff::sniff` (PNG, JPEG, GIF, WebP) → `MediaKind::Image`. `MediaKind` already has `Video`, `Audio` and `Pdf` for streams A, B and E to fill in | One place to extend; drop zone, batch and folder scan agree |
 | Batch model | No new job model. Every batch row becomes an ordinary file `Job` registered in `AppState.jobs`. A dispatcher thread creates at most `available_parallelism()` jobs at a time (the same cap as the encoder semaphore, NFR-P6), and `Job::file` reads a file only when it is dispatched. Updates for batch jobs are diverted from the stack to the batch window, and they skip "Recent results" | Reuses backups, restore, edits, cancel and source-state safety as they are. A bounded dispatcher means 5 000 files never queue 5 000 tasks or 5 000 full file reads |
-| "Backing up N of M" phase (R§4.10) | **Dropped.** Each file is backed up immediately before its own first write (existing `Job::run`). | Same guarantee (no original changes before its backup exists), the first results arrive at once, and disk I/O is not doubled up front. See Open questions |
+| "Backing up N of M" phase (R§4.10) | **Dropped.** Each file is backed up immediately before its own first write (existing `Job::run`). | Same guarantee (no original changes before its backup exists), the first results arrive at once, and disk I/O is not doubled up front. Confirmed by the user |
 | Re-run and roll back | The Adjust panel holds compression (or Extreme), downscale % and convert-to. "Re-run with new settings" sends one `EditsPatch` built from it to each finished row (`jobs::edit`; `jobs::rerun` for rows without an editable original), through the same bounded queue. "Roll back all" calls `jobs::restore` for each Done row | R§2.1 story 5 on the Cycle 2 recipe model (brief: extend it, no parallel edit model) |
 | Batch progress | Rust coalesces row changes and flushes at most every 100 ms (`batch:rows` carries only the changed rows, `batch:status` the tally, phase, files/s and ETA). The table is virtualised (fixed 32 px rows), and its order is recomputed only when the user sorts, filters or rows are added, never on a status change | NFR-P7 "smooth with 5,000 files (virtualised list, incremental progress)". 15 000 job events become at most 10 IPC messages a second |
 | Virtualisation | A 40-line helper `src/lib/virtual.ts` (`visibleRange`), shared by the batch table and the compact list, with no npm package | Fixed row heights make windowing arithmetic trivial. Existing Svelte virtual-list packages target Svelte 3/4 and would add a dependency for less than a screen of code |
-| Compact list | The stack switches to a list of 44 px rows when it holds more than `results_list.after_cards` (default 5, R§4.4) cards. The mode never flips while the pointer is on the stack, a selection exists, a tool is open or a drag runs. Rows are the same `JobUpdate`s, upserted in place (never reordered), and the list shows at most 8 rows at a time and scrolls | R§4.5, including "never reorders under the cursor while the user is selecting" |
+| Compact list | The stack switches to a list of 44 px rows when it holds more than `results_list.after_cards` (default 5, R§4.4) cards. The mode never flips while the pointer is on the stack, a selection exists, a tool is open, the list has the keyboard or a drag runs. Rows are the same `JobUpdate`s, upserted in place (never reordered), and the list shows at most 8 rows at a time and scrolls | R§4.5, including "never reorders under the cursor while the user is selecting" |
 | Selection bar | Drag set, Save to…, Crop, Downscale ▸, Compression ▸, Convert ▸, Copy, Remove, Select all, Clear. Drag, Save to and Copy act on rows with a file. Crop, Downscale, Compression and Convert act on rows whose `can_edit` is true. Remove closes every selected row (cancelling busy ones). "Bitrate" (R§4.5) is the image Compression menu until streams A and B give video and audio cards | Only tools that exist on cards today; each one goes through the same `jobs::edit` / `jobs::convert` as a single card |
-| List keyboard | The stack never has focus (C1), so while the pointer is over the list Rust holds global `CmdOrCtrl+A`, `ArrowUp`, `ArrowDown`, `Shift+ArrowUp`, `Shift+ArrowDown`, plus `Escape` while something is selected. All of them are released on leave and when `floating.hover_hotkeys` is off. ↑/↓ move a cursor row that the existing hover hotkeys (Space, ⌘/Ctrl+D, `-`, `1`–`9`) then act on | R§2.10 "Select all / clear in list" and R§3.6 keyboard reach, with the same trade-off and setting as Cycle 2's hover hotkeys. No Enter key: stealing Enter from a chat app is worse than clicking a checkbox |
+| List keyboard | The list acts on keys **only after the user clicks it** (user decision, 2026-10-23); pointing at it takes nothing. The click (a row's checkbox, a row while something is selected, or the list body outside the rows) calls the existing `stack_focus(true)`, the same path rename and crop use, so the stack becomes the key window without activating Ferry and the keys arrive as ordinary DOM key events: ⌘/Ctrl+A, Esc, ↑/↓, ⇧↑/⇧↓, plus Space, ⌘/Ctrl+D, `-` and `1`–`9` on the cursor row. No global shortcut is registered for the list, and `floating.hover_hotkeys` does not affect these keys. The keyboard goes back on a click elsewhere, on Esc with nothing selected, after Copy, before a preview or compare opens, and when the list closes. Without a click, Cycle 2's hover hotkeys still act on the row under the pointer, as on cards | R§2.10 "Select all / clear in list" and R§3.6 keyboard reach, after one click. ⌘A, Esc and the arrows are too common in other apps to take from them on hover |
 | Run state | Drops and the drop zone ignore Running / Paused / Stopped | A drop is an explicit request, like a hotkey or a card action (C1 §5.1) |
 
 ## Global Constraints
@@ -66,8 +66,10 @@
 1. **Ferry's own drag-out pops the zone or re-optimises its own output.** Dragging a card, "Drag all", a selection or batch rows into Finder must never show the zone. A result dropped back on a tap-summoned zone gets a notice and is left alone, never re-optimised in place. Pinned in Task 2 (`ferrys_own_results_are_not_taken_as_new_input`), Task 3 (`the_zone_auto_shows_only_for_other_apps_file_drags`, `a_press_on_a_ferry_window_never_shows_the_tab`) and Task 11 check 6.
 2. **Folder drops that reach what they must not.** Packages (`Photos Library.photoslibrary`, `Foo.app`), hidden folders (`.git`, `.Trash`), `$RECYCLE.BIN`, symlink loops, Ferry's own backups folder, and a package dropped directly must never be walked, read past 64 bytes, or optimised. Expected: they are skipped and the rest of the tree is processed. Pinned in Task 2 (`hidden_files_and_folders_packages_and_system_folders_are_skipped`, `a_dropped_package_is_not_opened`, `symlinked_folders_are_not_followed`, `ferrys_own_folders_are_excluded`) and Task 11 check 4.
 3. **A deadlock between the job hook and the batch dispatcher.** `jobs::start` → `show` → `claim` takes the batch lock, so the dispatcher must have released it. Expected: a 1 000-file batch never freezes the app, and Cancel all during dispatch never hangs. Pinned in Task 4 (`pump_releases_the_lock_before_running_work`), plus the Global Constraints lock rule, which the reviewer checks in `drop_batch/batch.rs`.
-4. **The compact list moving under the pointer.** New cards arrive, cards auto-hide, or the count crosses the threshold while the user is selecting or pointing. Expected: no row moves or disappears, and the layout does not flip until the pointer leaves and the selection is empty. Pinned in Task 9 (vitest `nextListMode` "holds the current layout while held", `rowsHeld`) and Task 11 check 9.
+4. **The compact list moving under the pointer.** New cards arrive, cards auto-hide, or the count crosses the threshold while the user is selecting or pointing. Expected: no row moves or disappears, and the layout does not flip until the pointer leaves, the selection is empty and the list no longer has the keyboard. Pinned in Task 9 (vitest `nextListMode` "holds the current layout while held", `rowsHeld`) and Task 11 check 9.
 5. **The same file twice.** A file dropped twice, a folder and a file inside it in one drop, a file added again to a running batch, or a path through a symlink. Expected: one row and one job, never two writers on one file. Pinned in Task 2 (`the_same_file_twice_is_one_candidate`) and Task 4 (`a_path_already_in_the_batch_is_not_added_twice`). `jobs::start`'s existing `output_busy` check remains the last guard.
+6. **Keys taken from another app.** With the pointer resting on the compact list but no click, ⌘/Ctrl+A, Esc and the arrows must reach the frontmost app. After a click they act on the list until the keyboard is handed back. Expected: `src-tauri/src/drop_batch/list.rs` registers no global shortcut; the list's key handler runs only while `listFocused` is true; a click in another app, Esc with nothing selected, Copy, a preview or compare, and the end of list mode all hand the keyboard back. Pinned in Task 10 (vitest `listKey`, `escapeSel`) and Task 11 check 9.
+7. **Windows edge tab on by default.** On Windows the zone must appear only on a modifier tap unless the user picks "Whenever files are dragged". Expected: `DropZone::default().show_on` is `Modifier` off macOS, and `plan(PressMoved, …)` is `Nothing` under it. Pinned in Task 1 (`drop_zone_defaults_match_the_plan`) and Task 8 (`windows_shows_the_tab_only_when_auto_show_is_turned_on`).
 
 ---
 
@@ -106,7 +108,7 @@ Expected: the `grep` prints one line; every `test result` line says `ok`; vitest
 | `src/lib/i18n/en.json` | every `drop.*` key | one block right after the line `"error.busy": "{name} is already being optimised",`, in task order |
 | `src/lib/settings.ts`, `src/lib/settings.fixture.ts` | `drop_zone` and `results_list` | after the `hotkeys` member of the interface / the fixture object |
 | `src/lib/schema.ts` | `'drop'` pane id and pane; D's rows | `PaneId` union and `panes` array: appended after `floating`; rows: a `// Stream D` block at the end of `all` |
-| `src/stack/Stack.svelte` | list mode (Task 9), selection crop (Task 10) | inside the existing `{#each}` area: wrap it in `{#if listMode}<CompactList …/>{:else}…existing markup…{/if}`; new state and effects after the `frame` declaration |
+| `src/stack/Stack.svelte` | list mode (Task 9); selection crop and list focus (Task 10) | inside the existing `{#each}` area: wrap it in `{#if listMode}<CompactList …/>{:else}…existing markup…{/if}`; new state and effects after the `frame` declaration; list focus changes two existing lines only: `const on = tool !== null;` in the `stack_focus` effect becomes `const on = tool !== null \|\| listFocused;`, and `windowBlur` gains `listFocused = false;` as its first statement |
 | `src/stack/DragAllBar.svelte` | `fan`/`load` move to `src/lib/dragicon.ts` (Task 10) | delete the two local functions, import `fanIcon` |
 | `Cargo.lock` | none expected (features only) | — |
 
@@ -117,13 +119,14 @@ Not edited: `commands.rs`, `state.rs`, `menu.rs`, `Card.svelte`, `src/lib/ipc.ts
 - **A, B, E (new media):** to make drops, batches and folder scans accept a type, extend `ferry_core::intake::classify(head: &[u8]) -> Option<Classified>` (it reads the first `intake::HEAD_LEN` = 64 bytes) to return `MediaKind::Video | Audio | Pdf`, and make `pipeline::Job::file` accept the file. Nothing else in D changes; the zone's sub-label already pluralises every kind.
 - **F (preset zones, pipelines on drop):** every modifier tap during a drag, other than the zone modifier, is emitted app-wide as Tauri event `drag:tap` with payload `{ "modifier": "alt" | "shift" | "control" | "command" }`. `ferry_core::drag::DragWatch` and `drop_batch::zone::cursor_monitor` are `pub`. To run a pipeline on dropped files, F wraps `drop_batch::intake::accept(app, paths, keep)`. F adds the zone's hint row ("Tap Ctrl for presets") itself.
 - **I (auto-copy after drop):** `drop_batch::came_from_drop(app, &JobId) -> bool`.
+- **G (settings sync), for the integrator:** `drop_zone.show_on` and `drop_zone.ignored_apps` have per-OS defaults (Windows: modifier tap only; Windows exe names). If G syncs settings between computers, these two keys belong with the keys that sync only between same-OS computers, so a Mac never turns on the Windows edge tab.
 
 ## New settings keys
 
 | Key | Type | Default | Range / values |
 | --- | --- | --- | --- |
 | `drop_zone.enabled` | bool | `true` | |
-| `drop_zone.show_on` | enum | `"any_drag"` | `"any_drag"`, `"modifier"` |
+| `drop_zone.show_on` | enum | macOS: `"any_drag"`. Windows: `"modifier"` | `"any_drag"` (on Windows this is the opt-in edge tab), `"modifier"` (tap only) |
 | `drop_zone.position` | enum | `"near_results"` | `"near_results"`, `"under_cursor"` |
 | `drop_zone.modifier` | enum | `"alt"` | `"alt"`, `"shift"` (tap to show/hide) |
 | `drop_zone.keep_original_modifier` | enum | `"shift"` | `"shift"`, `"alt"`; never equal to `modifier` (sanitised to the other one) |
@@ -182,6 +185,7 @@ None is GPL/LGPL/AGPL or patent-encumbered.
   #[serde(default)] pub struct ResultsList { pub after_cards: u32, #[serde(flatten)] pub extra: Map<String, Value> }
   impl Settings { fn sanitise_drop(&mut self) }   // private, called from `sanitised`
   ```
+- Per-OS default: `show_on` is `ZoneShowOn::AnyDrag` on macOS and `ZoneShowOn::Modifier` everywhere else (Windows: modifier tap only, the edge tab is opt-in). Choose it with `cfg!(target_os = "macos")`, the same switch the `ignored_apps` default uses.
 - Produces (TS, `src/lib/settings.ts`): `drop_zone: { enabled: boolean; show_on: 'any_drag' | 'modifier'; position: 'near_results' | 'under_cursor'; modifier: 'alt' | 'shift'; keep_original_modifier: 'alt' | 'shift'; batch_threshold: number; ignored_apps: string[] }` and `results_list: { after_cards: number }`.
 
 - [ ] **Step 1: Write the failing Rust tests** (append to `mod tests` in `settings.rs`)
@@ -192,14 +196,17 @@ fn drop_zone_defaults_match_the_plan() {
     let s = Settings::default();
     let z = &s.drop_zone;
     assert!(z.enabled);
-    assert_eq!((z.show_on, z.position), (ZoneShowOn::AnyDrag, ZonePosition::NearResults));
+    // Windows shows the zone only on a modifier tap unless the user opts in to the edge tab.
+    let mac = cfg!(target_os = "macos");
+    let show_on = if mac { ZoneShowOn::AnyDrag } else { ZoneShowOn::Modifier };
+    assert_eq!((z.show_on, z.position), (show_on, ZonePosition::NearResults));
     assert_eq!((z.modifier, z.keep_original_modifier), (DragKey::Alt, DragKey::Shift));
     assert_eq!(z.batch_threshold, 20);
-    let figma = if cfg!(target_os = "macos") { "com.figma.Desktop" } else { "Figma.exe" };
+    let figma = if mac { "com.figma.Desktop" } else { "Figma.exe" };
     assert!(z.ignored_apps.iter().any(|a| a == figma));
     assert_eq!(s.results_list.after_cards, 5);
     let json = serde_json::to_value(z).unwrap();
-    assert_eq!(json["show_on"], "any_drag");
+    assert_eq!(json["show_on"], if mac { "any_drag" } else { "modifier" });
     assert_eq!(json["keep_original_modifier"], "shift");
 }
 
@@ -243,7 +250,7 @@ Expected: compile errors (`DropZone`, `ZoneShowOn` not found).
 
 - [ ] **Step 3: Implement the types in the Stream D block of `settings.rs`**
 
-Defaults as in "New settings keys" (ignored apps chosen with `cfg!(target_os = "macos")`). `sanitise_drop` clamps `batch_threshold` to 1..=10 000 and `after_cards` to 1..=50. When `keep_original_modifier == modifier`, it sets the keep modifier to the other `DragKey`. It trims `ignored_apps` and drops blanks, the same way `sanitised` treats `clipboard.ignored_apps`.
+Defaults as in "New settings keys" (`show_on` and the ignored apps chosen with `cfg!(target_os = "macos")`). `sanitise_drop` clamps `batch_threshold` to 1..=10 000 and `after_cards` to 1..=50. When `keep_original_modifier == modifier`, it sets the keep modifier to the other `DragKey`. It trims `ignored_apps` and drops blanks, the same way `sanitised` treats `clipboard.ignored_apps`.
 
 - [ ] **Step 4: Run the Rust tests**
 
@@ -274,7 +281,7 @@ Run: `pnpm test schema` → FAIL (`drop` pane missing; `pnpm check` also fails u
 
 - [ ] **Step 6: Implement the TS side**
 
-Settings interface and fixture members are as in Interfaces; the fixture uses the macOS defaults. `PaneId` gains `'drop'` and `panes` gains `{ id: 'drop', label: 'drop.pane' }`. The rows in the Stream D block, ids `drop_enabled`, `drop_show_on`, `drop_position`, `drop_modifier`, `drop_keep_modifier`, `drop_batch_threshold`, `drop_ignored_apps`, `list_after`, are:
+Settings interface and fixture members are as in Interfaces; the fixture uses the macOS defaults (`show_on: 'any_drag'`). The pane needs no per-OS code: it shows whatever value Rust loaded, which on a new Windows install is "Only when the modifier is tapped". `PaneId` gains `'drop'` and `panes` gains `{ id: 'drop', label: 'drop.pane' }`. The rows in the Stream D block, ids `drop_enabled`, `drop_show_on`, `drop_position`, `drop_modifier`, `drop_keep_modifier`, `drop_batch_threshold`, `drop_ignored_apps`, `list_after`, are:
   - `drop_enabled`: switch.
   - `drop_show_on`, `drop_position`, `drop_modifier`, `drop_keep_modifier`: `select`, with options from the keys below.
   - `drop_batch_threshold`: `number`, 1..10 000, unit `drop.unit.files`.
@@ -289,7 +296,7 @@ Settings interface and fixture members are as in Interfaces; the fixture uses th
 "drop.settings.enabled": "Drop zone",
 "drop.settings.enabled.help": "Optimise files you drop on a small panel near the results.",
 "drop.settings.show_on": "Show the zone",
-"drop.settings.show_on.help": "On Windows, dragging shows a slim tab at the screen edge; drag onto it to open the zone.",
+"drop.settings.show_on.help": "Windows can't tell a file drag from other mouse drags, so there the default is the modifier tap. Choosing \"Whenever files are dragged\" on Windows shows a slim tab at the screen edge after any mouse drag, including moving windows and selecting text; drag files onto the tab to open the zone.",
 "drop.settings.show_on.any_drag": "Whenever files are dragged",
 "drop.settings.show_on.modifier": "Only when the modifier is tapped",
 "drop.settings.position": "Position",
@@ -492,7 +499,7 @@ git commit -m "feat(core): classify, scan and route dropped files"
 
 Other rules:
 - `is_ignored_app`: any entry that is a case-insensitive prefix of `app`, with blank entries ignored.
-- `should_auto_show`: `zone.enabled && zone.show_on == AnyDrag && has_files && !all_own && !frontmost.is_some_and(|a| is_ignored_app(&zone.ignored_apps, a))`.
+- `should_auto_show`: `zone.enabled && zone.show_on == AnyDrag && has_files && !all_own && !frontmost.is_some_and(|a| is_ignored_app(&zone.ignored_apps, a))`. It is the only gate for both the macOS auto-show and the Windows edge tab, so the Windows default (`show_on == Modifier`) turns the tab off with no other check.
 - Placement is in physical pixels, with `right = area.x + area.width` and `bottom = area.y + area.height`:
   - `zone_near_results`:
     - With no stack, it is `place(area, zone, corner, margin)`.
@@ -528,7 +535,9 @@ Other rules:
 // ["com.adobe.PremierePro"] matches "com.adobe.premierepro.24"; ["Figma.exe"] matches "figma.exe";
 // [""] matches nothing; ["com.figma"] does not match "org.figma"
 #[test] fn the_zone_auto_shows_only_for_other_apps_file_drags()
-// defaults: (has_files, !own, Some("com.apple.finder")) → true; no files → false; all own → false;
+// zone = DropZone { show_on: AnyDrag, ignored_apps: vec!["com.figma.Desktop".into()], ..DropZone::default() }
+// (built explicitly: the defaults differ by OS and CI runs the tests on Windows too):
+// (has_files, !own, Some("com.apple.finder")) → true; no files → false; all own → false;
 // frontmost "com.figma.Desktop" → false; show_on Modifier → false; enabled false → false
 #[test] fn the_zone_sits_above_a_bottom_right_stack()
 // area {0,0,1440,900}, zone (244,164), stack Some((324,400)), margin 16, gap 8 → (1180, 312)
@@ -1228,7 +1237,7 @@ git commit -m "feat(app): drop zone window that optimises or batches what is dro
 - Modify: `src-tauri/src/platform/macos_drop.rs`, `src-tauri/src/platform/windows_drop.rs`, `src-tauri/src/drop_batch/{mod.rs,zone.rs}`, `src-tauri/Cargo.toml`
 
 **Interfaces:**
-- Consumes: `drag::{DragWatch, Sample, Signal, Modifier, Mods, should_auto_show}`, `intake::all_own`, `zone::{show, hide, visible}`.
+- Consumes: `drag::{DragWatch, Sample, Signal, Modifier, Mods, should_auto_show}`, `intake::all_own`, `zone::{show, hide, visible}`, `settings::{DropZone, ZoneShowOn}`.
 - Produces (platform, both OSes):
   ```rust
   pub fn sample(at_ms: u64) -> ferry_core::drag::Sample;
@@ -1259,11 +1268,13 @@ git commit -m "feat(app): drop zone window that optimises or batches what is dro
 
 `plan` rules:
 - `DragStarted` → `Show { Zone, under_cursor: false }` if `should_auto_show(zone, !files.is_empty(), all_own, frontmost)`.
-- `PressMoved` → `Show { Tab, false }` if `windows && should_auto_show(zone, true, false, frontmost)`.
+- `PressMoved` → `Show { Tab, false }` if `windows && should_auto_show(zone, true, false, frontmost)`. With the Windows default (`show_on == Modifier`) this is always `Nothing`: the edge tab appears only after the user picks "Whenever files are dragged".
 - `Tap(m)` where `m == zone.modifier.into() && zone.enabled` → `Hide` if visible, else `Show { Zone, under_cursor: true }`.
 - Any other `Tap(m)` → `EmitTap(m)`.
 - `DragEnded` → `HideAfterGrace` if visible.
 - Otherwise `Nothing`.
+
+So on Windows with the defaults, the only way the watcher shows the zone is a tap of the zone modifier (Alt) while the button is held. The watcher still samples on Windows in both modes, because taps need the samples.
 
 The loop:
 - `sample(ms)` → `watch.feed`.
@@ -1280,17 +1291,20 @@ Zone additions:
 
 - [ ] **Step 1: Write the failing tests** (in `watch.rs`)
 
+Every test builds its `Context` from an explicit zone, never from bare `DropZone::default()`, because the defaults differ by OS and CI runs `cargo test -p ferry` on Windows: `fn any_drag() -> DropZone { DropZone { show_on: ZoneShowOn::AnyDrag, ignored_apps: vec!["com.figma.Desktop".into()], ..DropZone::default() } }` and `fn tap_only() -> DropZone { DropZone { show_on: ZoneShowOn::Modifier, ..any_drag() } }`.
+
 ```rust
 #[test] fn a_file_drag_from_another_app_shows_the_zone_near_the_results()
-// DragStarted, files [/a.png], !own, frontmost Some("com.apple.finder") → Show { Zone, under_cursor: false }
+// any_drag(): DragStarted, files [/a.png], !own, frontmost Some("com.apple.finder") → Show { Zone, under_cursor: false }
 #[test] fn ferrys_own_drag_and_ignored_apps_show_nothing()
-// all_own → Nothing; frontmost "com.figma.Desktop" → Nothing; files empty → Nothing
+// any_drag(): all_own → Nothing; frontmost "com.figma.Desktop" → Nothing; files empty → Nothing
 #[test] fn the_zone_modifier_tap_toggles_the_zone_under_the_cursor()
-// Tap(Alt), not visible → Show { Zone, true }; visible → Hide; enabled false → Nothing
+// any_drag() and tap_only() alike: Tap(Alt), not visible → Show { Zone, true }; visible → Hide; enabled false → Nothing
 #[test] fn other_taps_go_to_preset_zones()
 // Tap(Control) → EmitTap(Control)
-#[test] fn windows_shows_the_tab_on_a_moving_press()
-// PressMoved, windows true → Show { Tab, false }; windows false → Nothing
+#[test] fn windows_shows_the_tab_only_when_auto_show_is_turned_on()
+// any_drag(), PressMoved, windows true → Show { Tab, false }; windows false → Nothing;
+// tap_only() (the Windows default), PressMoved, windows true → Nothing, and DragStarted with files → Nothing
 #[test] fn the_drag_ending_hides_the_zone_after_a_grace()
 #[cfg(target_os = "macos")] #[test] fn sampling_works_off_the_main_thread()
 // std::thread::spawn(|| (platform::drop::sample(0), platform::drop::drag_files())).join().is_ok()
@@ -1310,11 +1324,12 @@ Expected: PASS. The Windows file is compiled only in CI: push the branch only wi
 `pnpm tauri dev`, then check each of these:
 - Start dragging a PNG in Finder: the zone appears near the results corner within about 0.2 s, showing "1 image".
 - Release elsewhere: it hides.
-- With `drop_zone.show_on` = "Only when the modifier is tapped": a drag shows nothing; tapping Option during the drag shows it centred under the pointer; tapping again hides it.
+- With `drop_zone.show_on` = "Only when the modifier is tapped" (the Windows default; macOS defaults to "Whenever files are dragged"): a drag shows nothing; tapping Option during the drag shows it centred under the pointer; tapping again hides it.
 - Hold Shift over the zone: "Originals will be kept"; drop: `shot_optimised.png` appears next to `shot.png`, and `shasum shot.png` is unchanged.
 - Drag a result card out of the stack: no zone.
 - Add `com.apple.finder` to "Don't show for drags from": a Finder drag shows no zone, and an Option tap still does.
 - Activity Monitor: Ferry stays under 1 % CPU while idle for a minute.
+- Windows (cannot be checked on the Mac; record as not verified): a fresh install shows "Only when the modifier is tapped" in the Drop zone pane; a drag shows nothing until Alt is tapped; picking "Whenever files are dragged" turns on the edge tab.
 
 - [ ] **Step 5: Commit**
 
@@ -1356,13 +1371,13 @@ Stack changes (inside the existing markup, nothing reordered):
 - An `$effect` sets `listMode = nextListMode(cards.length, listAfter, listMode, held || overList || tool !== null)`.
 - In list mode, the `{#each}` block and the two `DragAllBar`s are replaced by one `.row` holding `<CompactList …/>` and the open popover (crop or fit for `tool.id`, the same components and `apply`).
 - `track()` sets `overList = el?.closest('[data-list]') != null` next to `overBar`, and `leave()` clears it; `CompactList`'s root carries `data-list`. This covers both macOS pointer forwarding and Windows native events.
-- `hoverTarget(listMode ? (overList ? cursor ?? hovered : null) : hovered, …)`, where `cursor` is bound from CompactList. Pointing at a row makes it the cursor; Task 10's keys move it. The hover keys are dropped as soon as the pointer leaves the list.
+- Hover hotkeys on rows need no change: the existing `hoverTarget(hovered, …)` call stays as it is. Each row carries `data-card-id`, so `track()` already reports the row under the pointer as `hovered`, and Space, ⌘/Ctrl+D, `-` and `1`–`9` act on it exactly as on a card, under `floating.hover_hotkeys`. The keyboard cursor of Task 10 is separate: it never follows the pointer.
 
 `CompactList.svelte`:
 - Width 320.
 - Header: `headerText(listTotals(cards))` over the existing `DragAllBar` (Drag all + Clear all).
 - Body: rows in `role="listbox"` with `aria-multiselectable="true"` and `aria-label` `drop.list.aria`, scrolling with `max-height: LIST_ROW * LIST_ROWS_MAX`, windowed by `visibleRange` once there are more than 50 cards.
-- Props: `cards`, `hovered`, `held`, `overList`, `bind:cursor`, plus the Card callbacks (`onclose`, `ondrag`, `ontool`). Selection state lives here (Task 10 adds the bar).
+- Props: `cards`, `hovered`, `held`, `overList`, plus the Card callbacks (`onclose`, `ondrag`, `ontool`). Selection state lives here (Task 10 adds the bar and the keyboard).
 
 `ListRow.svelte`:
 - A 44 px `role="option"` with `aria-selected`, `data-card-id`. It contains a 32 × 32 thumbnail (`convertFileSrc(card.thumb_path)`, a placeholder without one), the file name (ellipsis), the extension chip, `formatBytes(before) → formatBytes(after)` with a savings pill (green / amber "Already optimal" / "Original kept" / red error, each with an icon and words), and a status icon.
@@ -1446,25 +1461,37 @@ git commit -m "feat(ui): compact results list above five cards"
   export function prune(sel: Sel, cards: JobUpdate[]): Sel;
   export interface Targets { files: string[]; fileIds: string[]; edit: string[]; cantEdit: number }
   export function targets(cards: JobUpdate[], ids: string[]): Targets;
+  export interface KeyPress { key: string; shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean }   // a KeyboardEvent fits
+  export type ListKey =
+    | { kind: 'select_all' }
+    | { kind: 'escape' }
+    | { kind: 'move'; delta: 1 | -1; extend: boolean }
+    | { kind: 'preview' }
+    | { kind: 'compare' }
+    | { kind: 'step_down' }
+    | { kind: 'scale'; percent: number };
+  export function listKey(e: KeyPress, mac: boolean): ListKey | null;
+  export function escapeSel(sel: Sel): { sel: Sel; release: boolean };
+  export function stepDown(scale: number | null): number | null;
   ```
   Rules:
   - `moveCursor`: with no cursor it starts at the last card (down) or the first (up); it clamps at the ends. With `extend`, the selection becomes the range between `anchor` (or the old cursor) and the new cursor, in card order.
   - `prune`: drops ids that are gone, and clears a cursor or anchor that is gone.
   - `targets`: `files`/`fileIds` are the selected cards that pass `canDrag`; `edit` is the selected cards with `can_edit`; `cantEdit` is the selected cards without it.
+  - `listKey`: the command key is `metaKey` on macOS and `ctrlKey` elsewhere. If `altKey` is down, or the other one of `metaKey`/`ctrlKey`, it returns `null`.
+    - With the command key and no Shift: `a`/`A` → `select_all`, `d`/`D` → `compare`.
+    - Without the command key: `Escape` → `escape`; `ArrowUp`/`ArrowDown` → `move` with `delta` −1/+1 and `extend = shiftKey`; and, without Shift, `' '` → `preview`, `-` → `step_down`, `1`–`9` → `scale` with `percent` 10–90.
+    - Every other key → `null`: the page leaves it alone (no `preventDefault`).
+  - `escapeSel`: with ids selected → `{ sel: clearSel(sel), release: false }`; with none → `{ sel, release: true }` (the list hands the keyboard back).
+  - `stepDown`: the same rule as `hover_keys::step_down` in Rust: `next = max(10, (scale ?? 100) - 10)`; `null` when `next === scale`.
 - Produces (`src/lib/dragicon.ts`): `export function fanIcon(paths: string[]): Promise<string>`, moved verbatim from `DragAllBar.svelte`'s `fan` + `load`; DragAllBar imports it.
 - Produces (Rust, `drop_batch/list.rs`):
   ```rust
-  pub const LIST_KEYS: [(&str, ListKey); 5] = [("CmdOrCtrl+A", SelectAll), ("ArrowUp", Up), ("ArrowDown", Down), ("Shift+ArrowUp", ExtendUp), ("Shift+ArrowDown", ExtendDown)];
-  pub const CLEAR_KEY: (&str, ListKey) = ("Escape", ListKey::Clear);
-  #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)] #[serde(rename_all = "snake_case")]
-  pub enum ListKey { SelectAll, Clear, Up, Down, ExtendUp, ExtendDown }
-  fn wanted(over: bool, selecting: bool, enabled: bool) -> Vec<&'static str>;   // pure
   #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum ListItem { Scale(u8), Quality(u8), Extreme, Convert(Format) }
   pub fn list_item_id(item: ListItem) -> String;          // "list:scale-50", "list:quality-60", "list:extreme", "list:convert-webp"
   pub fn parse_list_item(id: &str) -> Option<ListItem>;
   pub fn selection_formats(cards: &[JobUpdate]) -> Vec<(Format, bool)>;   // union of menu::convert_formats over editable cards; enabled when some editable card is not already that format
   pub fn patch_for(item: ListItem) -> Option<EditsPatch>;  // Scale → scale; Quality(q) → compression q + level Normal; Extreme → compression 5 + Aggressive; Convert → None (uses jobs::convert)
-  #[tauri::command] pub fn list_keys(app: AppHandle, over: bool, selecting: bool);     // sync: main thread
   #[tauri::command] pub fn list_menu(app: AppHandle, window: WebviewWindow, ids: Vec<JobId>, kind: String, x: f64, y: f64) -> Result<(), String>;  // kind: "downscale" | "compression" | "convert"
   #[tauri::command] pub async fn list_edit(app: AppHandle, ids: Vec<JobId>, edits: EditsPatch) -> Result<u32, String>;
   #[tauri::command] pub async fn list_copy(app: AppHandle, ids: Vec<JobId>) -> Result<(), String>;
@@ -1472,8 +1499,7 @@ git commit -m "feat(ui): compact results list above five cards"
   #[tauri::command] pub async fn list_save_to(app: AppHandle, ids: Vec<JobId>) -> Result<Option<SaveReport>, String>;   // None: dialog cancelled
   ```
   Behaviour:
-  - **`list_keys`:** mirrors `hover_keys::apply`. It registers the difference between `wanted(...)` and what it holds, and unregisters the rest. `enabled` = `floating.hover_hotkeys`. The handler emits `list:key` (`ListKey`) to the stack.
-  - **`wanted`:** `LIST_KEYS` when `over && enabled`, plus `CLEAR_KEY` when `over && selecting && enabled`.
+  - **No list keys in Rust.** `list.rs` registers no global shortcut and does not read `floating.hover_hotkeys`. The list's keys are DOM key events in the stack page (see "List keyboard" below).
   - **`list_menu`:**
     - It stores `ids` in a private `static LAST: Mutex<Vec<JobId>>` and builds a native menu:
       - `downscale`: 90 % … 10 % (`menu.percent`).
@@ -1493,7 +1519,7 @@ SelectionBar (replaces the header while `sel.ids.length > 0`; buttons carry `dat
 - **Save to…** (`sel-save`): `list_save_to`; the tooltip then reads `drop.list.saved` for 1.4 s.
 - **Crop** (`sel-crop`): opens `CropPopover` with the first `edit` card as `card`. Stack keeps `cropFor: string[] | null`, and its `apply` sends `list_edit({ ids: cropFor, edits })` instead of `card_edit`.
 - **Downscale ▸ / Compression ▸ / Convert ▸** (`sel-downscale`, `sel-compression`, `sel-convert`): `list_menu` at the button's bottom-left.
-- **Copy** (`sel-copy`): `list_copy`, then `drop.list.copied`.
+- **Copy** (`sel-copy`): `list_copy`, then `drop.list.copied`; it also sets `focused = false` (Stack's `listFocused`, through the binding), so the user's next ⌘/Ctrl+V lands in the app they were in.
 - **Remove** (`sel-remove`): closes each selected card (`card_cancel` first for busy ones).
 - **Select all / Clear** (`sel-all` / `sel-clear`).
 - The edit buttons are disabled when `targets.edit` is empty; with `cantEdit > 0` their tooltip adds `drop.list.cant_edit`.
@@ -1503,11 +1529,22 @@ Row selection:
 - While anything is selected, a click anywhere on a row toggles it and mousedown does not start a drag.
 - Shift-click extends from the anchor.
 
-`list:key` events: SelectAll → `selectAll`; Clear → `clearSel`; Up/Down/ExtendUp/ExtendDown → `moveCursor`. The cursor row gets a focus ring and is scrolled into view.
+List keyboard (user decision: keys act on the list only after a click on it, never on hover):
+- **State:** Stack owns `listFocused = $state(false)` and passes it to CompactList as `bind:focused`, together with a new `tool` prop (`OpenTool | null`).
+- **Taking the keyboard:** only these clicks set `listFocused = true`: a click on a row's checkbox, a click on a row while something is selected, and a click on the list body outside the rows. The clicked row (if any) becomes `sel.cursor`. A press on a row body with nothing selected still starts a drag (Task 9) and takes nothing; clicks on rail buttons, the header and the selection bar take nothing either.
+- **How:** Stack's existing `stack_focus` effect changes `const on = tool !== null;` to `const on = tool !== null || listFocused;`. That is the command rename and crop already use: `windows::stack_focus` → `platform::set_stack_key` makes the stack the key window without activating Ferry (Windows: drops `WS_EX_NOACTIVATE` and brings it to the foreground), remembers the app that had the keyboard, and gives the keyboard back to it when `on` turns false. It also calls `hover_keys::set_keyed`, which drops the global hover hotkeys while the stack has the keyboard. No Rust change is needed.
+- **Handing it back:** `listFocused = false` when the stack window blurs (`windowBlur` gains `listFocused = false;` as its first statement: the user clicked another app or window), on Esc with nothing selected, after Copy, before a preview or compare (below), and in a Stack `$effect` when `!listMode || cards.length === 0`.
+- **Keys:** CompactList has `<svelte:window onkeydown={…}>` that runs only while `focused && tool === null` and the event target is not an `input`, `textarea` or `select` (the rename field keeps its own Enter/Esc). It calls `listKey(event, isMac)` (`isMac` from `src/lib/ipc.ts`); on a non-null result it calls `event.preventDefault()` and then:
+  - `select_all` → `selectAll`; `escape` → `escapeSel`, and on `release` sets `focused = false`; `move` → `moveCursor`.
+  - `preview` / `compare` → for the cursor row, if it passes `canDrag`: first hand the keyboard back (`focused = false`, then `flushSync()` from `svelte` so the `stack_focus(false)` effect is sent first), then `invoke('quick_preview' | 'open_compare', { id })`. Quick Look and the compare window take the keyboard themselves, as they do from a hover key; releasing first stops the stack's blur from handing the keyboard to the other app while they open.
+  - `scale` / `step_down` → `invoke('card_edit', { id, edits: { scale } })` for the cursor row if it has `can_edit` and is not busy; `step_down` takes `scale = stepDown(card.edits.scale)` and does nothing on `null`.
+  - With no cursor row, the card keys do nothing.
+  - These are the hover hotkeys' keys. The list handles them itself because the global hover hotkeys are dropped while the stack has the keyboard. None of them depends on `floating.hover_hotkeys`, since nothing is taken from another app.
+- **While focused**, the cursor row gets a focus ring (only then) and is scrolled into view (`scrollIntoView({ block: 'nearest' })`), and rows are held like an open tool: Stack's list-mode effect passes `held || overList || tool !== null || listFocused`, and CompactList passes `tool !== null || focused` as `rowsHeld`'s `tool` flag.
+- **Without a click** nothing changes from Task 9: the row under the pointer takes Cycle 2's hover hotkeys, under the setting, and ⌘/Ctrl+A, Esc and the arrows stay with the frontmost app.
+- The listbox carries `aria-activedescendant` = the cursor row's element id while focused.
 
 Prune effect: `sel = prune(sel, cards)` on every change to `cards`.
-
-The keys effect sends `list_keys({ over: overList && tool === null && cards.length > 0, selecting: sel.ids.length > 0 })` when either value changes, and `list_keys(false, false)` on unmount and when the list mode ends.
 
 i18n keys:
 
@@ -1534,11 +1571,6 @@ i18n keys:
 
 ```rust
 // drop_batch/list.rs
-#[test] fn every_list_key_parses_as_a_shortcut()
-// for (a, _) in LIST_KEYS.iter().chain([&CLEAR_KEY]) { a.parse::<tauri_plugin_global_shortcut::Shortcut>().unwrap(); }
-#[test] fn list_keys_follow_the_pointer_the_selection_and_the_setting()
-// wanted(false, true, true) empty; wanted(true, false, true).len() == 5 && !contains("Escape");
-// wanted(true, true, true) contains "Escape"; wanted(true, true, false) empty
 #[test] fn every_list_menu_id_reads_back()
 // Scale(50), Quality(60), Extreme, Convert(Format::WebP) round-trip; parse_list_item("card:x:open") == None
 #[test] fn selection_formats_offer_what_some_editable_card_can_take()
@@ -1554,11 +1586,32 @@ it('toggles, selects all and clears but keeps the cursor');
 it('moves the cursor and extends from the anchor in card order', /* cards a b c d; toggle b; extend down twice → ids [b, c, d] */);
 it('forgets cards that are gone');
 it('splits a selection into what can be dragged and what can be edited', /* a busy card and a can_edit:false card → files excludes busy, cantEdit 1 */);
+it('reads list keys with the platform command key and leaves every other key alone', () => {
+  const k = (key: string, mods: Partial<KeyPress> = {}): KeyPress =>
+    ({ key, shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, ...mods });
+  expect(listKey(k('a', { metaKey: true }), true)).toEqual({ kind: 'select_all' });
+  expect(listKey(k('a', { ctrlKey: true }), true)).toBeNull();
+  expect(listKey(k('a', { ctrlKey: true }), false)).toEqual({ kind: 'select_all' });
+  expect(listKey(k('d', { metaKey: true }), true)).toEqual({ kind: 'compare' });
+  expect(listKey(k('Escape'), true)).toEqual({ kind: 'escape' });
+  expect(listKey(k('ArrowDown'), true)).toEqual({ kind: 'move', delta: 1, extend: false });
+  expect(listKey(k('ArrowUp', { shiftKey: true }), false)).toEqual({ kind: 'move', delta: -1, extend: true });
+  expect(listKey(k(' '), true)).toEqual({ kind: 'preview' });
+  expect(listKey(k('-'), true)).toEqual({ kind: 'step_down' });
+  expect(listKey(k('5'), true)).toEqual({ kind: 'scale', percent: 50 });
+  for (const other of [k('0'), k('Enter'), k('a'), k('ArrowDown', { altKey: true }), k(' ', { shiftKey: true })]) {
+    expect(listKey(other, true)).toBeNull();
+  }
+});
+it('clears the selection on Esc and hands the keyboard back when nothing is selected', /* 2 selected → release false, ids []; none → release true */);
+it('steps down like the hover key', () => {
+  expect([stepDown(null), stepDown(50), stepDown(15), stepDown(10)]).toEqual([90, 40, 10, null]);
+});
 ```
 
 Run: `cargo test -p ferry list` and `pnpm test selection` → FAIL.
 
-- [ ] **Step 2: Implement it all**, then register `list_keys`, `list_menu`, `list_edit`, `list_copy`, `list_save_to` in `lib.rs`.
+- [ ] **Step 2: Implement it all**, then register `list_menu`, `list_edit`, `list_copy`, `list_save_to` in `lib.rs` (there is no `list_keys` command).
 
 - [ ] **Step 3: Run the checks**
 
@@ -1567,12 +1620,16 @@ Expected: pass.
 
 - [ ] **Step 4: Manual check (ask the user first)**
 
-With 8 rows in the list and TextEdit frontmost, check each of these:
-- Click a row's checkbox: the selection bar appears with "1 selected".
+With 8 rows in the list and TextEdit frontmost (with some text in it), check each of these:
+- Rest the pointer on the list without clicking and press ⌘A, then ↓ and Esc: TextEdit selects all its text and moves its caret; the list selects nothing and shows no ring.
+- Click a row's checkbox: the selection bar appears with "1 selected" and the row has the ring.
 - Click two more rows: "3 selected".
-- Pointer on the list, ⌘A: all selected. Esc: cleared.
-- ↓ ↓ moves the ring, Space previews the ring row, ⇧↓ extends.
-- Move the pointer off the list and type in TextEdit: arrows, ⌘A and Esc work there again.
+- ⌘A: all selected, even with the pointer off the list. Esc: cleared.
+- ↓ ↓ moves the ring, ⇧↓ extends, `5` downscales the ring row to 50 %.
+- Space previews the ring row: Quick Look opens and stays open with the keyboard (Space or Esc closes it). If it closes at once, that is a fix with a `Ruling:` line.
+- Esc with nothing selected: the ring goes, and typing lands in TextEdit without a click.
+- Click a checkbox again, then click into TextEdit and type: arrows, ⌘A and Esc work there again.
+- Turn Settings → Floating results → "Hover hotkeys" off: the list keys still work after a click (they do not depend on it), and nothing is taken on hover.
 - Downscale ▸ 50 %: every selected row re-runs.
 - Convert ▸ WebP: rows show "webp".
 - Copy, then paste in a Finder window: the files are pasted.
@@ -1607,10 +1664,10 @@ Prepare: `mkdir -p /tmp/ferry-sD/tree/sub /tmp/ferry-sD/tree/.git /tmp/ferry-sD/
 6. **No self-trigger:** dragging a card, "Drag all", a list selection or batch rows into Finder never shows the zone. Option-tap the zone during a card drag and drop it there: the notice "… is already a Ferry result — left alone" appears and the file is unchanged.
 7. **Ignored apps:** after adding `com.apple.finder` to "Don't show for drags from", Finder drags show no zone and Option taps still do.
 8. **Many files:** drag 25 PNGs → "25 files · opens Batch".
-9. **Compact list:** the Task 9 and Task 10 checks, plus: while 3 rows are selected, new clipboard cards arrive at the bottom and no row moves or fades.
+9. **Compact list:** the Task 9 and Task 10 checks, plus: while 3 rows are selected, new clipboard cards arrive at the bottom and no row moves or fades; and with the pointer resting on the list but no click, ⌘A, Esc and the arrows still reach TextEdit.
 10. **Screenshots:** with "Show app UI in screenshots" off, ⇧⌘5 hides the zone and the stack; the batch window is visible, like Settings.
 11. **Idle CPU:** under 1 % for 60 s with the app idle (Activity Monitor).
-12. **Windows:** record "built, compiled in CI, not verified on a real desktop: edge tab, Alt tap, keep modifier, batch window, list keys".
+12. **Windows:** record "built, compiled in CI, not verified on a real desktop: Alt tap (the default trigger), the opt-in edge tab ("Whenever files are dragged"), keep modifier, batch window, list focus and list keys".
 
 Commit only the ledger-driven fixes, if any.
 
@@ -1625,11 +1682,14 @@ Commit only the ledger-driven fixes, if any.
 - Pausing batches under low-power mode (R§3.2 NFR-R5, optional).
 - Ignoring false-positive drags by anything other than the frontmost app's id.
 
-## Open questions for the user
+## Questions decided by the user (2026-10-23)
 
-1. **Windows auto-show.** Without a drag-start signal, this plan shows a slim tab at the results edge after any left-button press that moves 24 px and lasts 300 ms; it will also flash during window moves and text selection. The alternative is "modifier tap only" on Windows by default. Which default do you want? (Unverifiable here either way.)
-2. **Keep-originals modifier.** The requirements don't name it. This plan uses Shift (Option/Alt is the zone tap). OK?
-3. **No separate backup phase in the batch.** Each original is backed up just before its own write, so the "Backing up 312 of 1,204" state never shows. OK?
-4. **Batch threshold** default 20 files (cards before the list stays 5 per R§4.4). OK?
-5. **List keys are global while the pointer rests on the list** (⌘A, Esc, ↑/↓, ⇧↑/⇧↓). Like Cycle 2's hover hotkeys, they are taken from the frontmost app during that time, under the same "hover hotkeys" setting. OK, or should they need a click on the list first?
-6. **Menu-bar icon drop target** (R§4.1) deferred. OK?
+These were open when the plan was written; the user accepted every recommendation. They are settled: do not reopen them, and record any forced deviation as a `Ruling:` line in the ledger.
+
+1. **Windows auto-show:** the default on Windows is "modifier tap only" (`drop_zone.show_on = "modifier"`); the edge tab after a moving press is an opt-in ("Whenever files are dragged"). macOS is unchanged (`"any_drag"`). Applied in Decisions, New settings keys, Tasks 1, 3, 8 and 11.
+2. **Keep-originals modifier:** Shift (Option/Alt is the zone tap). As planned.
+3. **No separate backup phase in the batch:** each original is backed up just before its own write, so "Backing up N of M" never shows. As planned.
+4. **Thresholds:** batch above 20 files; 5 cards before the compact list (R§4.4). As planned.
+5. **List keys need a click on the list first** (⌘/Ctrl+A, Esc, ↑/↓, ⇧↑/⇧↓): never taken from the frontmost app on hover, and independent of the "Hover hotkeys" setting. Applied in Decisions, Tasks 9, 10 and 11.
+6. **Menu-bar icon drop target** (R§4.1): deferred (Tauri's tray has no drop API). As planned.
+7. **Batch Adjust panel:** compression (or Extreme), downscale % and convert-to only, this cycle. As planned.
