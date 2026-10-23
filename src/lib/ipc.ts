@@ -8,6 +8,30 @@ export type JobState =
   | { kind: 'error'; reason: string }
   | { kind: 'restored' };
 
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp';
+
+/** Mirrors ferry_core::edit::Size (serde tag `kind`). */
+export type Size =
+  | { kind: 'exact'; width: number; height: number }
+  | { kind: 'width'; width: number }
+  | { kind: 'height'; height: number }
+  | { kind: 'long_edge'; edge: number };
+
+/** Mirrors ferry_core::edit::Edits: the recipe every run applies to the original. */
+export interface Edits {
+  aspect: [number, number] | null;
+  framing: 'centre' | 'smart';
+  size: Size | null;
+  scale: number | null;
+  format: Format | null;
+  compression: number | null;
+  fit_under: number | null;
+  level: 'normal' | 'aggressive';
+}
+
+/** What `card_edit` sends (ferry_core::edit::EditsPatch): an absent field is left alone, `null` clears it. */
+export type EditsPatch = Partial<Edits>;
+
 export interface JobUpdate {
   id: string;
   state: JobState;
@@ -21,15 +45,34 @@ export interface JobUpdate {
   can_restore: boolean;
   can_retry: boolean;
   output: string | null;
+  dims_before: [number, number] | null;
+  dims_after: [number, number] | null;
+  format: Format | null;
+  converted: boolean;
+  can_edit: boolean;
+  edits: Edits;
+  note: string | null;
+  source_format: Format | null;
+  edit_hint: string | null;
+}
+
+/** Rust → stack: a menu item or hover key that ends in the page (`menu.rs`, `hover_keys.rs`). */
+export interface CardAction {
+  id: string;
+  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close';
 }
 
 export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
 
-/** The floating-results settings the stack page needs (commands::stack_ready). */
+/** The settings the stack page needs (commands::stack_ready). */
 export interface StackConfig {
   corner: Corner;
   card_size: 'default' | 'compact';
   auto_hide_secs: number;
+  /** Where the Compression slider starts on a card without its own quality. */
+  compression: number;
+  crop_sizes: [number, number][];
+  hover_hotkeys: boolean;
 }
 
 export const isMac = navigator.userAgent.includes('Mac');

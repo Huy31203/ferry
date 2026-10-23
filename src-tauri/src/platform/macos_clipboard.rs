@@ -31,6 +31,7 @@ const CONCEALED_TYPES: [&str; 4] = [
 ];
 
 const FILE_URL: &str = "public.file-url";
+const TEXT: &str = "public.utf8-plain-text";
 const POLL: Duration = Duration::from_millis(250);
 
 fn uti(format: Format) -> &'static str {
@@ -145,6 +146,19 @@ fn write_files_to(pb: &NSPasteboard, paths: &[PathBuf]) -> Result<u64, String> {
     Ok(seq as u64)
 }
 
+/// Put plain text on the clipboard ("Copy path").
+pub fn write_text(text: &str) -> Result<u64, String> {
+    write_text_to(&NSPasteboard::generalPasteboard(), text)
+}
+
+fn write_text_to(pb: &NSPasteboard, text: &str) -> Result<u64, String> {
+    let seq = pb.clearContents();
+    if !pb.setString_forType(&NSString::from_str(text), &NSString::from_str(TEXT)) {
+        return Err("the clipboard refused the text".into());
+    }
+    Ok(seq as u64)
+}
+
 /// Send the change count on `tx` every time it changes. Stops when the receiver is gone.
 pub fn watch(tx: Sender<u64>) {
     thread::Builder::new()
@@ -233,6 +247,17 @@ mod tests {
         let snap = read_from(&pb.0);
         assert_eq!(snap.files, paths);
         assert_eq!(snap.image, None);
+    }
+
+    #[test]
+    fn text_round_trips_and_the_change_count_moves() {
+        let pb = Private::new();
+        let before = pb.0.changeCount() as u64;
+        let seq = write_text_to(&pb.0, "/Users/me/shot 1.png").unwrap();
+        assert!(seq > before);
+        let text = pb.0.stringForType(&NSString::from_str(TEXT)).unwrap();
+        assert_eq!(text.to_string(), "/Users/me/shot 1.png");
+        assert_eq!(read_from(&pb.0).image, None);
     }
 
     #[test]

@@ -2,7 +2,7 @@ import type { Settings } from './settings';
 
 /** The defaults of ferry_core::settings::Settings, for tests. */
 export const sample: Settings = {
-  version: 1,
+  version: 2,
   general: {
     launch_at_login: true,
     start_state: 'running',
@@ -28,6 +28,16 @@ export const sample: Settings = {
     preserve_dates: true,
     ignored_extensions: [],
     max_size_mb: 50,
+    output: {
+      optimised: { location: 'in_place', folder: '~/Pictures/Ferry', template: '%f_optimised.%e' },
+      converted: { location: 'in_place', folder: '~/Pictures/Ferry', template: '%f.%e' },
+    },
+    crop_sizes: [
+      [1200, 628],
+      [1080, 1080],
+      [1920, 1080],
+      [1280, 720],
+    ],
   },
   floating: {
     enabled: true,
@@ -35,6 +45,7 @@ export const sample: Settings = {
     card_size: 'default',
     auto_hide_secs: 6,
     follow_cursor: true,
+    hover_hotkeys: true,
   },
   backups: { retention_days: 7 },
   hotkeys: { optimise: 'Ctrl+Shift+C', aggressive: 'Ctrl+Shift+A', cycle_state: 'Ctrl+Shift+P' },
