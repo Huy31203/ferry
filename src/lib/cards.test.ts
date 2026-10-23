@@ -8,6 +8,7 @@ import {
   needsOriginal,
   openTool,
   railActions,
+  remove,
   upsert,
   type RailAction,
 } from './cards';
@@ -88,6 +89,12 @@ describe('the stack', () => {
       ['a', 'done'],
       ['b', 'queued'],
     ]);
+  });
+
+  it('drops the card the app closed and keeps the rest in order', () => {
+    const cards = [card({ kind: 'done' }, { id: '1' }), card({ kind: 'done' }, { id: '2' })];
+    expect(remove(cards, '1').map((c) => c.id)).toEqual(['2']);
+    expect(remove(cards, 'gone')).toEqual(cards);
   });
 
   it('drags every finished output and nothing else', () => {
