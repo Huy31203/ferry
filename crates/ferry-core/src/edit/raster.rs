@@ -144,7 +144,13 @@ fn first_gif_frame(bytes: &[u8]) -> Result<Raster, OptimiseError> {
     let (fw, fh) = (u32::from(frame.width), u32::from(frame.height));
     let cols = fw.min(width.saturating_sub(left));
     let mut rgba = vec![0; (width * height * 4) as usize];
-    for row in 0..fh.min(height.saturating_sub(top)) {
+    // A frame wholly outside the screen (cols == 0) draws nothing.
+    let rows = if cols == 0 {
+        0
+    } else {
+        fh.min(height.saturating_sub(top))
+    };
+    for row in 0..rows {
         let src = (row * fw * 4) as usize;
         let dst = (((top + row) * width + left) * 4) as usize;
         rgba[dst..dst + (cols * 4) as usize]
@@ -393,5 +399,28 @@ mod tests {
             encode(&r, Format::Gif, &OptimiseOptions::default()),
             Err(OptimiseError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn a_gif_frame_outside_its_screen_does_not_panic() {
+        let mut bytes = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut bytes, 10, 10, &[0, 0, 0, 255, 255, 255]).unwrap();
+            let frame = gif::Frame {
+                left: 20,
+                top: 9,
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Owned(vec![1]),
+                ..gif::Frame::default()
+            };
+            enc.write_frame(&frame).unwrap();
+        }
+        let r = decode(&bytes, Format::Gif).unwrap();
+        assert_eq!((r.width, r.height), (10, 10));
+        assert!(
+            r.rgba.iter().all(|&b| b == 0),
+            "nothing of the frame is on screen"
+        );
     }
 }
