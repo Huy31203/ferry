@@ -9,3 +9,4 @@ One section per stream, added as each plan lands. Answer before implementation s
 4. Cross-stream: C and D must call `jobs::start_auto_copied` instead of `jobs::start`; tell them or swap at merge.
 5. Accumulated collection lifetime unchanged: since launch or last Clear all; closing a card does not remove it.
 - Dropped minor: "Copy/Copy path on a twin before first run" is unreachable from the UI (`pipeline.rs:352`, `cards.ts:25`, `menu.rs:122-129`, `jobs.rs:227-230`); Task 3 adds an existence check anyway.
+- **Decided (user accepted recommendations):** 1 scale applies to the Exact size; 2 yes, paths instead of image; 3 as planned; 4 integrator swaps C/D's `jobs::start` calls to `jobs::start_auto_copied` when merging into `feat/c3-all` (I's function does not exist on `main`, so C/D cannot call it in their worktrees); 5 as planned.
