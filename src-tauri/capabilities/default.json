@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for Ferry's own windows; no remote content is ever loaded.",
-  "windows": ["stack", "settings"],
+  "windows": ["stack", "settings", "compare"],
   "permissions": ["core:default", "drag:default"]
 }

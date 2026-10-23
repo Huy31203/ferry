@@ -45,11 +45,21 @@ pub fn create_stack(app: &AppHandle) -> tauri::Result<()> {
     platform::make_non_activating(&window)
 }
 
-/// Hide the stack from screenshots and screen sharing, or show it (R§3.1).
+/// Whether the window labelled `label` follows "Show app UI in screenshots":
+/// the stack and the compare window do; Settings always shows.
+pub fn follows_screenshot_setting(label: &str) -> bool {
+    label == STACK || label == crate::compare::COMPARE
+}
+
+/// Hide Ferry's floating UI from screenshots and screen sharing, or show it
+/// (R§3.1): every open window that follows the setting, and Quick Look.
 pub fn set_content_protected(app: &AppHandle, protected: bool) {
-    if let Some(stack) = app.get_webview_window(STACK) {
-        let _ = stack.set_content_protected(protected);
+    for (label, window) in app.webview_windows() {
+        if follows_screenshot_setting(&label) {
+            let _ = window.set_content_protected(protected);
+        }
     }
+    platform::preview::set_protected(app, protected);
 }
 
 /// Fit the stack window to its content and pin it to the chosen corner of the
@@ -173,5 +183,17 @@ pub fn open_settings(app: &AppHandle) {
             let _ = window.set_focus();
         }
         Err(e) => eprintln!("ferry: could not open settings: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_stack_and_the_compare_window_follow_the_screenshot_setting() {
+        assert!(follows_screenshot_setting(STACK));
+        assert!(follows_screenshot_setting(crate::compare::COMPARE));
+        assert!(!follows_screenshot_setting(SETTINGS));
     }
 }

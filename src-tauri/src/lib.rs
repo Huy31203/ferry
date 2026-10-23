@@ -1,10 +1,12 @@
 mod clipboard;
 mod commands;
+mod compare;
 mod hotkeys;
 mod jobs;
 mod logging;
 mod platform;
 mod prefs;
+mod preview;
 mod state;
 mod tray;
 mod windows;
@@ -43,6 +45,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
+            compare::open_compare,
+            compare::compare_ready,
+            compare::compare_close,
+            preview::quick_preview,
             commands::stack_ready,
             commands::card_copy,
             commands::card_restore,

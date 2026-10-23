@@ -7,11 +7,17 @@ pub mod clipboard;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+#[path = "macos_preview.rs"]
+pub mod preview;
+#[cfg(target_os = "macos")]
 pub use macos::{accent_rgb, app_identifier, hide, make_non_activating, show_without_focus};
 
 #[cfg(windows)]
 #[path = "windows_clipboard.rs"]
 pub mod clipboard;
+#[cfg(windows)]
+#[path = "windows_preview.rs"]
+pub mod preview;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]

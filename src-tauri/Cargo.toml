@@ -33,6 +33,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSColor", "NSColorSpace"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString", "NSURL", "NSBundle"] }
+objc2-quick-look-ui = { version = "0.3.2", default-features = false, features = ["std", "QLPreviewPanel", "QLPreviewItem", "objc2-app-kit"] }
 tauri-nspanel = "2.1"
 
 [target.'cfg(windows)'.dependencies]
