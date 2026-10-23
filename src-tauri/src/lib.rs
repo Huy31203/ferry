@@ -1,5 +1,6 @@
 mod clipboard;
 mod commands;
+mod compare;
 mod hotkeys;
 mod jobs;
 mod logging;
@@ -43,6 +44,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
+            compare::open_compare,
+            compare::compare_ready,
+            compare::compare_close,
             commands::stack_ready,
             commands::card_copy,
             commands::card_restore,
