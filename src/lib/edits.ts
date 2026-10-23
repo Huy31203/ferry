@@ -1,5 +1,5 @@
 import { t } from './i18n';
-import type { Edits, EditsPatch } from './ipc';
+import type { Edits, EditsPatch, Format, JobUpdate } from './ipc';
 
 /** A Compression stop: an encoder quality 5–100, or Extreme (aggressive at quality 5). */
 export type Quality = number | 'extreme';
@@ -68,4 +68,38 @@ export function stopIndex<T extends number | string>(stops: T[], value: T): numb
   if (exact !== -1 || typeof value !== 'number') return Math.max(0, exact);
   const below = stops.findIndex((stop) => typeof stop === 'number' && stop <= value);
   return below === -1 ? stops.length - 1 : below;
+}
+
+/** A chip in the format bar (spec §5.4). */
+export interface FormatChoice {
+  format: Format;
+  /** The format's own name, as `ferry_core::sniff::Format::label` writes it. */
+  label: string;
+  current: boolean;
+  /** Converting a GIF keeps only its first frame. */
+  firstFrame: boolean;
+}
+
+const FORMAT_LABELS: Record<Format, string> = { png: 'PNG', jpeg: 'JPEG', gif: 'GIF', webp: 'WebP' };
+
+/** PNG · JPEG · WebP, with GIF first on a card that started as a GIF. */
+export function formatChoices(card: JobUpdate): FormatChoice[] {
+  const source = card.source_format ?? card.format;
+  const formats: Format[] = source === 'gif' ? ['gif', 'png', 'jpeg', 'webp'] : ['png', 'jpeg', 'webp'];
+  return formats.map((format) => ({
+    format,
+    label: FORMAT_LABELS[format],
+    current: card.format === format,
+    firstFrame: source === 'gif' && format !== 'gif',
+  }));
+}
+
+/** What a chip click asks `card_convert` for; null for a plain click on the current format. */
+export function convertRequest(
+  card: JobUpdate,
+  format: Format,
+  keepBoth: boolean,
+): { format: Format; keepBoth: boolean } | null {
+  if (card.format === format && !keepBoth) return null;
+  return { format, keepBoth };
 }
