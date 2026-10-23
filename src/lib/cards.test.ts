@@ -3,6 +3,7 @@ import {
   autoHides,
   canDrag,
   dragAllFiles,
+  hoverTarget,
   isBusy,
   needsOriginal,
   openTool,
@@ -114,5 +115,26 @@ describe('the open tool', () => {
     expect(openTool(tool, [card({ kind: 'queued' })])).toBeNull();
     expect(openTool(tool, [card({ kind: 'done' }, { output: null })])).toBeNull();
     expect(openTool(tool, [card({ kind: 'done' }, { id: 'b' })])).toBeNull();
+  });
+});
+
+describe('the hover hotkeys target', () => {
+  const cards = [card({ kind: 'done' })];
+
+  it('is the idle card under the pointer', () => {
+    expect(hoverTarget('a', cards, null, true)).toBe('a');
+    expect(hoverTarget(null, cards, null, true)).toBeNull();
+  });
+
+  it('is nothing while a tool has the keyboard or the setting is off', () => {
+    expect(hoverTarget('a', cards, { id: 'a', kind: 'rename' }, true)).toBeNull();
+    expect(hoverTarget('a', cards, { id: 'b', kind: 'crop' }, true)).toBeNull();
+    expect(hoverTarget('a', cards, null, false)).toBeNull();
+  });
+
+  it('is nothing once the card is gone, busy or has no file', () => {
+    expect(hoverTarget('a', [], null, true)).toBeNull();
+    expect(hoverTarget('a', [card({ kind: 'queued' })], null, true)).toBeNull();
+    expect(hoverTarget('a', [card({ kind: 'done' }, { output: null })], null, true)).toBeNull();
   });
 });

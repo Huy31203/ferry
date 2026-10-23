@@ -11,7 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::state::AppState;
-use crate::{jobs, logging, menu, platform, prefs};
+use crate::{hover_keys, jobs, logging, menu, platform, prefs};
 
 /// Run `work` on a blocking worker and return its result.
 async fn blocking<T: Send + 'static>(
@@ -107,6 +107,13 @@ pub fn card_menu(
     y: f64,
 ) -> Result<(), String> {
     menu::popup(&app, &window, &id, x, y)
+}
+
+/// The idle card under the pointer, or none: the hover hotkeys follow it.
+/// Sync, so it runs on the main thread, where shortcuts are registered.
+#[tauri::command]
+pub fn card_hover(app: AppHandle, id: Option<JobId>) {
+    hover_keys::set(&app, id);
 }
 
 #[tauri::command]

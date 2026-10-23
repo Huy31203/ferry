@@ -1,6 +1,7 @@
 mod clipboard;
 mod commands;
 mod hotkeys;
+mod hover_keys;
 mod jobs;
 mod logging;
 mod menu;
@@ -67,6 +68,7 @@ pub fn run() {
             windows::stack_focus,
             commands::crop_sizes_reset,
             commands::card_menu,
+            commands::card_hover,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
