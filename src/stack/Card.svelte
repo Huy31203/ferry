@@ -2,10 +2,24 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { fade } from 'svelte/transition';
-  import { autoHides, canDrag, isBusy, railActions, type Tool } from '../lib/cards';
+  import { autoHides, canDrag, isBusy, needsOriginal, railActions, type RailAction, type Tool } from '../lib/cards';
+  import {
+    QUALITY_STOPS,
+    SCALE_STOPS,
+    currentQuality,
+    nextQuality,
+    nextScale,
+    qualityLabel,
+    qualityPatch,
+    scaleLabel,
+    scalePatch,
+    sliderIndex,
+    stopIndex,
+  } from '../lib/edits';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
-  import { isMac, type JobUpdate } from '../lib/ipc';
+  import type { EditsPatch, JobUpdate } from '../lib/ipc';
+  import Slider from './Slider.svelte';
 
   let {
     card,
@@ -15,6 +29,7 @@
     held = false,
     hotAction = null,
     autoHideSecs,
+    compression,
     tool = null,
     onclose,
     ondrag,
@@ -29,6 +44,8 @@
     /** The `data-action` of the button the pointer is on, if it is on this card. */
     hotAction?: string | null;
     autoHideSecs: number;
+    /** The settings' compression quality: where the Compression slider starts on a card without its own. */
+    compression: number;
     /** This card's open tool, if any. */
     tool?: Tool | null;
     onclose: () => void;
@@ -48,7 +65,7 @@
   const busy = $derived(isBusy(card.state));
   const notice = $derived(card.name === '' && card.ext === '');
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
-  const rail = $derived(railActions(card));
+  const rail = $derived(railActions(card, compact));
   const canRename = $derived(canDrag(card));
   const stateLabel = $derived(t(`card.state.${card.state.kind}` as StringKey));
   const label = $derived(
@@ -113,20 +130,111 @@
     }
   }
 
+  /** The slider's track length in px; the thumbnail below the rail. */
+  const TRACK = 136;
+  /** Fallback switch (Task 11): false if drags never reach the panel; the buttons then only step. */
+  const PRESS_AND_DRAG = true;
+  type SliderKind = 'downscale' | 'compression';
+  let slide = $state<{
+    kind: SliderKind;
+    startY: number;
+    start: number;
+    index: number;
+    moved: boolean;
+    left: number;
+  } | null>(null);
+  const quality = $derived(currentQuality(card.edits, compression));
+  const slideLabel = $derived.by(() => {
+    if (!slide) return '';
+    return slide.kind === 'downscale'
+      ? scaleLabel(SCALE_STOPS[slide.index], card.dims_before, card.edits)
+      : qualityLabel(QUALITY_STOPS[slide.index]);
+  });
+
+  function edit(edits: EditsPatch) {
+    void act('card_edit', { edits });
+  }
+
+  function step(kind: SliderKind) {
+    edit(kind === 'downscale' ? scalePatch(nextScale(card.edits.scale)) : qualityPatch(nextQuality(quality)));
+  }
+
+  // Press and hold: a drag of a few px turns the press into a slider; a plain click is one step.
+  function press(kind: SliderKind, event: PointerEvent) {
+    if (!PRESS_AND_DRAG || event.button !== 0 || !card.can_edit) return;
+    const button = event.currentTarget as HTMLElement;
+    button.setPointerCapture(event.pointerId);
+    const box = cardEl?.getBoundingClientRect();
+    const rect = button.getBoundingClientRect();
+    const start =
+      kind === 'downscale' ? stopIndex(SCALE_STOPS, card.edits.scale ?? 100) : stopIndex(QUALITY_STOPS, quality);
+    slide = {
+      kind,
+      startY: event.clientY,
+      start,
+      index: start,
+      moved: false,
+      left: rect.left + rect.width / 2 - (box?.left ?? 0),
+    };
+  }
+
+  function slideMove(event: PointerEvent) {
+    if (!slide) return;
+    const dy = event.clientY - slide.startY;
+    if (!slide.moved && Math.abs(dy) < 4) return;
+    if (!slide.moved) ontool('slider');
+    const count = slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length;
+    slide = { ...slide, moved: true, index: sliderIndex(slide.start, dy, count, TRACK) };
+  }
+
+  // Release applies; releasing back at the start value changes nothing.
+  function release() {
+    const done = slide;
+    slide = null;
+    if (!done) return;
+    if (!done.moved) {
+      step(done.kind);
+      return;
+    }
+    ontool(null);
+    if (done.index === done.start) return;
+    edit(
+      done.kind === 'downscale'
+        ? scalePatch(SCALE_STOPS[done.index])
+        : qualityPatch(QUALITY_STOPS[done.index]),
+    );
+  }
+
+  function cancelSlide() {
+    if (slide?.moved) ontool(null);
+    slide = null;
+  }
+
+  // Enter or Space on a focused button: one step (a pointer press is handled by `release`).
+  function keyStep(kind: SliderKind, event: MouseEvent) {
+    if ((event.detail === 0 || !PRESS_AND_DRAG) && card.can_edit) step(kind);
+  }
+
+
   function tipText(action: string): string {
+    if (needsOriginal(action as RailAction) && !card.can_edit) return card.edit_hint ?? t('card.no_original');
     switch (action) {
+      case 'downscale':
+        return t('card.downscale');
+      case 'compression':
+        return t('card.compression');
+      case 'crop':
+        return t('card.crop');
+      case 'compare':
+        return t('card.compare');
       case 'rename':
         return t('card.rename');
       case 'copy':
         return copied === 'ok' ? t('card.copied') : copied === 'failed' ? t('card.copy_failed') : t('card.copy');
-      case 'reveal':
-        return t(isMac ? 'card.reveal.mac' : 'card.reveal.windows');
       case 'restore':
         return t('card.restore');
-      case 'aggressive':
-        return t('card.aggressive');
       case 'more':
-        return t('card.more');
+        return t('card.menu');
       case 'close':
         return t(busy ? 'card.cancel' : 'card.close');
       case 'retry':
@@ -161,6 +269,12 @@
     };
   });
 
+  // The ⋯ button opens the native menu just under itself (Task 8 builds it).
+  function openMenu(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    void act('card_menu', { x: rect.left, y: rect.bottom + 4 });
+  }
+
   function close() {
     if (busy) act('card_cancel');
     onclose();
@@ -191,6 +305,12 @@
       .finally(() => ondrag(false));
   }
 </script>
+
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === 'Escape' && slide) cancelSlide();
+  }}
+/>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <article
@@ -228,6 +348,53 @@
 
   {#if rail.length > 0}
     <div class="rail">
+      {#if rail.includes('downscale')}
+        <button
+          type="button"
+          data-action="downscale"
+          class:hot={hotAction === 'downscale'}
+          aria-label={tipText('downscale')}
+          disabled={!card.can_edit}
+          onpointerdown={(event) => press('downscale', event)}
+          onpointermove={slideMove}
+          onpointerup={release}
+          onpointercancel={cancelSlide}
+          onclick={(event) => keyStep('downscale', event)}
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="m14 10 7-7" /><path d="m3 21 7-7" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('compression')}
+        <button
+          type="button"
+          data-action="compression"
+          class:hot={hotAction === 'compression'}
+          aria-label={tipText('compression')}
+          disabled={!card.can_edit}
+          onpointerdown={(event) => press('compression', event)}
+          onpointermove={slideMove}
+          onpointerup={release}
+          onpointercancel={cancelSlide}
+          onclick={(event) => keyStep('compression', event)}
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('crop')}
+        <button type="button" data-action="crop" class:hot={hotAction === 'crop'} aria-label={tipText('crop')} disabled={!card.can_edit} onclick={() => ontool(tool === 'crop' ? null : 'crop')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14" /><path d="M18 22V8a2 2 0 0 0-2-2H2" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('restore')}
+        <button type="button" data-action="restore" class:hot={hotAction === 'restore'} aria-label={tipText('restore')} onclick={() => act('card_restore')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('compare')}
+        <button type="button" data-action="compare" class:hot={hotAction === 'compare'} aria-label={tipText('compare')} disabled={!card.can_edit} onclick={() => act('open_compare')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18" /></svg>
+        </button>
+      {/if}
       {#if rail.includes('copy')}
         <button
           type="button"
@@ -245,27 +412,21 @@
           {/if}
         </button>
       {/if}
-      {#if rail.includes('reveal')}
-        <button type="button" data-action="reveal" class:hot={hotAction === 'reveal'} aria-label={tipText('reveal')} onclick={() => act('card_reveal')}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
-        </button>
-      {/if}
-      {#if rail.includes('restore')}
-        <button type="button" data-action="restore" class:hot={hotAction === 'restore'} aria-label={tipText('restore')} onclick={() => act('card_restore')}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
-        </button>
-      {/if}
-      {#if rail.includes('aggressive')}
-        <button type="button" data-action="aggressive" class:hot={hotAction === 'aggressive'} aria-label={tipText('aggressive')} onclick={() => act('card_rerun', { aggressive: true })}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" /></svg>
-        </button>
-      {/if}
-      {#if !compact}
-        <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} disabled>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+      {#if rail.includes('more')}
+        <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} onclick={(event) => openMenu(event)}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
         </button>
       {/if}
     </div>
+  {/if}
+  {#if slide?.moved}
+    <Slider
+      index={slide.index}
+      count={slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length}
+      label={slideLabel}
+      left={slide.left}
+      track={TRACK}
+    />
   {/if}
 
   <button class="close" class:hot={hotAction === 'close'} type="button" data-action="close" aria-label={tipText('close')} onclick={close}>

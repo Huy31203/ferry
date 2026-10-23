@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { autoHides, canDrag, dragAllFiles, isBusy, openTool, railActions, upsert } from './cards';
+import {
+  autoHides,
+  canDrag,
+  dragAllFiles,
+  isBusy,
+  needsOriginal,
+  openTool,
+  railActions,
+  upsert,
+  type RailAction,
+} from './cards';
 import { card } from './card.fixture';
 
 describe('card states', () => {
@@ -20,24 +30,50 @@ describe('card states', () => {
 });
 
 describe('railActions', () => {
-  it('offers restore only on a restorable done card', () => {
+  it('lays out rail A, with restore only on a restorable done card', () => {
     expect(railActions(card({ kind: 'done' }, { can_restore: true }))).toEqual([
-      'copy',
-      'reveal',
+      'downscale',
+      'compression',
+      'crop',
       'restore',
-      'aggressive',
+      'compare',
+      'copy',
+      'more',
     ]);
-    expect(railActions(card({ kind: 'larger' }))).toEqual(['copy', 'reveal', 'aggressive']);
+    expect(railActions(card({ kind: 'larger' }))).toEqual([
+      'downscale',
+      'compression',
+      'crop',
+      'compare',
+      'copy',
+      'more',
+    ]);
   });
 
-  it('leaves aggressive off a restored card, which offers re-optimise instead', () => {
-    expect(railActions(card({ kind: 'restored' }))).toEqual(['copy', 'reveal']);
+  it('leaves Compression and Compare off a compact card', () => {
+    expect(railActions(card({ kind: 'done' }, { can_restore: true }), true)).toEqual([
+      'downscale',
+      'crop',
+      'restore',
+      'copy',
+      'more',
+    ]);
+  });
+
+  it('keeps the tools on a restored card, which offers re-optimise instead of restore', () => {
+    expect(railActions(card({ kind: 'restored' }, { can_restore: true }))).not.toContain('restore');
+    expect(railActions(card({ kind: 'restored' }))).toContain('downscale');
   });
 
   it('has no rail while busy, on errors, or without an output file', () => {
     expect(railActions(card({ kind: 'queued' }))).toEqual([]);
     expect(railActions(card({ kind: 'error', reason: 'x' }))).toEqual([]);
     expect(railActions(card({ kind: 'done' }, { output: null }))).toEqual([]);
+  });
+
+  it('turns off only the tools that need the original', () => {
+    expect(['downscale', 'compression', 'crop', 'compare'].every((a) => needsOriginal(a as RailAction))).toBe(true);
+    expect(['restore', 'copy', 'more'].some((a) => needsOriginal(a as RailAction))).toBe(false);
   });
 });
 

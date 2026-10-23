@@ -1,6 +1,14 @@
 import type { JobState, JobUpdate } from './ipc';
 
-export type RailAction = 'copy' | 'reveal' | 'restore' | 'aggressive';
+/** Rail A (spec §5.1). Show in folder, Aggressive, Rename, Preview and Fit live in the ⋯ menu. */
+export type RailAction =
+  | 'downscale'
+  | 'compression'
+  | 'crop'
+  | 'restore'
+  | 'compare'
+  | 'copy'
+  | 'more';
 
 /** Waiting for or running its encoder: no rail, and the close button cancels. */
 export function isBusy(state: JobState): boolean {
@@ -12,13 +20,21 @@ export function autoHides(state: JobState): boolean {
   return ['done', 'already_optimal', 'larger', 'restored'].includes(state.kind);
 }
 
-/** The rail's buttons for a card, in order (§7 card anatomy). */
-export function railActions(card: JobUpdate): RailAction[] {
+/** The rail's buttons for a finished card, in order; compact cards leave out Compression and Compare. */
+export function railActions(card: JobUpdate, compact = false): RailAction[] {
   if (!autoHides(card.state) || card.output === null) return [];
-  const actions: RailAction[] = ['copy', 'reveal'];
+  const actions: RailAction[] = ['downscale'];
+  if (!compact) actions.push('compression');
+  actions.push('crop');
   if (card.state.kind === 'done' && card.can_restore) actions.push('restore');
-  if (card.state.kind !== 'restored') actions.push('aggressive');
+  if (!compact) actions.push('compare');
+  actions.push('copy', 'more');
   return actions;
+}
+
+/** Rail buttons that work on the original, so `can_edit` turns them off. */
+export function needsOriginal(action: RailAction): boolean {
+  return ['downscale', 'compression', 'crop', 'compare'].includes(action);
 }
 
 /** Whether the card's file can be dragged out. */
