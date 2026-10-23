@@ -177,6 +177,7 @@
       compact={config.card_size === 'compact'}
       {railRight}
       autoHideSecs={config.auto_hide_secs}
+      compression={config.compression}
       tool={tool?.id === card.id ? tool.kind : null}
       onclose={() => close(card.id)}
       ondrag={dragState}
