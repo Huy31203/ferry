@@ -1,24 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { autoHides, canDrag, dragAllFiles, isBusy, railActions, upsert } from './cards';
-import type { JobState, JobUpdate } from './ipc';
-
-function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate {
-  return {
-    id: 'a',
-    state,
-    name: 'shot',
-    ext: 'png',
-    before: 2_000_000,
-    after: null,
-    detail: '',
-    thumb_path: '/b/shot.png',
-    source: 'clipboard',
-    can_restore: false,
-    can_retry: false,
-    output: '/w/shot.png',
-    ...extra,
-  };
-}
+import { card } from './card.fixture';
 
 describe('card states', () => {
   it('treats queued and optimising as busy', () => {

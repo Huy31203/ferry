@@ -4,11 +4,19 @@
   import { listen } from '@tauri-apps/api/event';
   import { draggable, upsert } from '../lib/cards';
   import type { JobUpdate, StackConfig } from '../lib/ipc';
+  import type { Settings } from '../lib/settings';
   import Card from './Card.svelte';
   import DragAllBar from './DragAllBar.svelte';
 
   let cards = $state<JobUpdate[]>([]);
-  let config = $state<StackConfig>({ corner: 'bottom_right', card_size: 'default', auto_hide_secs: 6 });
+  let config = $state<StackConfig>({
+    corner: 'bottom_right',
+    card_size: 'default',
+    auto_hide_secs: 6,
+    compression: 80,
+    crop_sizes: [],
+    hover_hotkeys: true,
+  });
   let hovered = $state<string | null>(null);
   /** The button the pointer is on: its card (null for the Drag all bar) and its `data-action`. */
   let hot = $state<{ card: string | null; action: string } | null>(null);
@@ -80,11 +88,15 @@
         pointAt(event.payload.x, event.payload.fromBottom),
       ),
       listen('stack:pointer-leave', leave),
-      listen<{ floating: StackConfig }>('settings:changed', (event) => {
+      listen<Settings>('settings:changed', (event) => {
+        const { floating, images } = event.payload;
         config = {
-          corner: event.payload.floating.corner,
-          card_size: event.payload.floating.card_size,
-          auto_hide_secs: event.payload.floating.auto_hide_secs,
+          corner: floating.corner,
+          card_size: floating.card_size,
+          auto_hide_secs: floating.auto_hide_secs,
+          compression: images.compression,
+          crop_sizes: images.crop_sizes,
+          hover_hotkeys: floating.hover_hotkeys,
         };
       }),
       listen('stack:clear', () => {
