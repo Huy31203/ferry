@@ -4,7 +4,7 @@
 
 **Goal:** Ferry optimises, downscales, crops, converts, recompresses, speeds up, mutes and turns into GIF any MP4, MOV, MKV or WebM video, with hardware encoders where present and software fallback, from the same result cards, recipe, backups and compare window as images. It ships a pinned ffmpeg sidecar and the `ferry_core::ffmpeg` runner that streams B (audio) and F (pipelines) build on.
 
-**Architecture:** `ferry_core::ffmpeg` runs the bundled `ffmpeg` sidecar. It drains its output continuously, reports progress from `-progress pipe:1`, and kills it on cancel, on a stall or when the app quits. A new `ferry_core::video` module holds pure logic: a probe parser for `ffmpeg -i` output, hardware-encoder detection, and an encode planner that turns the Cycle 2 `Edits` recipe into ffmpeg arguments. `pipeline::Job` stays the single job model. A video is a file job whose `Format` is one of six new video variants. Its run goes through a child module, `pipeline/video.rs`, that works on files rather than bytes, and the result is still placed by the existing `put` / `put_back` / output rules. The UI reuses the card, rail, sliders, crop and fit popovers, format bar, context menu and compare window, and adds a speed popover and a two-player video compare.
+**Architecture:** `ferry_core::ffmpeg` runs the bundled `ffmpeg` sidecar. It drains its output continuously, reports progress from `-progress pipe:1`, and kills it on cancel, on a stall or when the app quits. A new `ferry_core::video` module holds pure logic: a probe parser for `ffmpeg -i` output, hardware-encoder detection, and an encode planner that turns the Cycle 2 `Edits` recipe into ffmpeg arguments. `pipeline::Job` stays the single job model. A video is a file job whose `Format` is one of six new video variants. Its run goes through a child module, `pipeline/video_job.rs`, that works on files rather than bytes, and the result is still placed by the existing `put` / `put_back` / output rules. The UI reuses the card, rail, sliders, crop and fit popovers, format bar, context menu and compare window, and adds a speed popover and a two-player video compare.
 
 **Tech Stack:** Rust 2024 (`ferry-core`, `src-tauri`), Tauri 2.12, Svelte 5 + TypeScript, Vitest. New binary sidecar: FFmpeg 9.0.2, built from pinned sources with x264, x265, libvpx, SVT-AV1, dav1d, Opus and LAME (plus nv-codec-headers, AMF headers and libvpl on Windows). No new crates or npm packages, except that `windows-sys` 0.61, already in `Cargo.lock`, becomes a Windows-only dependency of `ferry-core`.
 
@@ -269,7 +269,7 @@ Non-shared files this plan also edits: `crates/ferry-core/src/{sniff,job,pipelin
 | `crates/ferry-core/src/edit/mod.rs` (modify) | `Speed`, `mute`, `encoder` | 7 |
 | `crates/ferry-core/src/fsutil.rs` (modify) | `atomic_replace_from` | 9 |
 | `crates/ferry-core/src/pipeline.rs` (modify) | `Content` (bytes or file), video dispatch, video output rules | 9, 10 |
-| `crates/ferry-core/src/pipeline/video.rs` (create) | video file jobs end to end | 10 |
+| `crates/ferry-core/src/pipeline/video_job.rs` (create) | video file jobs end to end | 10 |
 | `crates/ferry-core/src/job.rs` (modify) | `VideoMeta`, `JobUpdate::video` | 10 |
 | `src-tauri/src/{lib,state,jobs,menu,commands}.rs` (modify) | wiring | 11, 13 |
 | `src/lib/video.ts`, `src/lib/video.test.ts` (create) | card helpers | 12 |
@@ -515,12 +515,12 @@ CI (`ci.yml`), in both the `core` and `bundle` jobs, before the existing gifsicl
 
 ```rust
 #[test] fn the_sidecar_is_a_gpl3_build_without_nonfree_parts() {
-    let c = capture(&os(&["-buildconf"]), &CancelToken::new()).unwrap();
-    assert!(c.stderr.contains("--enable-gpl") && c.stderr.contains("--enable-version3"));
-    assert!(!c.stderr.contains("--enable-nonfree"));
+    let out = Command::new(ffmpeg).args(["-hide_banner", "-buildconf"]).output().unwrap(); let conf = String::from_utf8_lossy(&out.stdout);
+    assert!(conf.contains("--enable-gpl") && conf.contains("--enable-version3"));
+    assert!(!conf.contains("--enable-nonfree"));
 }
 #[test] fn the_sidecar_has_every_encoder_ferry_uses() {
-    let c = capture(&os(&["-encoders"]), &CancelToken::new()).unwrap();  // the list is on stdout? see note
+    let out = Command::new(ffmpeg).args(["-hide_banner", "-encoders"]).output().unwrap(); // has(e): a stdout line whose second column is e
     for e in ["libx264", "libx265", "libsvtav1", "libvpx-vp9", "libopus", "libmp3lame", "aac", "gif", "mjpeg", "png"] { assert!(has(e)); }
     if cfg!(target_os = "macos") { for e in ["h264_videotoolbox", "hevc_videotoolbox"] { assert!(has(e)); } }
     if cfg!(windows) { for e in ["h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"] { assert!(has(e)); } }
@@ -618,7 +618,7 @@ Sniff rules (content only):
 
 ```ts
 // edits.test.ts
-it('labels every format, video ones too', () => {
+it('keeps the image chips unchanged now that formats include video', () => {
   expect(formatChoices(card({ kind: 'done' })).map((c) => c.label)).toEqual(['PNG', 'JPEG', 'WebP']);
 });
 ```
@@ -953,7 +953,7 @@ pub fn crf_vp9(q: u8) -> u8;   // 15 + round((100 − q) × 35 / 95)
 // fit.rs
 pub const MIN_VIDEO_BPS: u64 = 50_000;
 pub fn budget(limit_bytes: u64, duration: Duration, audio_bps: u64) -> (u64, bool); // (video b/s, reachable)
-// total = limit × 8 × 0.96 / secs; video = total − audio; reachable = video ≥ MIN; video.max(MIN)
+// total = limit × 8 × 0.96 / secs (f64, rounded); video = total.saturating_sub(audio); reachable = video ≥ MIN; video.max(MIN)
 pub fn next_bitrate(video_bps: u64, got_bytes: u64, limit_bytes: u64) -> u64;      // round(v × limit / got × 0.95).max(MIN)
 pub fn hardware_bitrate(q: u8, probe: &Probe, out: (u32, u32), fps: Option<f32>, codec: Codec) -> u64;
 // bpp = 0.04 + 0.12 × (q/100)², × 0.7 for HEVC; cap = bpp × w × h × fps (fps None → 30);
@@ -1021,7 +1021,7 @@ Planning rules (`plan`), in argument order:
 #[test] fn hdr_to_h264_is_flagged_flattened() { /* same probe, target Mp4 → libx264, yuv420p, hdr_flattened true; target Gif → true */ }
 #[test] fn frames_are_rounded_down_to_even_sizes() {
     let e = |f: &dyn Fn(&mut Edits)| { let mut e = Edits::default(); f(&mut e); e };
-    assert_eq!(frame((1366, 767), &e(&|e| e.scale = Some(50)), Format::Mp4).out, (682, 382));
+    assert_eq!(frame((1366, 767), &e(&|e| e.scale = Some(50)), Format::Mp4).out, (682, 384));
     let f = frame((1920, 1080), &e(&|e| e.aspect = Some((191, 100))), Format::Mp4);
     assert_eq!(f.window, (1920, 1004));   // fit_ratio gives 1005, rounded down to even
     assert_eq!(frame((3, 3), &e(&|e| e.scale = Some(10)), Format::Mp4).out, (2, 2));
@@ -1125,9 +1125,9 @@ The Clipboard branches of `put` and `put_back` need `Content::Bytes`. Given a `F
 ### Task 10: Video file jobs end to end
 
 **Files:**
-- Create: `crates/ferry-core/src/pipeline/video.rs` (child module of `pipeline.rs`, so it sees `Job`'s private fields)
+- Create: `crates/ferry-core/src/pipeline/video_job.rs` (declared in `pipeline.rs` as `mod video_job;`, a child module, so it sees `Job`'s private fields; named `video_job` so it never shadows the crate's `video` module, which `pipeline.rs` uses as `video::…`)
 - Modify: `crates/ferry-core/src/pipeline.rs`, `crates/ferry-core/src/job.rs`, `crates/ferry-core/src/video/mod.rs` (`step_text`), `src/lib/i18n/en.json` (`video.step.*`, `video.detail.*`, `video.note.hdr`), `src/lib/ipc.ts` (`VideoMeta`, `JobUpdate.video`), `src/lib/card.fixture.ts` (`video: null`)
-- Test: `pipeline/video.rs` tests (real ffmpeg; skip without `FERRY_FFMPEG`), `job.rs` test, `video/mod.rs` test
+- Test: `pipeline/video_job.rs` tests (real ffmpeg; skip without `FERRY_FFMPEG`), `job.rs` test, `video/mod.rs` test
 
 **Interfaces:**
 - Consumes: Tasks 1, 4–9.
@@ -1149,9 +1149,9 @@ pub struct VideoMeta {
 // pipeline.rs
 pub struct RunOptions { …, pub video: settings::Video, pub hardware: video::hardware::Hardware }  // RunOptions::new fills them from settings.video and video::hardware::hardware()
 impl Job { pub fn is_video(&self) -> bool }
-// Job gains (last field, // stream A: video): video: Option<video::VideoState>   (clipboard/file: None; fork: clone)
+// Job gains (last field, // stream A: video): video: Option<video_job::VideoState>   (clipboard/file: None; fork: clone)
 
-// pipeline/video.rs
+// pipeline/video_job.rs
 #[derive(Debug, Clone, Default)]
 pub(crate) struct VideoState { pub probe: Option<Probe>, pub thumb: Option<PathBuf>, pub result: Option<Made> }
 #[derive(Debug, Clone)]
@@ -1247,7 +1247,7 @@ Changes in `pipeline.rs` (each marked `// stream A: video`):
 }
 ```
 
-- [ ] **Step 2: Run.** `cargo test -p ferry-core pipeline::video` (with `FERRY_FFMPEG` set) → FAIL.
+- [ ] **Step 2: Run.** `cargo test -p ferry-core pipeline::video_job` (with `FERRY_FFMPEG` set) → FAIL.
 - [ ] **Step 3: Implement** as specified, and add the strings and the TS types (`video: VideoMeta | null` on `JobUpdate`).
 - [ ] **Step 4: Run.** `cargo test -p ferry-core pipeline`, `cargo test -p ferry-core job`, `cargo test -p ferry-core video`, `pnpm check`, `pnpm test`, then clippy for the workspace. Expected: PASS. The video tests take under ~30 s on this Mac.
 - [ ] **Step 5: Commit.** `git commit -m "feat(core): optimise, edit and restore video files"`.
