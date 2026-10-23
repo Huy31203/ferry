@@ -445,10 +445,24 @@ fn run_options(app: &AppHandle, cancel: CancelToken) -> RunOptions {
 /// Move a file to the Trash / Recycle Bin. A failure leaves it where it is
 /// and is logged (spec §6).
 fn move_to_trash(path: &Path) -> std::io::Result<()> {
-    trash::delete(path).map_err(|e| {
+    trash_context().delete(path).map_err(|e| {
         warn!(path = %path.display(), "could not move to the Trash: {e}");
         std::io::Error::other(e.to_string())
     })
+}
+
+/// macOS: the system call rather than Finder, which would ask for Automation
+/// access and play the Trash sound. It loses Finder's "Put Back"; Restore uses
+/// Ferry's own backup instead.
+fn trash_context() -> trash::TrashContext {
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut context = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        context.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    context
 }
 
 fn entry_name(entry: &Entry) -> String {
