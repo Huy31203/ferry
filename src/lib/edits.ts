@@ -65,8 +65,8 @@ export function sliderIndex(start: number, dy: number, count: number, track: num
 /** The slider panel's top in the card, px; the rail above it ends at 42. */
 export const SLIDER_TOP = 46;
 
-/** The panel's height beyond its track, px: padding 6 + live line 14 + 8 for the knob's overhang above and below + padding 6. */
-export const SLIDER_CHROME = 42;
+/** The panel's height beyond its track, px: padding 10 + readout 14 + divider 6 + 1 + 9 above the track (the knob overhangs 8) + 9 below + padding 10. */
+export const SLIDER_CHROME = 59;
 
 /** Space kept between the panel and the card's bottom edge, px. */
 export const SLIDER_EDGE = 6;
@@ -79,14 +79,19 @@ export function sliderTrack(cardHeight: number): number {
 /** The least distance between two value labels, px. */
 export const LABEL_PITCH = 14;
 
-/** Which of `count` stops over a `track` px rail get a value label: all of them where they are far enough apart, else every Nth; always the first and the last. */
-export function labelledStops(count: number, track: number): number[] {
-  const last = count - 1;
-  if (last <= 0) return [0];
-  const every = Math.max(1, Math.ceil(LABEL_PITCH / (track / last)));
-  const shown: number[] = [];
-  for (let i = 0; i < last; i += every) if (last - i >= every || i === 0) shown.push(i);
-  return [...shown, last];
+/** Which stops over a `track` px rail get a value label: the first, the last and the multiples of 25. Where two are closer than LABEL_PITCH the round one nearest an end goes; the first and the last stay. */
+export function labelledStops(stops: Quality[], track: number): number[] {
+  const last = stops.length - 1;
+  const shown = stops.flatMap((stop, i) => (i === 0 || i === last || (typeof stop === 'number' && stop % 25 === 0) ? [i] : []));
+  const y = (i: number) => (i / Math.max(1, last)) * track;
+  for (;;) {
+    const n = shown.findIndex((i, k) => k > 0 && y(i) - y(shown[k - 1]) < LABEL_PITCH);
+    if (n === -1) return shown;
+    const [a, b] = [shown[n - 1], shown[n]];
+    const drop = a === 0 ? n : b === last ? n - 1 : Math.min(a, last - a) <= Math.min(b, last - b) ? n - 1 : n;
+    if (shown[drop] === 0 || shown[drop] === last) return shown;
+    shown.splice(drop, 1);
+  }
 }
 
 /** Where a stop list holds `value`; the nearest stop below it when it falls between stops. */

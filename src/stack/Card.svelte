@@ -17,6 +17,7 @@
     scalePatch,
     sliderIndex,
     sliderTrack,
+    labelledStops,
     stopIndex,
     type CropFrame,
   } from '../lib/edits';
@@ -173,6 +174,9 @@
       ? SCALE_STOPS.map((scale) => scaleLabel(scale, null, card.edits))
       : QUALITY_STOPS.map(qualityLabel),
   );
+
+  /** The stops that get a value label (round ones, spaced for the track). */
+  const slideLabelled = $derived(labelledStops(slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS, TRACK));
 
   function edit(edits: EditsPatch) {
     void act('card_edit', { edits });
@@ -476,6 +480,7 @@
       count={slide.kind === 'downscale' ? SCALE_STOPS.length : QUALITY_STOPS.length}
       label={slideLabel}
       stops={slideStops}
+      labelled={slideLabelled}
       left={slide.left}
       track={TRACK}
       width={compact ? 220 : 300}
