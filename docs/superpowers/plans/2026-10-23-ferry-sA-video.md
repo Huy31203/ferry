@@ -1380,15 +1380,15 @@ Changes in `pipeline.rs` (each marked `// stream A: video`):
 
 Rules:
 - **`jobs::spawn`:** before taking the CPU permit, if `relock(&entry.job).is_video()`, `acquire_owned` a `video_permits` permit and hold it for the run.
-- **`lib.rs` `video_startup(app)`:** spawns a thread named `ferry-video-probe` that logs `ffmpeg::locate()` (`info!` with the path, or `warn!` "ffmpeg missing"), then `let hw = probe_hardware(); info!(?hw, "video encoders")`. The `.run` closure gets the arm `tauri::RunEvent::Exit => ferry_core::ffmpeg::kill_all(),`.
+- **`lib.rs` `video_startup(app)`:** spawns a thread named `ferry-video-probe` that logs `ffmpeg::locate()` (`info!` with the path, or `warn!` "ffmpeg missing"), then `let hw = probe_hardware(); info!(?hw, "video encoders")`, and `warn!("no hardware HEVC encoder: HEVC is not offered")` when `hw.hevc` is `None` (the build has no x265). The `.run` closure gets the arm `tauri::RunEvent::Exit => ferry_core::ffmpeg::kill_all(),`.
 - **`menu.rs`:**
   - `fn format_key(f: Format) -> &'static str`: `video::format_id(f)` for video, `f.extension()` otherwise. `Action::key`/`parse` use it, so `Mp4` and `Hevc` get distinct ids.
-  - `convert_formats(card)`: for a card whose `source_format` is video, `[Mp4, Hevc, Av1, WebM, Gif]`.
+  - `convert_formats(card)`: for a card whose `source_format` is video, `[Mp4, Hevc, Av1, WebM, Gif]`, without `Hevc` unless `card.video.as_ref().is_some_and(|v| v.hevc_encoder)` (HEVC is hardware only; Decisions, "HEVC output").
   - `enabled`: `Speed | Mute` need `card.can_edit` and a video card.
   - `build`: for video cards, insert `item(Action::Speed, t("video.menu.speed"))` and `item(Action::Mute, t(if card.edits.mute { "video.menu.unmute" } else { "video.menu.mute" }))` right after Crop. Build the item list as a `Vec<&dyn IsMenuItem<Wry>>`.
   - `run`: `Mute` → `jobs::toggle_mute`.
 
-- [ ] **Step 1: Write the failing tests** (in `menu.rs`; `video_card()` is `done()` with `format`/`source_format` `Some(Format::Mp4)`):
+- [ ] **Step 1: Write the failing tests** (in `menu.rs`; `video_card()` is `done()` with `format`/`source_format` `Some(Format::Mp4)` and `video: Some(VideoMeta { hevc_encoder: true, … })`):
 
 ```rust
 #[test] fn video_formats_get_distinct_menu_ids() {
@@ -1402,6 +1402,10 @@ Rules:
     assert_eq!(convert_formats(&video_card()), [Format::Mp4, Format::Hevc, Format::Av1, Format::WebM, Format::Gif]);
     assert!(!enabled(&video_card(), Action::Convert(Format::Mp4)));
     assert!(enabled(&video_card(), Action::Convert(Format::Gif)));
+}
+#[test] fn without_a_hevc_encoder_hevc_is_not_offered() {
+    let mut c = video_card(); c.video.as_mut().unwrap().hevc_encoder = false;
+    assert_eq!(convert_formats(&c), [Format::Mp4, Format::Av1, Format::WebM, Format::Gif]);
 }
 #[test] fn speed_and_mute_are_for_video_cards_with_their_original() {
     assert!(enabled(&video_card(), Action::Speed) && enabled(&video_card(), Action::Mute));
