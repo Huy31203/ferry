@@ -1673,7 +1673,7 @@ git commit -m "feat(core): crop and downscale animated WebP; GIF converts to ani
     - no library, or it fails to load → `Unsupported(t("pdf.error.renderer"))`;
     - PDFium rejects the file → `Decode(t("pdf.error.read"))`;
     - a password-protected file → `Unsupported(t("pdf.error.encrypted"))`.
-  - `poster::png(bytes, Pdf, page, long_edge)` renders `page` at 72 dpi with `max_side = long_edge`.
+  - `poster::png(bytes, Pdf, page, long_edge)` calls `render_page(bytes, page, edit::MAX_DPI, long_edge)`, so the cap alone sets the size: the long side is exactly `long_edge`, and the short side is `round(short_pt × long_edge / long_pt)` (612×792 pt at 600 → 464×600). A PDF page has no pixel size of its own, so the never-upscale rule does not apply.
   - `testutil::pdfium() -> bool`: `init`s from `FERRY_PDFIUM`, else from `<CARGO_MANIFEST_DIR>/../../src-tauri/binaries/<Pdfium::pdfium_platform_library_name()>`; true when `render::available()`.
   - `testutil::blank_pdf(pages: &[(f32, f32)]) -> Vec<u8>`: lopdf, one page per `(width_pt, height_pt)`, each with a small filled rectangle content stream.
   - `src-tauri` `fn pdfium() -> Option<PathBuf>`:
@@ -1821,7 +1821,7 @@ The message also states that the Windows path and smoke-test line are CI-verifie
     - cancel checks follow `run_recipe`'s: return `None` before anything is written;
     - writing reuses `put` (single file) or `put_back`.
   - `Job::pdf_detail(&self) -> String`: `"3 pages · 150 dpi"`; `"1 page"` for one page; `" · cropped"` when `edits.aspect` is set or `edits.uncrop`; plus `card.detail.aggressive` when aggressive.
-  - `testutil::PdfPage { pub media: [f32; 4], pub crop: Option<[f32; 4]>, pub rotate: i64, pub images: Vec<PdfImage>, pub padding: usize }` (`padding`: bytes of uncompressed comment content, to make a bloated file).
+  - `testutil::PdfPage { pub media: [f32; 4], pub crop: Option<[f32; 4]>, pub rotate: i64, pub images: Vec<PdfImage>, pub padding: usize }` (`padding`: bytes of uncompressed comment content, to make a bloated file). `PdfPage`, `PdfImage` and `PdfExtras` derive `Clone, Default, Debug`, so tests can write `vec![PdfPage::default(); 3]`.
   - `testutil::PdfImage { pub px: (u32, u32), pub drawn: (f32, f32), pub kind: ImageKind }`, with `ImageKind::{DctRgb, DctGray, DctCmyk, FlateScreenshot, FlatePhoto, OneBit, Jpx}`.
   - `testutil::PdfExtras { pub signed: bool, pub pdfa1: bool, pub encrypt_dict: bool, pub shared_image: bool }` (`Default` everywhere, letter-size `media`).
 
@@ -1845,7 +1845,7 @@ fn signatures_encryption_and_pdfa_are_noticed() {
 
 #[test]
 fn a_bloated_pdf_shrinks_and_keeps_its_pages() {
-    let input = testutil::pdf(&[PdfPage { padding: 200_000, ..PdfPage::default() }; 3], &PdfExtras::default());
+    let input = testutil::pdf(&vec![PdfPage { padding: 200_000, ..PdfPage::default() }; 3], &PdfExtras::default());
     let out = optimise(&input, 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
     assert!(out.len() * 2 < input.len());
     assert_eq!(facts(&out).unwrap().pages, 3);
@@ -1879,7 +1879,7 @@ fn pdf_file(env: &Env, name: &str, pages: &[PdfPage], extras: &PdfExtras) -> (Pa
 #[test]
 fn a_bloated_pdf_is_optimised_in_place() {
     let env = Env::new();
-    let (path, input) = pdf_file(&env, "doc.pdf", &[PdfPage { padding: 200_000, ..PdfPage::default() }; 3], &PdfExtras::default());
+    let (path, input) = pdf_file(&env, "doc.pdf", &vec![PdfPage { padding: 200_000, ..PdfPage::default() }; 3], &PdfExtras::default());
     let mut job = Job::file(&path, &Settings::default(), true).unwrap();
     let card = run(&mut job, Level::Normal, &options(), &env).0.unwrap().update;
     assert_eq!((card.state, card.pages, card.dims_before), (JobState::Done, Some(3), Some((612, 792))));
@@ -2138,3 +2138,766 @@ Expected: PASS.
 git add crates/ferry-core Cargo.lock
 git commit -m "feat(core): downsample and recompress PDF images to a DPI"
 ```
+
+### Task 15: Crop PDF pages to a ratio or a device, and uncrop
+
+**Files:**
+- Create: `crates/ferry-core/src/pdf/crop.rs`; `pdf/mod.rs`:
+  - `mod crop;`;
+  - `facts` uses `crop::visible_box`;
+  - `apply` runs `crop::apply_crop` (after image recompression, before pruning) when `edits.aspect.is_some() || edits.uncrop`.
+- Create: `src-tauri/src/pdf_commands.rs` (`pdf_config`); `src-tauri/src/lib.rs` (`mod pdf_commands;` after `mod windows;`; `pdf_commands::pdf_config,` after `commands::pick_folder,`)
+- Create: `src/lib/pdf.ts`, `src/lib/pdf.test.ts`, `src/lib/pdfConfig.svelte.ts`, `src/stack/PdfCropPopover.svelte`
+- Modify: `src/stack/Stack.svelte` (the crop branch and an import, per the shared-file table)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces:
+  - `crop::BoxPt = [f32; 4]`: `[x0, y0, x1, y1]`, normalised so `x0 < x1` and `y0 < y1`.
+  - `crop::visible_box(media: BoxPt, crop: Option<BoxPt>) -> BoxPt`: the intersection, or `media` when they do not overlap.
+  - `crop::ratio_box(visible: BoxPt, ratio: (u32, u32), rotate: i64) -> BoxPt`:
+    - the displayed orientation is the box's own, swapped when `rotate` is 90 or 270;
+    - the ratio is turned so it is landscape for a landscape display and portrait for a portrait one (a square stays);
+    - in box space the ratio is swapped back for 90/270;
+    - result: the largest box of that ratio inside `visible`, centred.
+  - `crop::apply_crop(doc: &mut Document, aspect: Option<(u32, u32)>, uncrop: bool) -> Result<(), OptimiseError>`, for every page:
+    - `media` is `/MediaBox`, inherited through `/Parent`;
+    - `visible` is `media` when `uncrop`, else `visible_box(media, inherited /CropBox)`;
+    - `/CropBox` is set on the page's own dict to `ratio_box(visible, aspect, inherited /Rotate)` when `aspect` is set, else to `visible`.
+  - `pdf_commands::pdf_config(app) -> PdfConfig`, with `#[derive(Serialize)] struct PdfConfig { dpi: u16, dpi_aggressive: u16, extract_dpi: u16, devices: Vec<Device> }` from the current settings.
+  - `src/lib/pdfConfig.svelte.ts`: `export const pdfConfig = $state<PdfConfig>({ dpi: 150, dpi_aggressive: 100, extract_dpi: 150, devices: [] })`.
+    - `loadPdfConfig(): Promise<void>` fills it from `invoke('pdf_config')`.
+    - The module also `listen<Settings>('settings:changed', …)` to refresh it from `payload.pdf`.
+    - `PdfCropPopover` calls `loadPdfConfig()` once on mount.
+  - `src/lib/pdf.ts`:
+    - `export interface PdfConfig { dpi: number; dpi_aggressive: number; extract_dpi: number; devices: Device[] }`.
+    - `orientRatio(dims: [number, number], ratio: [number, number]): [number, number]`: turned to match `dims`' orientation, mirroring Rust.
+    - `pdfFrame(dims: [number, number] | null, aspect: [number, number] | null): CropFrame | null`: centred, via `fitRatio(dims, orientRatio(dims, aspect))`.
+    - `PDF_ASPECTS`: 16:9, 4:3, 1:1, 1.91:1 (no 9:16; on PDFs a ratio follows each page).
+    - `export interface PdfCropForm { aspect: [number, number] | null; uncrop: boolean }`.
+    - `pdfCropForm(edits: Edits): PdfCropForm`.
+    - `pdfCropPatch(form: PdfCropForm): EditsPatch` returns `{ aspect, uncrop }`.
+  - `PdfCropPopover.svelte`: props `{ card, onapply, onclose, onframe }`, the same as `CropPopover` minus `sizes`.
+    - Chips: "Original" (`aspect: null`), then `PDF_ASPECTS`, then a "Devices" row of `pdfConfig.devices` (label = name; ratio = `[width, height]`), then an "Uncrop" switch with its help line, then a **Crop** button.
+    - Enter applies, Esc closes, `data-popover`, focus on open. Styling copies `CropPopover`'s.
+    - `onframe(pdfFrame(card.dims_before, form.aspect))`.
+  - `Stack.svelte`:
+
+    ```svelte
+    {#if open === 'crop' && card.source_format === 'pdf'}
+      <PdfCropPopover {card} onapply={(edits) => apply(card.id, edits)} onclose={() => setTool(card.id, null)} onframe={(next) => (frame = next)} />
+    {:else if open === 'crop'}
+    ```
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// pdf/crop.rs
+fn close(a: BoxPt, b: BoxPt) -> bool { a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01) }
+
+#[test]
+fn the_visible_box_is_the_overlap() {
+    assert!(close(visible_box([0.0, 0.0, 612.0, 792.0], Some([36.0, 36.0, 700.0, 756.0])), [36.0, 36.0, 612.0, 756.0]));
+    assert!(close(visible_box([0.0, 0.0, 612.0, 792.0], Some([900.0, 900.0, 950.0, 950.0])), [0.0, 0.0, 612.0, 792.0]));
+}
+
+#[test]
+fn an_a4_page_crops_to_an_ipad_by_trimming_its_sides() {
+    let b = ratio_box([0.0, 0.0, 595.0, 842.0], (1640, 2360), 0);
+    let w = 842.0 * 1640.0 / 2360.0;
+    assert!(close(b, [(595.0 - w) / 2.0, 0.0, (595.0 + w) / 2.0, 842.0]));
+}
+
+#[test]
+fn a_landscape_page_gets_the_landscape_ratio() {
+    let b = ratio_box([0.0, 0.0, 842.0, 595.0], (9, 16), 0);
+    assert!(((b[2] - b[0]) / (b[3] - b[1]) - 16.0 / 9.0).abs() < 0.01);
+}
+
+#[test]
+fn a_rotated_page_is_judged_as_displayed() {
+    // Stored portrait, shown landscape: a 16:9 ratio must look 16:9 on screen.
+    let b = ratio_box([0.0, 0.0, 595.0, 842.0], (16, 9), 90);
+    assert!(((b[3] - b[1]) / (b[2] - b[0]) - 16.0 / 9.0).abs() < 0.01);
+}
+
+#[test]
+fn uncrop_shows_the_whole_media_box_even_through_an_inherited_crop() {
+    // testutil::pdf puts PdfPage.crop on the parent /Pages node when every page shares it.
+    let pdf = testutil::pdf(&vec![PdfPage { crop: Some([50.0, 50.0, 500.0, 700.0]), ..PdfPage::default() }; 2], &PdfExtras::default());
+    let mut doc = lopdf::Document::load_mem(&pdf).unwrap();
+    apply_crop(&mut doc, None, true).unwrap();
+    for id in doc.get_pages().values() {
+        assert_eq!(page_box(&doc, *id, b"CropBox"), Some([0.0, 0.0, 612.0, 792.0]));
+    }
+}
+```
+
+`pipeline.rs`:
+
+```rust
+#[test]
+fn cropping_a_pdf_to_a_device_sets_every_page_and_restore_undoes_it() {
+    let env = Env::new();
+    let (path, input) = pdf_file(&env, "doc.pdf", &vec![PdfPage::default(); 2], &PdfExtras::default());
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    run(&mut job, Level::Normal, &options(), &env);
+    job.edit(serde_json::from_value(serde_json::json!({ "aspect": [1640, 2360] })).unwrap());
+    let card = run(&mut job, Level::Normal, &options(), &env).0.unwrap().update;
+    assert!(card.detail.ends_with("cropped"));
+    let doc = lopdf::Document::load_mem(&fs::read(&path).unwrap()).unwrap();
+    for id in doc.get_pages().values() {
+        let [x0, y0, x1, y1] = crate::pdf::crop::page_box(&doc, *id, b"CropBox").unwrap();
+        assert!(((x1 - x0) / (y1 - y0) - 1640.0 / 2360.0).abs() < 0.01);
+    }
+    job.restore(&options(), &mut |_, _, _| Ok(()));
+    assert_eq!(fs::read(&path).unwrap(), input);
+}
+```
+
+(`crop::page_box(doc, page_id, key) -> Option<BoxPt>` is `pub(crate)`; it reads the page's own entry, or the inherited one.)
+
+`src/lib/pdf.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { orientRatio, pdfCropPatch, pdfFrame } from './pdf';
+
+describe('pdf crop', () => {
+  it('turns a ratio to the page', () => {
+    expect(orientRatio([842, 595], [9, 16])).toEqual([16, 9]);
+    expect(orientRatio([595, 842], [16, 9])).toEqual([9, 16]);
+  });
+  it('frames a centred crop on the poster', () => {
+    const f = pdfFrame([595, 842], [1640, 2360])!;
+    expect(f.y).toBe(0);
+    expect(f.x).toBeCloseTo((1 - (842 * 1640) / 2360 / 595) / 2, 3);
+    expect(pdfFrame([595, 842], null)).toBeNull();
+  });
+  it('sends the ratio and the uncrop switch', () => {
+    expect(pdfCropPatch({ aspect: null, uncrop: true })).toEqual({ aspect: null, uncrop: true });
+  });
+});
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core crop`, `pnpm test`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.crop.title": "Crop pages",
+  "pdf.crop.original": "Original",
+  "pdf.crop.devices": "Devices",
+  "pdf.crop.uncrop": "Uncrop",
+  "pdf.crop.uncrop.help": "Show whole pages, also where the PDF was cropped before",
+  "pdf.crop.apply": "Crop",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core`, `cargo test -p ferry`, `pnpm check`, `pnpm test`
+Expected: PASS.
+
+**Manual check (ask first):** on a PDF card, click Crop. The popover shows Original, four ratios, six devices and Uncrop. Choosing iPad draws a centred frame on the poster; Enter crops. Preview shows every page at the iPad ratio. Reopen the popover, choose Original with Uncrop on, and apply: pages are whole again. Esc and click-away close the popover and give the keyboard back to TextEdit.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src-tauri/src src/lib src/stack
+git commit -m "feat: crop PDF pages to a ratio or a device, and uncrop"
+```
+
+### Task 16: Extract pages as images
+
+**Files:**
+- Modify: `crates/ferry-core/src/pdf/mod.rs` (the `Pages` arm of `apply`)
+- Modify: `crates/ferry-core/src/pipeline_formats.rs` (`finish_pdf` pages branch, `put_pages`, `pdf_detail` for pages)
+- Modify: `src-tauri/src/menu.rs`:
+  - `Action::Pages` (key `"pages"`, page action `"pages"`, `enabled` = `card.can_edit && card.source_format == Some(Format::Pdf)`);
+  - in `build()`, for a PDF card, insert an item "Extract pages as images…" directly after the Crop item: find the position with `menu.items()?` by id `item_id(&card.id, Action::Crop)`, then `menu.insert(&item, position + 1)`.
+- Create: `src/stack/PagesPopover.svelte`
+- Modify: `src/lib/pdf.ts`, `src/lib/pdf.test.ts`, `src/lib/cards.ts` (`Tool` adds `'pages'`, `isPopover`), `src/lib/ipc.ts` (`CardAction.action` adds `'pages'`)
+- Modify: `src/stack/Stack.svelte` (`{:else if open === 'pages'}` branch; `clickAway` uses `isPopover`)
+- Modify: `src/stack/Card.svelte` (determinate progress ring)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: `pdf::render::render_pages`, `raster::encode`, `place_result` (Task 13).
+- Produces:
+  - `pdf::apply` with `edits.format` = `Png` or `Jpeg`:
+    - the range is `edits.pages` (default all), with `last` clamped to the page count; `first > count` → `Unsupported(tf("pdf.error.no_page", &[("count", …)]))`;
+    - when `aspect` or `uncrop` is set, the crop is applied to a copy first (`apply_crop`, then `save_to` into memory) so the rendered pages are cropped;
+    - each page is rendered at `target_dpi(edits, d, true)` and encoded with `raster::encode(&r, format, o)`;
+    - `progress(i / n, tf("pdf.step.page", &[("n", page), ("total", n)]))`;
+    - returns `PdfResult::Pages { format, pages: [(page_number, bytes)], size: first page's pixels }`.
+  - `Job::put_pages(&mut self, format: Format, pages: &[(u32, Vec<u8>)], original: &[u8], o: &RunOptions) -> Result<(), (String, String)>`:
+    - **one page** → `self.put(bytes, format, …)`: one file, `doc.png` under the PDF Converted rule;
+    - **several** → `place_result(format.extension(), OutputKind::Converted, …)` with `folder = true` semantics:
+      - the path the rule gives (`…/doc.png`) loses its extension → `…/doc` (collisions → `doc (2)` through `unique_except`, as for files);
+      - the writer creates `<folder>.ferry-tmp/` (removing a leftover first) and writes `<stem>-<n>.<ext>`, where `stem` is the folder's name and `n` is zero-padded to the digit count of the PDF's page count (`doc-1.png` for 9 pages, `doc-01.png` for 12);
+      - if `<folder>` exists here, it is this job's own previous result: move it to the Trash (`o.trash`), then `fs::rename` the temporary folder onto it;
+      - a failure removes the temporary folder;
+      - afterwards `self.ext = String::new()` and `self.format = format`, and `self.output` is the folder.
+    - Restore trashes the folder (`Written.created`), Rename renames the folder, and Copy/drag/reveal act on the folder; this needs no new code.
+  - `finish_pdf`: the pages branch skips the signed refusal, always writes, and on cancel returns `None` before any rename (no partial result). Detail `"{n} × PNG · 150 dpi"`, with `n` the number of images.
+  - `src/lib/pdf.ts`:
+    - `export interface PagesForm { format: 'png' | 'jpeg'; all: boolean; from: string; to: string; dpi: number }`;
+    - `pagesForm(card: JobUpdate, cfg: PdfConfig): PagesForm`: defaults `png`, all, `1`, `card.pages`, `card.edits.dpi ?? cfg.extract_dpi`;
+    - `checkPages(form: PagesForm, count: number | null): { patch: EditsPatch | null; error: string | null }`. The patch is `{ format, pages: all ? null : { first, last }, dpi }`. An error is `t('pdf.pages.invalid', { n: count })` when a field is not a whole number, `first < 1`, `last < first` or `last > count`.
+  - `PagesPopover.svelte`:
+    - props `{ card, onapply, onclose }`;
+    - PNG/JPEG chips, "All pages" / "Pages" toggle with From–To fields, a resolution `<select>` of `DPI_STOPS` (Task 17 adds `DPI_STOPS` and `dpiLabel` to `pdf.ts`; add them now if Task 17 is not done), and an **Extract** button;
+    - Enter applies, Esc closes, the invalid field turns red (`aria-invalid`).
+  - `cards.ts`: `export type Tool = 'rename' | 'crop' | 'fit' | 'pages' | 'slider';` and `export function isPopover(kind: Tool): boolean` (crop, fit, pages).
+  - The Card progress ring's second circle uses `stroke-dasharray={card.state.kind === 'optimising' && card.state.progress > 0 ? `${Math.max(4, card.state.progress * 151)} 151` : '40 151'}`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`pipeline.rs`. Every test starts with `if !testutil::pdfium() { return; }`.
+
+```rust
+fn extract(job: &mut Job, patch: serde_json::Value) { job.edit(serde_json::from_value(patch).unwrap()); }
+
+#[test]
+fn extracting_pages_writes_a_folder_beside_the_pdf() {
+    if !testutil::pdfium() { return; }
+    let env = Env::new();
+    let (path, input) = pdf_file(&env, "doc.pdf", &vec![PdfPage::default(); 3], &PdfExtras::default());
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    extract(&mut job, serde_json::json!({ "format": "png" }));
+    let card = run(&mut job, Level::Normal, &options(), &env).0.unwrap().update;
+    let folder = path.with_file_name("doc");
+    let mut names: Vec<_> = fs::read_dir(&folder).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, ["doc-1.png", "doc-2.png", "doc-3.png"]);
+    assert_eq!((card.output.as_deref(), card.ext.as_str(), card.converted), (Some(folder.as_path()), "", true));
+    assert_eq!(card.detail, "3 × PNG · 150 dpi");
+    assert_eq!(fs::read(&path).unwrap(), input);
+}
+
+#[test]
+fn twelve_pages_are_numbered_with_two_digits() { /* 12 pages → first name "doc-01.png", last "doc-12.png" */ }
+
+#[test]
+fn a_single_page_becomes_one_image_file() {
+    // pages {first: 2, last: 2}, format jpeg → `doc.jpg` exists, no `doc` folder, sniff == Jpeg
+}
+
+#[test]
+fn a_page_past_the_end_says_how_many_there_are() {
+    // 3 pages, pages {first: 5, last: 6} → Error reason == tf("pdf.error.no_page", [("count", "3")])
+}
+
+#[test]
+fn re_extracting_replaces_its_own_folder() {
+    // extract png, then edit dpi 72 and run again → still `doc` (no `doc (2)`), 3 files, the old folder is in `.trash`
+}
+
+#[test]
+fn a_taken_folder_name_gets_a_number() {
+    // create `doc/` holding a user file first → result is `doc (2)`; `doc/` and its file are untouched
+}
+
+#[test]
+fn a_cancelled_extraction_leaves_nothing_behind() {
+    // RunOptions whose cancel token is cancelled from the emit callback once a progress update shows
+    // `Page 2 of 3` → run returns None; neither `doc` nor `doc.ferry-tmp` exists
+}
+
+#[test]
+fn restore_trashes_the_extracted_pages() {
+    // extract, then job.restore → `doc` folder gone (in `.trash`), card Restored, the PDF unchanged
+}
+
+#[test]
+fn a_signed_pdf_can_still_be_extracted() {
+    // PdfExtras { signed: true } + format png → Done, folder exists
+}
+```
+
+Write the five commented tests out fully in the same style as the first. The comments fix their assertions.
+
+`menu.rs`:
+
+```rust
+#[test]
+fn a_pdf_card_offers_extract_and_converts_only_to_images() {
+    let mut card = done();
+    card.source_format = Some(Format::Pdf);
+    card.format = Some(Format::Pdf);
+    card.choices = ferry_core::formats::choices(Format::Pdf, false, 3, false);
+    assert!(enabled(&card, Action::Pages));
+    assert_eq!(convert_formats(&card), [Format::Pdf, Format::Png, Format::Jpeg]);
+    assert_eq!(parse_id(&item_id(&card.id, Action::Pages)), Some((card.id.clone(), Action::Pages)));
+    assert_eq!(Action::Pages.page(), Some("pages"));
+    assert!(!enabled(&done(), Action::Pages));
+}
+```
+
+`src/lib/pdf.test.ts`:
+
+```ts
+it('checks a page range against the page count', () => {
+  const form = { format: 'png' as const, all: false, from: '2', to: '3', dpi: 150 };
+  expect(checkPages(form, 3)).toEqual({ patch: { format: 'png', pages: { first: 2, last: 3 }, dpi: 150 }, error: null });
+  expect(checkPages({ ...form, to: '4' }, 3).error).toBe('Choose pages from 1 to 3');
+  expect(checkPages({ ...form, from: 'x' }, 3).patch).toBeNull();
+  expect(checkPages({ ...form, all: true, from: 'x' }, 3).patch).toEqual({ format: 'png', pages: null, dpi: 150 });
+});
+```
+
+`cards.test.ts`: `isPopover('pages') === true`, `isPopover('rename') === false`.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core pipeline`, `cargo test -p ferry menu`, `pnpm test`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.step.page": "Page {n} of {total}",
+  "pdf.error.no_page": "This PDF has {count} pages",
+  "pdf.detail.images": "{n} × {format}",
+  "pdf.menu.extract": "Extract pages as images…",
+  "pdf.pages.title": "Extract pages",
+  "pdf.pages.all": "All pages",
+  "pdf.pages.range": "Pages",
+  "pdf.pages.from": "From",
+  "pdf.pages.to": "To",
+  "pdf.pages.resolution": "Resolution",
+  "pdf.pages.invalid": "Choose pages from 1 to {n}",
+  "pdf.pages.apply": "Extract",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core`, `cargo test -p ferry`, `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm check`, `pnpm test`
+Expected: PASS.
+
+**Manual check (ask first):**
+- A 30-page PDF card: ⋯ → "Extract pages as images…" opens the popover. Extract PNG, all pages, 150 dpi. The ring fills and the line reads "Page 7 of 30…". A folder `doc` with `doc-01.png`…`doc-30.png` appears beside the PDF. Dragging the card into Finder copies the folder.
+- Cancel half-way: no `doc` folder and no `doc.ferry-tmp` remain.
+- ⌥-click the PNG chip: a second card with its own folder `doc (2)`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src-tauri/src/menu.rs src/lib src/stack
+git commit -m "feat: extract PDF pages as PNG or JPEG into a folder, with progress"
+```
+
+### Task 17: The DPI slider, the `-` hover key and "Change DPI ▸"
+
+**Files:**
+- Modify: `src/lib/pdf.ts`, `src/lib/pdf.test.ts` (DPI helpers)
+- Modify: `src/lib/edits.ts`: `stopY` uses the top stop's value instead of the constant 100. `axisValue` is unchanged; `span = max − min`; `y = track × (max − axisValue(stop)) / span`. Scale and quality stops have max 100, so their output is unchanged.
+- Modify: `src/lib/edits.test.ts`, `src/lib/cards.ts` (`RailAction` adds `'dpi'`; `railActions` puts `'dpi'` in place of `'downscale'` when `card.source_format === 'pdf'`; `needsOriginal('dpi')` is true), `src/lib/cards.test.ts`
+- Modify: `src/stack/Card.svelte`: a `dpi` rail button after the downscale block, with the Lucide `file-minus` icon. It uses the same `press` / `slideMove` / `release` / `keyStep` handlers with `SliderKind = 'downscale' | 'compression' | 'dpi'`. `slideLabel`, `slideStops`, `slideYs`, `slideLabelled`, `step` and `tipText` gain a `'dpi'` branch using `DPI_STOPS`, `dpiLabel`, `currentDpi`, `nextDpi` and `dpiPatch`.
+- Modify: `src-tauri/src/hover_keys.rs` (the `Key::StepDown` arm, a new pure `dpi_step_down`)
+- Modify: `src-tauri/src/menu.rs`:
+  - `Action::Dpi(u16)` with key `dpi-<n>`, `enabled` = `card.can_edit && card.source_format == Some(Format::Pdf) && card.edits.dpi != Some(n)`;
+  - `run`: `jobs::edit(EditsPatch { dpi: Some(Some(n)), .. })`;
+  - in `build()`, the Downscale submenu is built as `let downscale = if pdf { submenu(t("pdf.menu.dpi"), &dpis)? } else { submenu(t("menu.downscale"), &scales)? };`, with `&downscale` in the item list in its place (this changes one existing line).
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces:
+  - `pdf.ts`:
+    - `DPI_STOPS = [300, 250, 200, 150, 100, 72, 48]`;
+    - `dpiLabel(n: number): string` → `t('pdf.dpi.label', { n })`;
+    - `currentDpi(card: JobUpdate, cfg: PdfConfig): number`: `card.edits.dpi`, else `cfg.extract_dpi` when `card.format !== 'pdf'`, else `cfg.dpi_aggressive` when aggressive, else `cfg.dpi`;
+    - `nextDpi(dpi: number): number | null`: the next lower stop; `null` at or below 48;
+    - `dpiPatch(dpi: number): EditsPatch` → `{ dpi }`.
+  - `hover_keys::dpi_step_down(current: Option<u16>, default: u16) -> Option<u16>`: the next stop below `current.unwrap_or(default)`; `None` at 48.
+  - In `pressed`, for a card whose last update has `source_format == Some(Format::Pdf)`:
+    - `-` sends `EditsPatch { dpi }` instead of a scale;
+    - the default comes from `settings.pdf.dpi` (or `dpi_aggressive` when the card's `edits.level` is aggressive);
+    - digits `1`–`9` do nothing on a PDF card.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// pdf.test.ts
+it('steps the DPI down one stop at a time', () => {
+  expect(nextDpi(300)).toBe(250);
+  expect(nextDpi(150)).toBe(100);
+  expect(nextDpi(48)).toBeNull();
+  expect(nextDpi(160)).toBe(150);
+  expect(dpiLabel(72)).toBe('72 dpi');
+});
+it('starts from the recipe, the level or extraction', () => {
+  const cfg = { dpi: 150, dpi_aggressive: 100, extract_dpi: 200, devices: [] };
+  const pdf = card({ kind: 'done' }, { source_format: 'pdf', format: 'pdf' });
+  expect(currentDpi(pdf, cfg)).toBe(150);
+  expect(currentDpi({ ...pdf, edits: { ...pdf.edits, level: 'aggressive' } }, cfg)).toBe(100);
+  expect(currentDpi({ ...pdf, format: 'png' }, cfg)).toBe(200);
+  expect(currentDpi({ ...pdf, edits: { ...pdf.edits, dpi: 72 } }, cfg)).toBe(72);
+});
+// edits.test.ts
+it('places DPI stops by value with 300 at the top', () => {
+  expect(stopY([300, 250, 200, 150, 100, 72, 48], 0, 120)).toBe(0);
+  expect(stopY([300, 250, 200, 150, 100, 72, 48], 6, 120)).toBe(120);
+  expect(stopY([300, 250, 200, 150, 100, 72, 48], 3, 120)).toBeCloseTo((120 * 150) / 252, 5);
+});
+// cards.test.ts
+it('a PDF card has a DPI button in place of downscale', () => {
+  const pdf = card({ kind: 'done' }, { source_format: 'pdf', format: 'pdf', can_restore: true });
+  expect(railActions(pdf)).toEqual(['dpi', 'compression', 'crop', 'restore', 'compare', 'copy', 'more']);
+});
+```
+
+```rust
+// hover_keys.rs
+#[test]
+fn minus_on_a_pdf_lowers_the_dpi_one_stop() {
+    assert_eq!(dpi_step_down(None, 150), Some(100));
+    assert_eq!(dpi_step_down(Some(300), 150), Some(250));
+    assert_eq!(dpi_step_down(Some(48), 150), None);
+}
+// menu.rs
+#[test]
+fn a_pdf_card_changes_dpi_but_not_to_its_current_one() {
+    let mut card = done();
+    card.source_format = Some(Format::Pdf);
+    card.edits.dpi = Some(150);
+    assert!(enabled(&card, Action::Dpi(72)));
+    assert!(!enabled(&card, Action::Dpi(150)));
+    assert!(!enabled(&done(), Action::Dpi(72)));
+    assert_eq!(parse_id(&item_id(&card.id, Action::Dpi(72))), Some((card.id.clone(), Action::Dpi(72))));
+}
+```
+
+Also add `Action::Dpi(150)` and `Action::Pages` to the `ALL` array in `menu.rs` tests. The `without_the_original…` and `a_finished_card…` expectations exclude them, since `done()` is a PNG card: filter them out of those two loops.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `pnpm test`, `cargo test -p ferry hover_keys`, `cargo test -p ferry menu`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.dpi.label": "{n} dpi",
+  "pdf.dpi.tip": "Image resolution — click for the next lower DPI, drag for a slider",
+  "pdf.menu.dpi": "Change DPI",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `pnpm check`, `pnpm test`, `cargo test -p ferry`, `cargo clippy --workspace --all-targets -- -D warnings`
+Expected: PASS.
+
+**Manual check (ask first):**
+- On a PDF card, the first rail button is the DPI button. Press and drag: the slider shows stops 300…48, the badge reads "100 dpi", and release applies it (the card re-runs; the detail line says "100 dpi").
+- A plain click goes 150 → 100.
+- With the pointer on the card, `-` goes 100 → 72; `5` does nothing.
+- ⋯ → Change DPI ▸ shows the seven stops with the current one disabled.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib src/stack/Card.svelte src-tauri/src/hover_keys.rs src-tauri/src/menu.rs
+git commit -m "feat(ui): PDF DPI slider, minus hover key and Change DPI menu"
+```
+
+### Task 18: Compare and preview for PDF, HEIC and TIFF
+
+**Files:**
+- Modify: `crates/ferry-core/src/poster.rs` (`viewable`, `View`)
+- Modify: `src-tauri/src/compare.rs`:
+  - `Shot` gains `src: PathBuf` and `pages: Option<u32>` (initialised in `shot()` as `src = path.clone()`, `pages = None`);
+  - `CompareView` gains `page: u32` (1 in `view()`);
+  - `fn existing` also accepts a directory (`p.is_file() || p.is_dir()`);
+  - in `show()`, a call `with_posters(&mut view, &work_dir)` directly before the `scope.allow_file` loop, and that loop allows `shot.src` as well as `shot.path`;
+  - new section `// sE pdf-formats` before `#[cfg(test)]` with `with_posters`, `page_file` and the `compare_page` command.
+- Modify: `src-tauri/src/lib.rs` (`compare::compare_page,` after the Task 15 handler line)
+- Modify: `src/compare/view.ts` (types), `src/compare/Compare.svelte` (`src(shot)` uses `shot.src`; a page stepper)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces:
+  - `poster::View { pub src: PathBuf, pub dims: Option<(u32, u32)>, pub pages: Option<u32> }`.
+  - `poster::viewable(path: &Path, page: u32, cache: &Path) -> Result<View, String>`:
+    - sniff the file;
+    - when `needs_poster`, render `page` with `png(bytes, format, page, VIEW_EDGE)` into `<cache>/posters/<hash>.png`, reusing an existing file. The hash is a 64-bit FNV-1a of path, length, mtime (ms) and page, as 16 hex digits;
+    - `pages` = `pdf::render::page_count` for a PDF, else `None`;
+    - other formats → `View { src: path, dims: None, pages: None }`.
+  - `compare::with_posters(view: &mut CompareView, work_dir: &Path)`:
+    - for a directory `now` (a pages folder), `now.src` is `page_file(dir, view.page)`, `now.pages` is the file count, and the original's page is the number at the end of that file's stem;
+    - every shot whose format needs a poster gets `src`, `dims` and `pages` from `viewable`;
+    - errors leave `src = path` (the page then shows its "error decoding" state).
+  - `page_file(dir: &Path, index: u32) -> Option<PathBuf>`: the files sorted by name, 1-based.
+  - `#[tauri::command] compare_page(app, page: u32) -> Result<(), String>`: clamp `page` to `1..=pages`, rebuild the shown view with `with_posters`, store it in `SHOWN`, and `emit_to(COMPARE, "compare:show", &view)`.
+  - `Compare.svelte`: when `view.now.pages ?? view.original?.pages` is above 1, the header shows `‹  Page 2 of 12  ›` (buttons `aria-label` `pdf.compare.prev` / `pdf.compare.next`; `PageUp`/`PageDown` keys) calling `invoke('compare_page', { page })`.
+  - macOS Quick Look still receives `view.now.path` (the real file) in `preview.rs`, unchanged.
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// poster.rs
+#[test]
+fn a_png_is_its_own_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.png");
+    fs::write(&path, testutil::png(10, 10)).unwrap();
+    assert_eq!(viewable(&path, 1, dir.path()).unwrap().src, path);
+}
+
+#[test]
+fn a_tiff_view_is_a_cached_poster() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.tiff");
+    fs::write(&path, testutil::tiff(&[testutil::TiffPage::default()])).unwrap();
+    let first = viewable(&path, 1, dir.path()).unwrap();
+    assert!(first.src.starts_with(dir.path().join("posters")));
+    assert_eq!(first.dims, Some((64, 48)));
+    assert_eq!(viewable(&path, 1, dir.path()).unwrap().src, first.src);
+}
+
+#[test]
+fn a_pdf_view_knows_its_pages() {
+    if !testutil::pdfium() { return; }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.pdf");
+    fs::write(&path, testutil::blank_pdf(&[(612.0, 792.0), (612.0, 792.0)])).unwrap();
+    let two = viewable(&path, 2, dir.path()).unwrap();
+    assert_eq!((two.pages, two.dims), (Some(2), Some((1855, 2400))));
+}
+```
+
+```rust
+// compare.rs (sE section tests)
+#[test]
+fn a_pages_folder_compares_page_by_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("doc");
+    fs::create_dir(&folder).unwrap();
+    for n in ["doc-1.png", "doc-2.png"] { fs::write(folder.join(n), PNG).unwrap(); }
+    assert_eq!(page_file(&folder, 2), Some(folder.join("doc-2.png")));
+    assert_eq!(page_file(&folder, 3), None);
+}
+
+#[test]
+fn a_folder_result_can_be_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let card = JobUpdate { output: Some(dir.path().to_owned()), ..converted(dir.path()) };
+    assert!(view(&card, true).is_ok());
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core poster`, `cargo test -p ferry compare`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.compare.page": "Page {n} of {total}",
+  "pdf.compare.prev": "Previous page",
+  "pdf.compare.next": "Next page",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core`, `cargo test -p ferry`, `pnpm check`, `pnpm test`
+Expected: PASS.
+
+**Manual check (ask first):**
+- ⌘D on an optimised PDF card: the window shows page 1, original against result, with the divider working. "›" or Page Down goes to page 2.
+- ⌘D on a pages-folder card: original page 1 against `doc-01.png`.
+- ⌘D on a TIFF→JPEG card: the TIFF original is shown (from its poster).
+- Space on a PDF card opens Quick Look on the real PDF.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src-tauri/src src/compare src/lib/i18n/en.json
+git commit -m "feat: compare PDFs page by page and show TIFF/HEIC originals in compare"
+```
+
+### Task 19: Settings: PDF pane, PDF file handling, image conversions
+
+**Files:**
+- Modify: `crates/ferry-core/src/output.rs` (`example_named`; `example` calls it)
+- Modify: `src-tauri/src/pdf_commands.rs` (`pdf_output_preview`); `src-tauri/src/lib.rs` (handler line)
+- Modify: `src/lib/schema.ts` (`PaneId` adds `'pdf'`; `panes` adds `{ id: 'pdf', label: 'pdf.pane' }` after `images`; `Control` adds `{ kind: 'dpi' }` and `{ kind: 'devices' }`, and `output` gains `media?: 'pdf'`; rows after the `crop_sizes` row and after the `output_converted` row)
+- Modify: `src/lib/schema.test.ts`
+- Modify: `src/settings/Row.svelte` (`dpi` and `devices` branches)
+- Modify: `src/settings/controls/OutputRule.svelte` (`media` prop)
+- Create: `src/settings/controls/DeviceList.svelte`
+- Modify: `src/lib/pdf.ts`, `src/lib/pdf.test.ts` (`parseDevice`, `deviceLabel`)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces:
+  - `output::example_named(kind: OutputKind, rule: &OutputRule, home: &Path, work_dir: &Path, today: NaiveDate, file: &str, converted_ext: &str) -> Result<String, Vec<String>>`. `example` = `example_named(…, "shot.png", "webp")`.
+  - `pdf_commands::pdf_output_preview(app, rule: OutputRule, converted: bool) -> Result<String, Vec<String>>` = `example_named(…, "report.pdf", "png")`.
+  - Schema rows:
+
+    | id | pane | path | control |
+    | --- | --- | --- | --- |
+    | `pdf_dpi` | `pdf` | `pdf.dpi` | `dpi` |
+    | `pdf_dpi_aggressive` | `pdf` | `pdf.dpi_aggressive` | `dpi` |
+    | `pdf_extract_dpi` | `pdf` | `pdf.extract_dpi` | `dpi` |
+    | `pdf_max_size` | `pdf` | `pdf.max_size_mb` | `{ kind: 'number', min: 1, max: 10000, unit: 'unit.mb' }` |
+    | `pdf_devices` | `pdf` | `pdf.devices` | `devices` |
+    | `output_pdf_optimised` | `files` (group `pdf.group`) | `pdf.output.optimised` | `{ kind: 'output', converted: false, media: 'pdf' }` |
+    | `output_pdf_converted` | `files` (group `pdf.group`) | `pdf.output.converted` | `{ kind: 'output', converted: true, media: 'pdf' }` |
+    | `heic_to` / `tiff_to` / `avif_to` | `images` (group `pdf.formats.group`) | `formats.heic_to` etc. | `select` with options `keep`/`jpeg`/`png`/`webp` → `pdf.formats.keep`, `pdf.formats.jpeg`, `pdf.formats.png`, `pdf.formats.webp` |
+
+    Labels and help are `pdf.settings.<field>` / `pdf.settings.<field>.help`, and `pdf.formats.heic_to` etc.
+  - `Row.svelte`:
+    - `dpi` renders `Choice` with `DPI_STOPS` (`value: String(n)`, `label: dpiLabel(n)`; `Choice` takes labels, not keys, so map before passing) and `onchange(Number(v))`;
+    - `devices` renders `DeviceList`.
+  - `DeviceList.svelte`: like `SizeList.svelte`. One line per device shows `deviceLabel(d)`, with a remove button. An add field parses `parseDevice`, and an invalid entry turns red with `pdf.settings.devices.invalid`. "Restore defaults" sets the list to the six defaults from `pdf.ts` `DEFAULT_DEVICES` (mirrors Rust).
+  - `parseDevice(text: string): Device | null`: `/^\s*(.+?)\s+(\d+)\s*[x×X]\s*(\d+)\s*$/`, sides `1..=MAX_SIDE`. `deviceLabel(d)` → `"iPad 1640×2360"`.
+  - `OutputRule.svelte`: `media?: 'pdf'` → invokes `pdf_output_preview` instead of `output_preview`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// output.rs
+#[test]
+fn a_pdf_example_names_a_report() {
+    let rule = OutputRule { location: Location::SameFolder, template: "%f_optimised.%e".into(), ..OutputRule::default() };
+    let today = NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+    let home = Path::new("/Users/me");
+    assert_eq!(example_named(OutputKind::Optimised, &rule, home, Path::new("/w"), today, "report.pdf", "png"), Ok("~/Desktop/report_optimised.pdf".into()));
+}
+```
+
+```ts
+// pdf.test.ts
+it('reads a device as a name and a size', () => {
+  expect(parseDevice('iPad Pro 13-inch 2064×2752')).toEqual({ name: 'iPad Pro 13-inch', width: 2064, height: 2752 });
+  expect(parseDevice('2064x2752')).toBeNull();
+  expect(parseDevice('Huge 40000x10')).toBeNull();
+  expect(deviceLabel({ name: 'iPad', width: 1640, height: 2360 })).toBe('iPad 1640×2360');
+});
+// schema.test.ts
+it('every PDF and conversion setting points at a real field', () => {
+  for (const id of ['pdf_dpi', 'pdf_devices', 'output_pdf_converted', 'heic_to']) {
+    const row = settingsFor(true).find((s) => s.id === id)!;
+    expect(getPath(sample, row.path!)).not.toBeUndefined();
+  }
+});
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core output`, `pnpm test`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.pane": "PDF",
+  "pdf.group": "PDF",
+  "pdf.settings.dpi": "Image resolution",
+  "pdf.settings.dpi.help": "Images in a PDF are downsampled to this resolution when Ferry optimises it",
+  "pdf.settings.dpi_aggressive": "Image resolution when aggressive",
+  "pdf.settings.dpi_aggressive.help": "Used by Optimise aggressively",
+  "pdf.settings.extract_dpi": "Resolution of extracted pages",
+  "pdf.settings.extract_dpi.help": "Pages saved as images are rendered at this resolution",
+  "pdf.settings.max_size": "Largest PDF to optimise",
+  "pdf.settings.max_size.help": "Bigger PDFs are left alone",
+  "pdf.settings.devices": "Crop devices",
+  "pdf.settings.devices.help": "Screens offered when cropping a PDF, as name and width×height",
+  "pdf.settings.devices.invalid": "Type a name and a size, such as iPad 1640×2360",
+  "pdf.settings.devices.reset": "Restore defaults",
+  "pdf.formats.group": "Conversions",
+  "pdf.formats.heic_to": "HEIC photos",
+  "pdf.formats.tiff_to": "TIFF images",
+  "pdf.formats.avif_to": "AVIF images",
+  "pdf.formats.help": "What Ferry turns these into when it optimises them; multi-page TIFFs stay TIFF",
+  "pdf.formats.keep": "Keep the format",
+  "pdf.formats.jpeg": "Convert to JPEG",
+  "pdf.formats.png": "Convert to PNG",
+  "pdf.formats.webp": "Convert to WebP",
+```
+
+Rows without their own help use `pdf.formats.help` for the three conversion rows.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core`, `cargo test -p ferry`, `pnpm check`, `pnpm test`
+Expected: PASS.
+
+**Manual check (ask first):** open Settings.
+- A "PDF" pane lists the three resolutions (a select of 300…48 dpi), the size limit and the device list. Adding "Pixel 9 1080×2424" makes it appear in the PDF crop popover (re-open it).
+- File handling shows a PDF group with Optimised and Converted; the example reads `~/Desktop/report_optimised.pdf` / `~/Desktop/report.png`.
+- Images shows Conversions with "Convert to JPEG" for HEIC and TIFF and "Keep the format" for AVIF.
+- Searching "dpi" finds the PDF rows.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core/src/output.rs src-tauri/src src/lib src/settings
+git commit -m "feat(settings): PDF pane, PDF file handling and image conversions"
+```
+
+### Task 20: Manual check pass on this Mac (manual check)
+
+**No code.** Ask the user before starting `pnpm tauri dev`. Use a TextEdit window as the focus target and don't click into other apps. Record each result (pass/fail and a note) in the final commit message or the PR description. Each line below says exactly what to look at.
+
+1. **PDF optimise:** copy a scanned PDF over 10 MB in Finder and press ⌃⇧C. Look for: a poster of page 1 with a page badge, then Done with "−NN%" and "N pages · 150 dpi". Preview shows the same pages, with readable text and working links.
+2. **Never worse:** run ⌃⇧C again on that result. The card says "Already optimal".
+3. **DPI slider:** drag the DPI button to 72. The badge reads "72 dpi" while dragging, and the result is smaller than at 150.
+4. **Crop/Uncrop:** crop to iPad; every page has the iPad ratio in Preview. Then Original + Uncrop: the pages are whole. Restore: the original file is back, byte for byte (`shasum` before and after).
+5. **Extract:** extract PNG at 150 dpi. Look for a `doc` folder with numbered pages and the ring filling with "Page n of N". Cancel a second run half-way: nothing is left behind.
+6. **Refusals:** an encrypted PDF (Preview → Export → Encrypt) shows "This PDF is encrypted…". A signed PDF shows "This PDF is signed…" and its pages still extract.
+7. **HEIC:** an iPhone `.heic` becomes `IMG_0001.jpg`, upright and with natural colours. Restore brings the HEIC back. Settings → Conversions → HEIC "Keep the format", then Re-optimise: the result stays HEIC.
+8. **TIFF:** a single-page TIFF becomes JPEG. A multi-page TIFF stays TIFF, is smaller, and Preview shows every page. Its PNG chip tooltip says "First page only".
+9. **AVIF:** PNG → AVIF from the format bar; Safari opens it.
+10. **Animated WebP / GIF:** an animated WebP is optimised and still animates; downscale 50 % still animates. GIF → WebP animates at the same speed.
+11. **Clipboard:** in Preview, copy an image region that offers only TIFF (check with a clipboard viewer if available). Ferry replaces it with a JPEG. A PNG copy is unchanged in behaviour.
+12. **Bundle:** in the CI-built `.dmg` from this branch (ask the user to push, or build locally with `pnpm tauri build --bundles dmg`), `Ferry.app/Contents/Frameworks/libpdfium.dylib` exists, and the installed app renders a PDF poster.
+13. **Windows (unverified):** HEIC through WIC, `pdfium.dll` loading, and the Windows clipboard formats are compiled and smoke-tested in CI only. Report them as "built, not verified on a Windows desktop".
+
+- [ ] **Step 1:** Run the checks above with the user and fix any failure in the task that owns the code, with a regression test there first.
+- [ ] **Step 2:** Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p ferry-core`, `cargo test -p ferry`, `pnpm check` and `pnpm test`. All must be clean.
+- [ ] **Step 3:** Commit the results note:
+
+```bash
+git commit --allow-empty -m "test: stream E manual check results (macOS)"
+```
+
+The message body holds the results, item by item.
+
+---
+
+## Risks
+
+1. **PDFium in-process crash** on a hostile PDF would take Ferry down. Mitigation: PDFium is ClusterFuzz-hardened, and only pages are rendered (no JavaScript or XFA: the bblanchon build has V8/XFA off). Fallback: hayro (pure Rust) behind the same `pdf::render` interface.
+2. **lopdf tolerance:** some malformed PDFs that viewers open, lopdf cannot. Mitigation: the error says "Can't read this PDF — it may be damaged" and leaves the file; xref reconstruction is built in.
+3. **rav1e without assembly is slow** on large AVIF encodes (seconds for a 12 MP photo at speed 6). Mitigation: AVIF is an explicit conversion; NFR-P2 (clipboard in 1.5 s) applies to the default formats. Possible later work: enable `rav1e/asm` on aarch64 only, where it needs no NASM.
+4. **Windows HEIC** depends on Store extensions and is unverified on a desktop.
+5. **Merge conflicts:** `Format` variants and `JobUpdate` fields are likely to conflict with streams A and B. They are trivial to resolve: keep both blocks.
+
+## Open questions for the user
+
+1. **PDF renderer:** bundle PDFium (15 MB in the universal macOS app, 7 MB on Windows; best fidelity) as planned, or use pure-Rust hayro (nothing to bundle; younger)?
+2. **HEIC on Windows** needs Microsoft's HEIF (free) and HEVC (USD 0.99) Store extensions, with no HEIC output on Windows. Is that acceptable, versus bundling libheif + libde265 (LGPL-3, with HEVC patent exposure)?
+3. **NASM on x86_64 builds:** needed for AVIF decoding (rav1d). On your Intel Mac that means `brew install nasm`, and CI gets `ilammy/setup-nasm`. The alternative: decode AVIF through ImageIO/WIC like HEIC (no NASM, no MPL-2.0 `avif-parse`, but Windows needs the AV1 extension).
+4. **Large PDFs:** the requirement's "over 150 pages → 100-page chunks in parallel" is met by recompressing images in parallel across the whole file, which keeps links and outlines intact. Is that OK in place of splitting the file?
+5. **Adaptive DPI** is left to stream F's adaptive work; the DPI slider has no Adaptive stop. Confirm?
+6. **HDR HEIC** becomes an SDR JPEG (no gain map). Acceptable for this cycle?
+7. **FR-T3** (automatically optimising PDF files copied in Finder) is not in this stream. Which stream owns it: C or I?
+8. **TIFF on the clipboard** defaults to JPEG, per the requirements. For apps that put only TIFF on the clipboard (some screenshots), PNG may suit text better. Keep JPEG?
+9. **Signed PDFs:** refusing to rewrite them, while still allowing page extraction. Confirm?
+10. **PDF Converted default location** is Same folder, not In place, so extracting pages never moves the PDF to the Trash. Confirm?
