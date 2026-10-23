@@ -27,6 +27,7 @@ import {
   scalePatch,
   sliderIndex,
   stopY,
+  stopYs,
   stopIndex,
   type CropForm,
 } from './edits';
@@ -119,6 +120,19 @@ describe('slider drag', () => {
     expect(sliderIndex(QUALITY_STOPS, 20, -400, 100)).toBe(0);
   });
 
+  it('hands the slider one distinct, rising y per stop, from 0 to the track', () => {
+    for (const stops of [SCALE_STOPS, QUALITY_STOPS]) {
+      for (const track of [sliderTrack(200), sliderTrack(150)]) {
+        const ys = stopYs(stops, track);
+        expect(ys).toHaveLength(stops.length);
+        expect(ys[0]).toBe(0);
+        expect(ys[ys.length - 1]).toBe(track);
+        ys.slice(1).forEach((y, n) => expect(y).toBeGreaterThan(ys[n]));
+        ys.forEach((y) => expect(Number.isFinite(y)).toBe(true));
+      }
+    }
+  });
+
   it('puts each stop at its value on the axis', () => {
     expect(stopY(SCALE_STOPS, 0, 90)).toBe(0);
     expect(stopY(SCALE_STOPS, 1, 90)).toBe(10);
@@ -137,21 +151,21 @@ describe('slider drag', () => {
 });
 
 describe('slider labels', () => {
-  it('sizes the track so the panel (46 px down, 48 px of chrome) ends 6 px above the card bottom', () => {
-    expect(sliderTrack(200)).toBe(100);
-    expect(sliderTrack(150)).toBe(50);
+  it('sizes the track so the panel (46 px down, 56 px of chrome) ends 6 px above the card bottom', () => {
+    expect(sliderTrack(200)).toBe(92);
+    expect(sliderTrack(150)).toBe(42);
   });
 
   it('labels the first, the last and the multiples of 25 where they are 18 px or more apart', () => {
-    // Downscale: 100 at 0, 75 at 27.8, 50 at 55.6, 25 at 83.3, 10 at 100: 25 is 16.7 px from 10 and goes
-    expect(labelledStops(SCALE_STOPS, 100)).toEqual([0, 4, 9, 17]);
+    // Downscale: 100 at 0, 75 at 25.6, 50 at 51.1, 25 at 76.7, 10 at 92: 25 is 15.3 px from 10 and goes
+    expect(labelledStops(SCALE_STOPS, 92)).toEqual([0, 4, 9, 17]);
     // Compression: q 100, 75, 50, 25, Extreme sit 25 px apart
-    expect(labelledStops(QUALITY_STOPS, 100)).toEqual([0, 5, 10, 15, 20]);
+    expect(labelledStops(QUALITY_STOPS, 92)).toEqual([0, 5, 10, 15, 20]);
   });
 
   it('drops round stops that crowd on a compact card', () => {
-    expect(labelledStops(SCALE_STOPS, 50)).toEqual([0, 9, 17]);
-    expect(labelledStops(QUALITY_STOPS, 50)).toEqual([0, 10, 20]);
+    expect(labelledStops(SCALE_STOPS, 42)).toEqual([0, 9, 17]);
+    expect(labelledStops(QUALITY_STOPS, 42)).toEqual([0, 10, 20]);
   });
 
   it('never labels two stops closer than 18 px', () => {

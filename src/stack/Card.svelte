@@ -16,7 +16,7 @@
     scaleLabel,
     scalePatch,
     sliderIndex,
-    stopY,
+    stopYs,
     sliderTrack,
     labelledStops,
     stopIndex,
@@ -178,8 +178,7 @@
 
   /** Every stop's distance from the track's top, px: the track is the value axis. */
   const slideYs = $derived.by(() => {
-    const stops = slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS;
-    return stops.map((_, i) => stopY(stops, i, TRACK));
+    return stopYs(slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS, TRACK);
   });
 
   /** The stops that get a value label (round ones, spaced for the track). */
