@@ -109,6 +109,9 @@ pub struct Job {
     times: Option<Times>,
     /// `output` (and the clipboard) hold a result, not the original.
     changed: bool,
+    /// A "Convert and keep both" twin: the source belongs to the parent's
+    /// card, so the twin never overwrites, trashes or restores it.
+    twin: bool,
 }
 
 /// A file job's result on disk (spec §4.4: one result per job).
@@ -216,6 +219,7 @@ impl Job {
             pending: Some(bytes),
             times: None,
             changed: false,
+            twin: false,
         }
     }
 
@@ -273,6 +277,7 @@ impl Job {
             pending: None,
             times: None,
             changed: false,
+            twin: false,
         })
     }
 
@@ -281,6 +286,17 @@ impl Job {
         let done = state == JobState::Done;
         let busy = matches!(state, JobState::Queued | JobState::Optimising { .. });
         let editable = self.source_format == Format::Gif || !self.animated;
+        let backed_up = self.backup.as_ref().is_some_and(|b| b.exists());
+        let edit_hint = if busy || (editable && backed_up) {
+            None
+        } else if !editable {
+            Some(tf(
+                "error.animated_edit",
+                &[("format", self.source_format.label())],
+            ))
+        } else {
+            Some(t("card.no_original"))
+        };
         JobUpdate {
             id: self.id.clone(),
             can_restore: done && self.backup.is_some(),
@@ -297,9 +313,11 @@ impl Job {
             dims_after: if done { self.dims_after } else { None },
             format: Some(self.format),
             converted: self.format != self.source_format,
-            can_edit: !busy && editable && self.backup.as_ref().is_some_and(|b| b.exists()),
+            can_edit: !busy && editable && backed_up,
             edits: self.edits.clone(),
             note: if done { self.note.clone() } else { None },
+            source_format: Some(self.source_format),
+            edit_hint,
             state,
         }
     }
@@ -386,6 +404,7 @@ impl Job {
             pending: self.pending.clone(),
             times: self.times,
             changed: false,
+            twin: true,
         }
     }
 
@@ -583,7 +602,7 @@ impl Job {
                     Local::now().date_naive(),
                 );
                 let own = self.last.as_ref().map(|w| w.path.clone());
-                let path = if wanted == source {
+                let path = if wanted == source && !self.twin {
                     wanted
                 } else {
                     output::unique(&wanted, own.as_deref())
@@ -595,7 +614,8 @@ impl Job {
                 self.write_file(&path, bytes, &source, o)?;
                 let trash_source = kind == OutputKind::Converted
                     && o.output.converted.location == Location::InPlace
-                    && path != source;
+                    && path != source
+                    && !self.twin;
                 if trash_source && source.exists() {
                     let _ = (o.trash)(&source);
                 }
@@ -771,6 +791,8 @@ pub fn notice(reason: String) -> JobUpdate {
         can_edit: false,
         edits: Edits::default(),
         note: None,
+        source_format: None,
+        edit_hint: None,
     }
 }
 
@@ -1516,6 +1538,77 @@ mod tests {
         assert_ne!(child.output, parent.output);
         assert!(parent.output.unwrap().exists());
         assert_eq!(child.format, Some(Format::WebP));
+    }
+
+    #[test]
+    fn a_keep_both_twin_never_touches_its_parents_file() {
+        let env = Env::new();
+        let (job, path) = done_file(&env, "shot.png");
+        let parent = fs::read(&path).unwrap();
+        let o = options();
+        let mut twin = job.fork();
+        twin.edit(convert(Format::WebP));
+        let update = run(&mut twin, Level::Normal, &o, &env).0.unwrap().update;
+
+        let webp = env.dir.path().join("shot.webp");
+        assert_eq!(update.output, Some(webp.clone()));
+        assert_eq!(fs::read(&path).unwrap(), parent, "the parent's file stays");
+
+        let restored = twin.restore(&o, &mut |_, _, _| Ok(())).update;
+        assert_eq!(restored.state, JobState::Restored);
+        assert!(!webp.exists(), "the twin's own file went to the Trash");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            parent,
+            "and the parent's still stays"
+        );
+    }
+
+    #[test]
+    fn a_twin_that_keeps_its_format_writes_beside_the_source() {
+        let env = Env::new();
+        let (job, path) = done_file(&env, "shot.png");
+        let parent = fs::read(&path).unwrap();
+        let mut twin = job.fork();
+        twin.edit(scale(50));
+        let update = run(&mut twin, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(update.output, Some(env.dir.path().join("shot (2).png")));
+        assert_eq!(fs::read(&path).unwrap(), parent);
+    }
+
+    #[test]
+    fn a_card_says_why_its_tools_are_off() {
+        let env = Env::new();
+        let mut animated = Job::clipboard(
+            Format::WebP,
+            testutil::animated_webp(),
+            false,
+            "%f",
+            &env.work(),
+            now(),
+        );
+        let update = run(&mut animated, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            update.edit_hint.as_deref(),
+            Some("Animated WebP can't be edited yet")
+        );
+        assert_eq!(update.source_format, Some(Format::WebP));
+
+        let (job, _) = done_file(&env, "shot.png");
+        let done = job.update(JobState::Done, None);
+        assert!(done.can_edit);
+        assert_eq!(done.edit_hint, None);
+        fs::remove_file(done.thumb_path.unwrap()).unwrap();
+        let gone = job.update(JobState::Done, None);
+        assert!(!gone.can_edit);
+        assert_eq!(gone.edit_hint.as_deref(), Some("Original no longer kept"));
+        assert_eq!(job.update(JobState::Queued, None).edit_hint, None);
     }
 
     #[test]

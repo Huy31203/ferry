@@ -43,6 +43,7 @@
   "rename.invalid": "Can't use / \\ : or a reserved name",
   "rename.taken": "Name taken",
   "rename.gone": "File no longer there",
+  "card.no_original": "Original no longer kept",
   "error.write": "Can't write to {dir}",
   "error.read": "Can't read {name}: {why}",
   "error.not_an_image": "{name} is not a PNG, JPEG, GIF or WebP image",
