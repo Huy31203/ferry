@@ -874,3 +874,1267 @@ Expected: PASS. Task 5 adds the end-to-end `a_tiff_card_gets_a_poster` once TIFF
 git add crates/ferry-core src/stack/Card.svelte src/lib/i18n/en.json
 git commit -m "feat(core): poster thumbnails for TIFF, HEIC and PDF cards"
 ```
+
+---
+
+## TIFF
+
+### Task 5: Reading TIFF
+
+**Files:**
+- Modify: `crates/ferry-core/Cargo.toml` (`tiff = "0.11"`)
+- Create: `crates/ferry-core/src/optimise/tiff.rs`; `optimise/mod.rs` (`pub(crate) mod tiff;` after `pub(crate) mod png;`)
+- Modify: `crates/ferry-core/src/edit/raster.rs` (`decode` arm `Tiff`)
+- Modify: `crates/ferry-core/src/testutil.rs`
+
+**Interfaces:**
+- Consumes: `raster::{Raster, orient}`, `png::MAX_PIXELS`, `sniff::tiff_orientation`.
+- Produces:
+  - `tiff::decode_pages(bytes: &[u8]) -> Result<Vec<Raster>, OptimiseError>`: every page as straight RGBA8, oriented by its tag 274, carrying its ICC (tag 34675).
+  - `tiff::decode_raster(bytes: &[u8]) -> Result<Raster, OptimiseError>`: the first page only. It must not decode the other pages.
+  - `raster::decode(_, Format::Tiff)` calls `tiff::decode_raster`.
+  - `testutil::tiff(pages: &[TiffPage]) -> Vec<u8>`, written with the `tiff` encoder (uncompressed) from `screenshot_rgba` pixels.
+  - `testutil::TiffPage { size: (u32, u32), colour: TiffColour, orientation: u16, icc: Option<Vec<u8>> }` with `TiffColour::{Rgb8, Rgba8, Gray8, Gray16, Cmyk8}` and `Default` (`(64, 48)`, `Rgb8`, 1, `None`).
+
+**Conversion to RGBA8:**
+- 16-bit samples are narrowed with `>> 8`.
+- Gray becomes `[v, v, v, 255]`.
+- CMYK becomes `[255 − min(255, c + k), …, 255]`. This is naive, with no CMS; the note is in the doc comment.
+- Any other colour type, or a page over `MAX_PIXELS` (checked from the header first), is `OptimiseError::Unsupported(t("pdf.tiff.unsupported"))`.
+- A decode error is `OptimiseError::Decode(…)`.
+
+- [ ] **Step 1: Write the failing tests** (`optimise/tiff.rs` and `pipeline.rs`)
+
+```rust
+#[test]
+fn every_supported_colour_type_reads_as_rgba() {
+    for colour in [TiffColour::Rgb8, TiffColour::Rgba8, TiffColour::Gray8, TiffColour::Gray16, TiffColour::Cmyk8] {
+        let r = decode_raster(&testutil::tiff(&[TiffPage { colour, ..TiffPage::default() }])).unwrap();
+        assert_eq!((r.width, r.height, r.rgba.len()), (64, 48, 64 * 48 * 4), "{colour:?}");
+    }
+}
+
+#[test]
+fn orientation_and_icc_are_honoured_per_page() {
+    let icc = vec![7_u8; 300];
+    let bytes = testutil::tiff(&[
+        TiffPage { orientation: 6, icc: Some(icc.clone()), ..TiffPage::default() },
+        TiffPage { size: (10, 20), ..TiffPage::default() },
+    ]);
+    let pages = decode_pages(&bytes).unwrap();
+    assert_eq!(pages.len(), 2);
+    assert_eq!((pages[0].width, pages[0].height, pages[0].icc.clone()), (48, 64, Some(icc)));
+    assert_eq!((pages[1].width, pages[1].height), (10, 20));
+}
+
+#[test]
+fn a_cut_short_tiff_is_a_decode_error() {
+    let bytes = testutil::tiff(&[TiffPage::default()]);
+    assert!(matches!(decode_raster(&bytes[..bytes.len() / 2]), Err(OptimiseError::Decode(_))));
+}
+
+// pipeline.rs
+#[test]
+fn a_tiff_file_becomes_a_jpeg_beside_it_and_gets_a_poster() {
+    let env = Env::new();
+    let path = env.file("scan.tiff", &testutil::tiff(&[TiffPage { size: (300, 200), ..TiffPage::default() }]));
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+    let card = finished.unwrap().update;
+    assert_eq!((card.state, card.format, card.converted), (JobState::Done, Some(Format::Jpeg), true));
+    assert!(path.with_extension("jpg").exists());
+    let poster = card.poster.expect("a TIFF card has a poster");
+    assert_eq!(crate::sniff::dimensions(&fs::read(poster).unwrap(), Format::Png), Some((300, 200)));
+}
+```
+
+(Images' Converted default is In place, so `scan.tiff` goes to the test Trash; Restore brings it back, as with any conversion.)
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core tiff`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement `decode_pages`, `decode_raster`, the `raster::decode` arm and the fixtures**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.tiff.unsupported": "This TIFF's colour format isn't supported",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core tiff`, `cargo test -p ferry-core pipeline`, `cargo test -p ferry-core raster`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core Cargo.lock src/lib/i18n/en.json
+git commit -m "feat(core): read TIFF pages with orientation and ICC"
+```
+
+### Task 6: Writing TIFF and TIFF from the clipboard
+
+**Files:**
+- Modify: `crates/ferry-core/src/optimise/tiff.rs`
+- Modify: `crates/ferry-core/src/optimise/mod.rs` (`encode` arm `Tiff` → `tiff::optimise`)
+- Modify: `crates/ferry-core/src/edit/raster.rs` (`encode` arm `Tiff` → `tiff::encode_rasters(&[r.clone()])`)
+- Modify: `crates/ferry-core/src/edit/mod.rs` (`Work::TiffPages`, a branch in `prepare`)
+- Modify: `crates/ferry-core/src/pipeline.rs` (step label `(true, Format::Tiff) => "pdf.step.tiff"`)
+- Modify: `src-tauri/src/platform/macos_clipboard.rs` (`IMAGE_TYPES` gains `("public.tiff", Format::Tiff)` as the last entry; the array length becomes 5)
+- Modify: `src/stack/Card.svelte`, `src/lib/cards.ts` (no Compression button for TIFF)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: Task 5's decode, `geometry::{crop_size, output_size, centre}`, `raster::cut`.
+- Produces:
+  - `tiff::optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError>`: lossless.
+    - Every page is decoded in its own colour type and bit depth (no RGBA conversion), then written with `Compression::Deflate(DeflateLevel::Best)` and `Predictor::Horizontal`.
+    - Each page keeps ICC 34675, XResolution 282, YResolution 283, ResolutionUnit 296 and Orientation 274.
+    - Supported colour types: Gray8, Gray16, GrayA8, RGB8, RGB16, RGBA8, RGBA16, CMYK8. Others → `Unsupported(t("pdf.tiff.unsupported"))`.
+  - `tiff::encode_rasters(pages: &[Raster]) -> Result<Vec<u8>, OptimiseError>`: RGBA8 pages, written as RGB8 when every alpha is 255, else RGBA8. Each keeps its ICC. Deflate + predictor.
+  - `edit::Work::TiffPages(Vec<Raster>)` → `run` calls `tiff::encode_rasters`. `prepare` uses it when `source == Tiff && target == Tiff && edits.reshapes() && tiff_page_count > 1`: each page is cut with its own window (`crop_size`, `place` with the page's own pixels, `output_size`). `Applied.dims` is the first page's output size.
+  - `railActions(card)` leaves out `'compression'` when `card.format === 'tiff'` (lossless output).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// optimise/tiff.rs
+#[test]
+fn optimising_keeps_every_page_and_every_pixel() {
+    let icc = vec![3_u8; 200];
+    let input = testutil::tiff(&[
+        TiffPage { size: (200, 150), icc: Some(icc.clone()), ..TiffPage::default() },
+        TiffPage { size: (100, 80), colour: TiffColour::Gray16, ..TiffPage::default() },
+    ]);
+    let out = optimise(&input, &OptimiseOptions::default()).unwrap();
+    assert!(out.len() * 100 <= input.len() * 99, "{} -> {}", input.len(), out.len());
+    assert_eq!(crate::sniff::tiff_page_count(&out), 2);
+    assert_eq!(decode_pages(&out).unwrap(), decode_pages(&input).unwrap());
+    assert_eq!(decode_pages(&out).unwrap()[0].icc, Some(icc));
+}
+
+#[test]
+fn resolution_survives_optimising() {
+    let input = testutil::tiff_with_resolution(300); // add to testutil: one page, 300 dpi, inch unit
+    let out = optimise(&input, &OptimiseOptions::default()).unwrap();
+    assert_eq!(testutil::tiff_resolution(&out), Some(300));
+}
+
+#[test]
+fn a_tiff_already_deflated_comes_out_already_optimal() {
+    let once = optimise(&testutil::tiff(&[TiffPage::default()]), &OptimiseOptions::default()).unwrap();
+    assert_eq!(crate::optimise::optimise(&once, Format::Tiff, &OptimiseOptions::default()).unwrap(), Outcome::AlreadyOptimal);
+}
+
+// edit/mod.rs
+#[test]
+fn cropping_a_multi_page_tiff_crops_every_page() {
+    let input = testutil::tiff(&[TiffPage { size: (300, 200), ..TiffPage::default() }, TiffPage { size: (100, 100), ..TiffPage::default() }]);
+    let a = applied(&input, Format::Tiff, |e| e.aspect = Some((1, 1)));
+    let pages = crate::optimise::tiff::decode_pages(&a.bytes).unwrap();
+    assert_eq!(pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>(), [(200, 200), (100, 100)]);
+    assert_eq!((a.format, a.dims), (Format::Tiff, (200, 200)));
+}
+
+#[test]
+fn a_single_page_tiff_crops_through_the_raster_path() {
+    let a = applied(&testutil::tiff(&[TiffPage { size: (300, 200), ..TiffPage::default() }]), Format::Tiff, |e| e.scale = Some(50));
+    assert_eq!((a.format, a.dims), (Format::Tiff, (150, 100)));
+}
+```
+
+`src-tauri/src/platform/macos_clipboard.rs` test, in the file's existing private-pasteboard style:
+
+```rust
+#[test]
+fn a_tiff_on_the_clipboard_is_read_when_nothing_better_is_there() {
+    let pb = private_pasteboard(); // the helper the existing tests use (`pb.0`)
+    let tiff = tiny_tiff(); // built inline, see the note below
+    pb.0.clearContents();
+    pb.0.setData_forType(Some(&NSData::with_bytes(&tiff)), &NSString::from_str("public.tiff"));
+    assert_eq!(read_from(&pb.0).image.map(|(f, _)| f), Some(Format::Tiff));
+}
+```
+
+Note: `ferry-core`'s `testutil` is `#[cfg(test)]`-only and not visible from `src-tauri`. Build the TIFF bytes inline in the test: an 8-byte header plus one IFD with tags 256, 257, 258, 259, 262, 273, 277, 279 for a 1×1 RGB8 strip. Write a small `fn tiny_tiff() -> Vec<u8>` in the test module.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core tiff`, `cargo test -p ferry-core edit::tests`, `cargo test -p ferry a_tiff_on_the_clipboard`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.step.tiff": "Compressing TIFF",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: the three commands above, then `cargo test -p ferry-core`, `pnpm test`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src-tauri/src/platform/macos_clipboard.rs src/lib src/stack/Card.svelte
+git commit -m "feat(core): lossless TIFF optimise, multi-page TIFF edits, TIFF from the clipboard"
+```
+
+---
+
+## HEIC
+
+### Task 7: HEIC on macOS through ImageIO
+
+**Files:**
+- Modify: `crates/ferry-core/Cargo.toml`. Under `[target.'cfg(target_os = "macos")'.dependencies]`:
+  - `objc2 = "0.6"`;
+  - `objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFDictionary", "CFString", "CFNumber", "CFArray"] }`;
+  - `objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDataProvider"] }`;
+  - `objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "CGImageDestination", "CGImageProperties", "objc2-core-graphics"] }`.
+- Create: `crates/ferry-core/src/oscodec/macos.rs`
+- Modify: `crates/ferry-core/src/oscodec/mod.rs` (route to `macos` under `#[cfg(target_os = "macos")]`; keep the stubs for other OSes)
+- Create: `crates/ferry-core/src/optimise/heic.rs`; `optimise/mod.rs` (`pub(crate) mod heic;`, `encode` arm `Heic` → `heic::optimise`)
+- Modify: `crates/ferry-core/src/edit/raster.rs` (`decode` `Heic` → `oscodec::decode`; `encode` `Heic` → `oscodec::encode`)
+- Modify: `crates/ferry-core/src/pipeline.rs` (step label `(true, Format::Heic) => "pdf.step.heic"`)
+- Modify: `src-tauri/src/platform/macos_clipboard.rs` (`IMAGE_TYPES` gains `("public.heic", Format::Heic)` before the `public.tiff` entry)
+- Modify: `crates/ferry-core/src/testutil.rs` (macOS only: `heic(w, h, orientation) -> Option<Vec<u8>>`, written through `oscodec::encode` with orientation property set; `None` when there is no encoder)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: `raster::Raster`, `png::MAX_PIXELS`, `optimise::quality`.
+- Produces:
+  - `oscodec::decode(bytes, Format::Heic) -> Result<Raster, OptimiseError>` (macOS):
+    - `CGImageSourceCreateWithData`, then `CGImageSourceGetPrimaryImageIndex`;
+    - check `kCGImagePropertyPixelWidth/Height` against `MAX_PIXELS`;
+    - `CGImageSourceCreateThumbnailAtIndex` with `kCGImageSourceCreateThumbnailFromImageAlways = true`, `kCGImageSourceCreateThumbnailWithTransform = true` and `kCGImageSourceThumbnailMaxPixelSize = max(w, h)`. This gives full-size pixels with EXIF orientation and HEIF `irot`/`imir` applied;
+    - draw into a `CGBitmapContext` (8 bpc, `kCGImageAlphaPremultipliedLast`) in the image's own colour space when its model is RGB, else sRGB;
+    - un-premultiply. `icc = CGColorSpaceCopyICCData` (RGB only).
+  - `oscodec::encode(r: &Raster, Format::Heic, quality: u8) -> Result<Vec<u8>, OptimiseError>`: a `CGImage` from straight RGBA (`kCGImageAlphaLast`), with a colour space from `r.icc` (`CGColorSpaceCreateWithICCData`, else sRGB). Then `CGImageDestinationCreateWithData(…, "public.heic", 1, None)`, `AddImage` with `kCGImageDestinationLossyCompressionQuality = quality / 100`, and `Finalize`.
+  - `oscodec::reencode(bytes: &[u8], Format::Heic, quality: u8, strip_metadata: bool) -> Result<Vec<u8>, OptimiseError>`: `CGImageDestinationAddImageFromSource` (keeps orientation, colour and metadata) with the quality, plus `kCGImageMetadataShouldExcludeGPS = strip_metadata`.
+  - `oscodec::can_encode(Format::Heic)`: `CGImageDestinationCopyTypeIdentifiers()` contains `public.heic`, cached in a `OnceLock<bool>`.
+  - `heic::optimise(input, o)` = `oscodec::reencode(input, Format::Heic, quality(o), o.strip_metadata)`.
+  - Errors:
+    - ImageIO returns null for unreadable data → `OptimiseError::Decode("ImageIO could not read the HEIC")`;
+    - on a non-mac non-Windows OS → `Unsupported(tf("pdf.read_unsupported", …))` / `pdf.write_unsupported`.
+
+- [ ] **Step 1: Write the failing tests** (`oscodec/macos.rs`, all `#[cfg(target_os = "macos")]`)
+
+```rust
+#[test]
+fn a_heic_round_trips_with_its_size() {
+    let Some(bytes) = testutil::heic(120, 80, 1) else { return };
+    assert_eq!(crate::sniff::sniff(&bytes), Some(Format::Heic));
+    let r = decode(&bytes).unwrap();
+    assert_eq!((r.width, r.height, r.rgba.len()), (120, 80, 120 * 80 * 4));
+    assert!(r.icc.is_some(), "an RGB HEIC carries its colour profile");
+}
+
+#[test]
+fn orientation_is_applied_to_the_pixels() {
+    let Some(bytes) = testutil::heic(120, 80, 6) else { return };
+    let r = decode(&bytes).unwrap();
+    assert_eq!((r.width, r.height), (80, 120));
+}
+
+#[test]
+fn a_heic_converts_to_jpeg_through_the_recipe() {
+    let Some(bytes) = testutil::heic(120, 80, 1) else { return };
+    let edits = Edits { format: Some(Format::Jpeg), ..Edits::default() };
+    let a = crate::edit::apply(&bytes, Format::Heic, &edits, &OptimiseOptions::default()).unwrap();
+    assert_eq!((a.format, a.dims, crate::sniff::sniff(&a.bytes)), (Format::Jpeg, (120, 80), Some(Format::Jpeg)));
+}
+
+#[test]
+fn a_lower_quality_heic_is_smaller() {
+    let Some(bytes) = testutil::heic(400, 300, 1) else { return };
+    let high = reencode(&bytes, Format::Heic, 95, true).unwrap();
+    let low = reencode(&bytes, Format::Heic, 30, true).unwrap();
+    assert!(low.len() < high.len());
+}
+
+#[test]
+fn garbage_is_a_decode_error_not_a_crash() {
+    assert!(matches!(decode(&testutil::ftyp(b"heic", &[b"mif1"])), Err(OptimiseError::Decode(_))));
+}
+
+#[test]
+fn macos_ci_can_encode_heic() {
+    if std::env::var_os("CI").is_some() {
+        assert!(can_encode(Format::Heic), "GitHub's macOS runners have the HEVC encoder");
+    }
+}
+```
+
+In `macos_clipboard.rs`, add a test like Task 6's: a `public.heic` entry beside `public.tiff` → read gives `Heic`. Build the bytes with the helper `ferry_core::oscodec::encode` on a 2×2 raster, which is public.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core oscodec`
+Expected: FAIL (functions missing).
+
+- [ ] **Step 3: Implement `oscodec/macos.rs`, `heic.rs` and the arms as specified**
+
+All CoreFoundation objects are `CFRetained`. Every `unsafe` block gets a one-line `// SAFETY:` comment.
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.step.heic": "Encoding HEIC",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core oscodec`, `cargo test -p ferry-core`, `cargo test -p ferry heic`, `cargo clippy --workspace --all-targets -- -D warnings`
+Expected: PASS on this Mac.
+
+**Manual check (ask first):** copy a `.heic` photo in Finder and press ⌃⇧C. The card shows a poster, then `photo.jpg` with "converted"; the HEIC is in the Trash. Restore brings it back. The format bar shows `HEIC · PNG · JPEG · WebP · AVIF` (plus HEIC in the standard list on a PNG card when this Mac can encode).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core Cargo.lock src-tauri/src/platform/macos_clipboard.rs src/lib/i18n/en.json
+git commit -m "feat(core): HEIC decode and encode through macOS ImageIO"
+```
+
+### Task 8: HEIC on Windows through WIC (decode only)
+
+**Windows-only code; it cannot be compiled on this Mac. CI's `core (windows-latest)` and `bundle (windows)` jobs compile and test it.**
+
+**Files:**
+- Modify: `crates/ferry-core/Cargo.toml`: `[target.'cfg(windows)'.dependencies] windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }`
+- Create: `crates/ferry-core/src/oscodec/windows.rs` (`#[cfg(windows)]` in `oscodec/mod.rs`)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces: `oscodec::decode(bytes, Format::Heic)` on Windows:
+  - `CoInitializeEx(None, COINIT_MULTITHREADED)`; `RPC_E_CHANGED_MODE` is fine. Pair a successful init with `CoUninitialize` in a drop guard.
+  - `CoCreateInstance(&CLSID_WICImagingFactory)`, then `IWICStream::InitializeFromMemory`, then `CreateDecoderFromStream(…, WICDecodeMetadataCacheOnDemand)`, then `GetFrame(0)`.
+  - Check the size against `MAX_PIXELS`. Use `IWICFormatConverter` to `GUID_WICPixelFormat32bppRGBA`, then `CopyPixels`.
+  - Orientation: `GetMetadataQueryReader().GetMetadataByName("System.Photo.Orientation")` as u16, applied with `raster::orient`.
+  - ICC: `GetColorContexts`, the first `WICColorContextProfile`, `GetProfileBytes`.
+  - `HRESULT` `WINCODEC_ERR_COMPONENTNOTFOUND` (`0x88982F50`) from `CreateDecoderFromStream` → `OptimiseError::Unsupported(t("pdf.heic.windows_codec"))`. Any other failure → `Decode(e.message())`.
+- `can_encode(Heic)` stays `false` and `encode`/`reencode` return `Unsupported(pdf.write_unsupported)` on Windows.
+
+- [ ] **Step 1: Write the failing test** (`oscodec/windows.rs`, `#[cfg(windows)]`)
+
+```rust
+#[test]
+fn a_missing_windows_codec_says_what_to_install() {
+    // GitHub's Windows runners have no HEIF extension, so the codec lookup fails;
+    // with the extension installed, the junk below is a decode error instead.
+    let junk = testutil::heif(b"heic", &[(64, 48)], None);
+    match decode(&junk) {
+        Err(OptimiseError::Unsupported(m)) => assert_eq!(m, crate::i18n::t("pdf.heic.windows_codec")),
+        Err(OptimiseError::Decode(_)) => {}
+        other => panic!("{other:?}"),
+    }
+}
+```
+
+- [ ] **Step 2: Check that the non-Windows build is unaffected**
+
+Run: `cargo check -p ferry-core` on the Mac.
+Expected: PASS. The Windows test can only fail or pass in CI, which runs when the user pushes (never push without asking). Until then, the commit message says "CI-verified pending".
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.heic.windows_codec": "Opening HEIC needs Microsoft's HEIF and HEVC extensions — get them from the Microsoft Store",
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `cargo test -p ferry-core` and `cargo clippy -p ferry-core --all-targets -- -D warnings` on the Mac.
+Expected: PASS (the Windows file is not compiled here). On Windows CI: `core (windows-latest)` passes `a_missing_windows_codec_says_what_to_install`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core Cargo.lock src/lib/i18n/en.json
+git commit -m "feat(core): HEIC decode through Windows WIC (CI-verified only, not run on a Windows desktop)"
+```
+
+---
+
+## AVIF
+
+### Task 9: AVIF decode and encode
+
+**Files:**
+- Modify: `crates/ferry-core/Cargo.toml`:
+  - `avif-decode = { version = "3.0", default-features = false }`;
+  - `ravif = { version = "0.13", default-features = false, features = ["threading"] }`;
+  - `moxcms = "0.9"`.
+- Create: `crates/ferry-core/src/optimise/avif.rs`; `optimise/mod.rs` (`pub(crate) mod avif;`, `encode` arm)
+- Modify: `crates/ferry-core/src/edit/raster.rs` (`decode`/`encode` arms `Avif`)
+- Modify: `crates/ferry-core/src/pipeline.rs` (step label `(true, Format::Avif) => "pdf.step.avif"`)
+- Modify: `src-tauri/src/platform/macos_clipboard.rs` (`("public.avif", Format::Avif)` before `public.heic`)
+- Modify: `.github/workflows/ci.yml` and `.github/workflows/release.yml`: a step `- uses: ilammy/setup-nasm@v1` directly before "Build gifsicle sidecar" in `core`, `bundle` and `release`
+- Modify: `crates/ferry-core/src/testutil.rs` (`avif(w: u32, h: u32, alpha: bool) -> Vec<u8>` via `avif::encode_raster` at quality 90)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces:
+  - `avif::decode_raster(bytes: &[u8]) -> Result<Raster, OptimiseError>`:
+    - `avif_decode::Decoder::from_avif(bytes)?.to_image()?`;
+    - `Rgb8`/`Rgba8`/`Gray8` map directly, and the 16-bit variants with `>> 8`;
+    - check the header size (`isobmff::primary_size`) against `MAX_PIXELS` first;
+    - `icc: None`.
+  - `avif::encode_raster(r: &Raster, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError>`:
+    - when `r.icc` is `Some` and parses (`moxcms::ColorProfile::new_from_slice`), first transform RGBA to sRGB (`create_transform_8bit(Layout::Rgba, &ColorProfile::new_srgb(), Layout::Rgba, TransformOptions::default())`); an unparsable profile leaves the pixels as they are;
+    - then `ravif::Encoder::new().with_quality(f32::from(quality(o))).with_alpha_quality(f32::from(quality(o))).with_speed(6).encode_rgba(Img::new(&pixels, w, h))`, returning `avif_file`.
+  - `avif::optimise(input, o)` = decode, then `encode_raster`. The caller's `classify` keeps the original when it is not smaller.
+
+- [ ] **Step 1: Write the failing tests** (`optimise/avif.rs`)
+
+```rust
+#[test]
+fn an_avif_round_trips_with_its_size_and_alpha() {
+    let bytes = testutil::avif(64, 48, true);
+    assert_eq!(crate::sniff::sniff(&bytes), Some(Format::Avif));
+    assert_eq!(crate::sniff::dimensions(&bytes, Format::Avif), Some((64, 48)));
+    let r = decode_raster(&bytes).unwrap();
+    assert_eq!((r.width, r.height), (64, 48));
+    assert!(r.rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255), "alpha survives");
+}
+
+#[test]
+fn every_still_format_converts_to_avif() {
+    for (format, bytes) in [
+        (Format::Png, testutil::png(120, 80)),
+        (Format::Jpeg, testutil::jpeg(120, 80, 90, &testutil::JpegExtras::default())),
+        (Format::Tiff, testutil::tiff(&[testutil::TiffPage { size: (120, 80), ..Default::default() }])),
+    ] {
+        let edits = Edits { format: Some(Format::Avif), ..Edits::default() };
+        let a = crate::edit::apply(&bytes, format, &edits, &OptimiseOptions::default()).unwrap();
+        assert_eq!((a.format, crate::sniff::sniff(&a.bytes), a.dims), (Format::Avif, Some(Format::Avif), (120, 80)), "{format:?}");
+    }
+}
+
+#[test]
+fn a_wide_gamut_source_is_converted_to_srgb() {
+    let mut r = Raster { width: 8, height: 8, rgba: [0, 255, 0, 255].repeat(64), icc: None };
+    let plain = decode_raster(&encode_raster(&r, &OptimiseOptions::default()).unwrap()).unwrap();
+    r.icc = Some(moxcms::ColorProfile::new_display_p3().encode().unwrap());
+    let p3 = decode_raster(&encode_raster(&r, &OptimiseOptions::default()).unwrap()).unwrap();
+    assert_ne!(plain.rgba[..4], p3.rgba[..4], "P3 green becomes a different sRGB value");
+}
+
+#[test]
+fn a_lower_quality_avif_is_smaller_and_plain_optimise_is_graded() {
+    let r = decode_raster(&testutil::avif(200, 150, false)).unwrap();
+    let q = |compression| OptimiseOptions { compression, ..OptimiseOptions::default() };
+    assert!(encode_raster(&r, &q(30)).unwrap().len() < encode_raster(&r, &q(95)).unwrap().len());
+    let high = encode_raster(&r, &q(100)).unwrap();
+    assert!(matches!(crate::optimise::optimise(&high, Format::Avif, &q(60)).unwrap(), Outcome::Smaller { .. }));
+}
+
+#[test]
+fn junk_is_a_decode_error() {
+    assert!(matches!(decode_raster(&testutil::ftyp(b"avif", &[b"mif1"])), Err(OptimiseError::Decode(_))));
+}
+```
+
+(If `moxcms` 0.9 names its Display P3 constructor differently, use the crate's equivalent; the assertion stays.)
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core avif` (NASM installed: `nasm -v`)
+Expected: FAIL (module missing). The first build compiles rav1d and rav1e and takes a few minutes.
+
+- [ ] **Step 3: Implement as specified**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.step.avif": "Encoding AVIF",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core avif`, `cargo test -p ferry-core`, `cargo clippy --workspace --all-targets -- -D warnings`
+Expected: PASS.
+
+**Manual check (ask first):** click AVIF on a PNG card. The card shows `shot.avif`. Compare (⌘D) shows it, since the webviews draw AVIF natively.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core Cargo.lock src-tauri/src/platform/macos_clipboard.rs .github/workflows src/lib/i18n/en.json
+git commit -m "feat(core): AVIF decode (rav1d) and encode (ravif), NASM in CI"
+```
+
+---
+
+## Animated WebP
+
+### Task 10: Animated WebP is optimised, not left alone
+
+**Files:**
+- Modify: `crates/ferry-core/Cargo.toml` (`libwebp-sys = "0.9"`)
+- Create: `crates/ferry-core/src/optimise/webp_anim.rs`; `optimise/mod.rs` (`pub(crate) mod webp_anim;`)
+- Modify: `crates/ferry-core/src/optimise/mod.rs`:
+  - `optimise()`'s early return becomes `if is_animated(..) && !matches!(format, Format::Gif | Format::WebP) { return Ok(Outcome::AlreadyOptimal) }`;
+  - `encode` arm `WebP` calls `webp_anim::optimise` when `is_animated`, else `webp::optimise`.
+- Modify: `crates/ferry-core/src/testutil.rs` (`animated_webp_frames(frames: &[u32], w: u32, h: u32) -> Vec<u8>`: a real animation, one frame per duration in ms, each frame a shifted `screenshot_rgba`, encoded lossless through `webp_anim::encode`. The existing header-only `animated_webp()` stays for the sniff tests)
+- Modify existing tests:
+  - `optimise::tests::animated_webp_and_apng_are_left_alone` keeps only the APNG half; it is renamed `apng_is_left_alone`;
+  - `edit::tests::an_animated_webp_cannot_be_edited` becomes `an_apng_cannot_be_edited` (use `testutil::with_png_chunk(&testutil::png(64, 64), b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0])`; the message is "Animated PNG can't be edited yet");
+  - `pipeline::tests::an_animated_webp_offers_no_edits` becomes `an_apng_offers_no_edits`;
+  - `pipeline::tests::a_card_says_why_its_tools_are_off`: switch its animated example to APNG if it uses WebP.
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Produces:
+  - `webp_anim::Animation { pub width: u32, pub height: u32, pub frames: Vec<Frame>, pub loop_count: u32, pub icc: Option<Vec<u8>> }`.
+  - `webp_anim::Frame { pub rgba: Vec<u8>, pub duration_ms: u32 }`: a full canvas, straight RGBA.
+  - `webp_anim::MAX_ANIMATION_BYTES: u64 = 1_000_000_000`.
+  - `webp_anim::frame_count(bytes: &[u8]) -> usize`: counts `ANMF` chunks with `webp::chunks`.
+  - `webp_anim::decode(bytes) -> Result<Animation, OptimiseError>`:
+    - first check `frame_count × w × h × 4` (size from `VP8X`) against `MAX_ANIMATION_BYTES` → `Unsupported(t("pdf.anim.too_large"))`;
+    - then `webp::AnimDecoder::new(bytes).decode()`. A frame's duration is its end timestamp minus the previous one; a 0 duration becomes 100;
+    - `icc` comes from the source's `ICCP` chunk.
+  - `webp_anim::encode(a: &Animation, o: &OptimiseOptions, extras: &webp::Extras) -> Result<Vec<u8>, OptimiseError>`, a direct `libwebp-sys` wrapper:
+    - `WebPAnimEncoderOptionsInitInternal(…, WebPGetMuxABIVersion())`, with `anim_params.loop_count = a.loop_count` and `allow_mixed = 1`;
+    - `WebPAnimEncoderNewInternal`. For each frame: a `WebPPicture` (`use_argb = 1`, `WebPPictureImportRGBA`), then `WebPAnimEncoderAdd(enc, pic, start_ms, &config)`, where `start_ms` is the sum of the earlier durations and `config` is lossy, `quality(o)`, `method` 4;
+    - then `WebPAnimEncoderAdd(enc, null, total_ms, null)`, `WebPAnimEncoderAssemble`, and copy out the bytes;
+    - `WebPAnimEncoderDelete`, `WebPPictureFree` and `WebPDataClear` run on every path (a drop guard);
+    - finally insert the extras: `ICCP` directly after `VP8X`, `EXIF` and `XMP ` at the end, and set the `VP8X` flags. Use the module's `chunks`/`push_chunk` helpers, made `pub(crate)`.
+  - `webp_anim::optimise(input, o)`: decode, then encode with `Extras { icc, exif/xmp unless o.strip_metadata }`.
+    - The animation safety net: when `frame_count(&out) != frame_count(input)` → `Err(OptimiseError::Encode(t("pdf.anim.flattened")))`.
+  - `webp_anim::first_frame(bytes) -> Result<Raster, OptimiseError>`: frame 0 with its ICC (used by Task 11).
+
+- [ ] **Step 1: Write the failing tests** (`optimise/webp_anim.rs`)
+
+```rust
+#[test]
+fn an_animation_round_trips_its_frames_timing_and_loop() {
+    let bytes = testutil::animated_webp_frames(&[100, 200, 300], 64, 48);
+    let a = decode(&bytes).unwrap();
+    assert_eq!((a.width, a.height, a.frames.len()), (64, 48, 3));
+    assert_eq!(a.frames.iter().map(|f| f.duration_ms).collect::<Vec<_>>(), [100, 200, 300]);
+    assert_eq!(a.loop_count, 0);
+}
+
+#[test]
+fn optimising_keeps_every_frame_and_the_last_frames_duration() {
+    let input = testutil::animated_webp_frames(&[100, 200, 300], 160, 120);
+    let out = optimise(&input, &OptimiseOptions::default()).unwrap();
+    assert_eq!(frame_count(&out), 3);
+    assert_eq!(decode(&out).unwrap().frames.last().unwrap().duration_ms, 300);
+    assert!(crate::sniff::is_animated(&out, Format::WebP));
+}
+
+#[test]
+fn the_colour_profile_survives() {
+    let mut a = decode(&testutil::animated_webp_frames(&[100, 100], 32, 32)).unwrap();
+    a.icc = Some(vec![5; 90]);
+    let extras = Extras { icc: a.icc.clone(), ..Extras::default() };
+    let out = encode(&a, &OptimiseOptions::default(), &extras).unwrap();
+    assert_eq!(decode(&out).unwrap().icc, Some(vec![5; 90]));
+}
+
+#[test]
+fn a_huge_animation_is_refused_before_decoding() {
+    let mut bytes = testutil::animated_webp_frames(&[100], 16, 16);
+    // VP8X canvas 16 383 × 16 383: width − 1 and height − 1 as 24-bit LE at 24 and 27.
+    bytes[24..27].copy_from_slice(&[0xFE, 0x3F, 0]);
+    bytes[27..30].copy_from_slice(&[0xFE, 0x3F, 0]);
+    assert!(matches!(decode(&bytes), Err(OptimiseError::Unsupported(m)) if m == t("pdf.anim.too_large")));
+}
+
+// optimise/mod.rs
+#[test]
+fn an_animated_webp_is_re_encoded_and_stays_animated() {
+    let input = testutil::animated_webp_frames(&[80, 80, 80, 80], 200, 150);
+    match optimise(&input, Format::WebP, &OptimiseOptions::default()).unwrap() {
+        Outcome::Smaller { bytes } => assert_eq!(webp_anim::frame_count(&bytes), 4),
+        other => assert_ne!(other, Outcome::Larger, "graded like any other format"),
+    }
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core webp_anim`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified, and update the four existing tests listed above**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.anim.too_large": "This animation is too large to re-encode",
+  "pdf.anim.flattened": "The animation would lose frames, so the original was kept",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core webp_anim`, `cargo test -p ferry-core optimise`, `cargo test -p ferry-core edit`, `cargo test -p ferry-core pipeline`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core Cargo.lock src/lib/i18n/en.json
+git commit -m "feat(core): re-encode animated WebP with libwebp's animation encoder"
+```
+
+### Task 11: Editing animations, and GIF → animated WebP
+
+**Files:**
+- Create: `crates/ferry-core/src/optimise/gif_frames.rs`; `optimise/mod.rs` (`pub(crate) mod gif_frames;`)
+- Modify: `crates/ferry-core/src/edit/mod.rs`:
+  - `apply`'s early `Unsupported(error.animated_edit)` excludes `WebP` as well as `Gif`;
+  - new `Work::Animation`;
+  - branches in `prepare`.
+- Modify: `crates/ferry-core/src/edit/raster.rs` (`decode(_, WebP)`: when `sniff::is_animated` → `webp_anim::first_frame`)
+- Modify: `crates/ferry-core/src/pipeline.rs` (`update()`: `editable = !self.animated || matches!(self.source_format, Format::Gif | Format::WebP)`)
+
+**Interfaces:**
+- Consumes: Task 10's `Animation`, `encode`, `first_frame`; `raster::cut`; `geometry::*`; `smart::frame`.
+- Produces:
+  - `gif_frames::decode(bytes: &[u8]) -> Result<Animation, OptimiseError>`: composited full-canvas frames, with the same `MAX_ANIMATION_BYTES` check (frame count from `sniff::gif_frame_count`).
+    - `duration_ms = delay × 10`, and a delay under 2 becomes 100 ms (what browsers do).
+    - `loop_count` from `decoder.repeat()`: `Infinite → 0`, `Finite(n) → n`.
+    - `icc: None`.
+    - Compositing, per frame on a transparent canvas the size of the logical screen:
+
+      ```text
+      before = canvas.clone() if frame.dispose == Previous
+      for each pixel of the frame inside the screen: if alpha > 0 { canvas[pixel] = frame pixel }
+      push canvas.clone() as the frame
+      match frame.dispose {
+          Background => clear the frame's rectangle (inside the screen) to [0, 0, 0, 0],
+          Previous   => canvas = before,
+          Keep | Any => {}
+      }
+      ```
+  - `edit::Work::Animation { anim: Animation, extras: webp::Extras }`: `run` calls `webp_anim::encode`. `prepare` uses it when the source is animated `WebP` with target `WebP`, or animated `Gif` with target `WebP`.
+    - The window comes from `geometry::crop_size((w, h), edits)` and `place(…, Some(&first frame raster))`; the size from `output_size`.
+    - Every frame is cut with `raster::cut` to that size; durations and loop count are kept.
+    - `extras.icc` = the source's ICC.
+    - The safety net applies: the output frame count must equal the input's, else `Encode(t("pdf.anim.flattened"))`.
+  - An animated WebP converted to PNG/JPEG/AVIF/HEIC goes down the `Pixels` path from `raster::decode` (first frame).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// gif_frames.rs
+#[test]
+fn frames_are_composited_on_the_screen() {
+    let a = decode(&testutil::gif(3)).unwrap();
+    assert_eq!((a.width, a.height, a.frames.len()), (64, 48, 3));
+    assert!(a.frames.iter().all(|f| f.rgba.len() == 64 * 48 * 4 && f.duration_ms >= 20));
+}
+
+#[test]
+fn background_disposal_clears_and_previous_restores() {
+    // testutil::gif_with_disposal (frames counted from 0): frame 0 fills the screen red (Keep);
+    // frame 1 draws a 4×4 blue square at 0,0 (Background); frame 2 draws a 1×1 green dot at
+    // 10,10 (Previous); frame 3 draws a 1×1 white dot at 20,20 (Keep).
+    let a = decode(&testutil::gif_with_disposal()).unwrap();
+    let px = |f: usize, x: u32, y: u32| a.frames[f].rgba[((y * a.width + x) * 4) as usize..][..4].to_vec();
+    assert_eq!(px(1, 0, 0), [0, 0, 255, 255]);
+    assert_eq!(px(2, 0, 0), [0, 0, 0, 0], "frame 1's square was cleared to background");
+    assert_eq!(px(2, 10, 10), [0, 255, 0, 255]);
+    assert_eq!(px(3, 10, 10), [255, 0, 0, 255], "frame 2's dot was undone back to red");
+}
+
+// edit/mod.rs
+#[test]
+fn an_animated_webp_downscales_every_frame() {
+    let a = applied(&testutil::animated_webp_frames(&[100, 100, 100], 200, 100), Format::WebP, |e| e.scale = Some(50));
+    assert_eq!((a.format, a.dims), (Format::WebP, (100, 50)));
+    let back = crate::optimise::webp_anim::decode(&a.bytes).unwrap();
+    assert_eq!((back.width, back.frames.len()), (100, 3));
+}
+
+#[test]
+fn a_gif_converts_to_an_animated_webp_with_every_frame() {
+    let a = applied(&testutil::gif(3), Format::Gif, |e| e.format = Some(Format::WebP));
+    assert_eq!(a.format, Format::WebP);
+    assert_eq!(crate::optimise::webp_anim::frame_count(&a.bytes), 3);
+}
+
+#[test]
+fn an_animated_webp_converts_to_a_still_png_from_its_first_frame() {
+    let a = applied(&testutil::animated_webp_frames(&[100, 100], 64, 48), Format::WebP, |e| e.format = Some(Format::Png));
+    assert_eq!((a.format, a.dims), (Format::Png, (64, 48)));
+}
+
+// pipeline.rs
+#[test]
+fn an_animated_webp_card_offers_its_tools() {
+    let env = Env::new();
+    let path = env.file("loop.webp", &testutil::animated_webp_frames(&[100, 100], 64, 48));
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+    let card = finished.unwrap().update;
+    assert!(card.can_edit && card.edit_hint.is_none());
+}
+```
+
+Add `testutil::gif_with_disposal()`: the 4-frame, 32×32 GIF described in the comment, written with the `gif` encoder, delays 10 cs.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core gif_frames`, `cargo test -p ferry-core edit::tests`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core` (all)
+Expected: PASS, including the gifsicle GIF tests, unchanged.
+
+**Manual check (ask first):** copy an animated GIF file, press ⌃⇧C, then click WebP. Open the result in Safari: it animates at the same speed, and its "First frame only" tooltip is gone from the WebP chip (still on PNG/JPEG). Downscale an animated WebP card to 50 %; the result still animates.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core
+git commit -m "feat(core): crop and downscale animated WebP; GIF converts to animated WebP"
+```
+
+---
+
+## PDF
+
+### Task 12: PDFium, bundled and loaded at run time
+
+**Files:**
+- Create: `scripts/fetch-pdfium.sh`
+- Create: `src-tauri/tauri.macos.conf.json`, `src-tauri/tauri.windows.conf.json`
+- Modify: `package.json` (`"pdfium": "bash scripts/fetch-pdfium.sh"` after `"sidecar"`)
+- Modify: `.github/workflows/ci.yml`:
+  - `core`: a step "Fetch PDFium" (`shell: bash`, `run: scripts/fetch-pdfium.sh ${{ matrix.triple }}`) after "Build gifsicle sidecar", plus env `FERRY_PDFIUM: ${{ github.workspace }}/src-tauri/binaries/${{ runner.os == 'Windows' && 'pdfium.dll' || 'libpdfium.dylib' }}`;
+  - `bundle`: the same step with `${{ matrix.target }}`, after "Build gifsicle sidecar";
+  - the Windows smoke test gains `if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'Ferry\pdfium.dll'))) { throw "pdfium.dll missing from install" }` after the gifsicle check.
+- Modify: `.github/workflows/release.yml` (the fetch step after "Build gifsicle sidecar")
+- Modify: `crates/ferry-core/Cargo.toml`:
+  - `lopdf = { version = "0.45", default-features = false }`;
+  - `pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_7881", "thread_safe"] }`.
+- Create: `crates/ferry-core/src/pdf/mod.rs` (module doc, `pub mod render;`, `DPI_STOPS`, `Defaults`), `crates/ferry-core/src/pdf/render.rs`; `lib.rs` (`pub mod pdf;` after `pub mod output;`)
+- Modify: `crates/ferry-core/src/poster.rs` (`Pdf` arm renders the page)
+- Modify: `crates/ferry-core/src/testutil.rs` (`pdfium() -> bool`, `blank_pdf(pages: &[(f32, f32)]) -> Vec<u8>`)
+- Modify: `src-tauri/src/lib.rs` (`fn pdfium()` after `fn gifsicle()`; in `setup`, after `windows::create_stack(app)?;`, add `if let Some(path) = pdfium() { ferry_core::pdf::render::init(path); }`)
+- Modify: `src/lib/i18n/en.json`
+
+**`scripts/fetch-pdfium.sh <triple>`** follows `build-gifsicle.sh`: `set -euo pipefail`, a cache in `target/pdfium-download/`, a SHA-256 check (with `GIFSICLE_SHA256`-style override `PDFIUM_SHA256`), and the cached file deleted on mismatch.
+
+| Triple | Asset | SHA-256 | Copies |
+| --- | --- | --- | --- |
+| `*-apple-darwin`, `universal-apple-darwin` | `pdfium-mac-univ.tgz` | `df451a413c3609585e84a4a91110a9bc889cff05fe3b2db0ed817c9e90c3f7d3` | `lib/libpdfium.dylib` → `src-tauri/binaries/libpdfium.dylib` |
+| `x86_64-pc-windows-msvc` | `pdfium-win-x64.tgz` | `73cc0de638ac2095e7445bf56a38200a5b7c7ca0e9f4ba144598f2457377ac08` | `bin/pdfium.dll` → `src-tauri/binaries/pdfium.dll` |
+
+- The URL is `https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7881/<asset>`.
+- Both write `src-tauri/binaries/pdfium-NOTICE.txt`: the archive's `LICENSE`, then every `licenses/*.txt`/`*.md`, each under a `== <file name> ==` heading.
+- Any other triple fails with `unsupported target`.
+- The script ends by printing `fetched <path>`.
+
+**Overlays** (merged by Tauri over `tauri.conf.json`):
+
+```json
+// src-tauri/tauri.macos.conf.json
+{ "bundle": { "macOS": { "frameworks": ["binaries/libpdfium.dylib"] },
+              "resources": { "binaries/pdfium-NOTICE.txt": "pdfium-NOTICE.txt" } } }
+// src-tauri/tauri.windows.conf.json
+{ "bundle": { "resources": { "binaries/pdfium.dll": "pdfium.dll",
+                             "binaries/pdfium-NOTICE.txt": "pdfium-NOTICE.txt" } } }
+```
+
+(No comments in the real files.) Because `tauri-build` copies resources at compile time, `src-tauri` does not build until the fetch script has run. CI runs it before clippy.
+
+**Interfaces:**
+- Produces:
+  - `pdf::DPI_STOPS: [u16; 7] = [300, 250, 200, 150, 100, 72, 48]`.
+  - `pdf::Defaults { pub dpi: u16, pub dpi_aggressive: u16, pub extract_dpi: u16 }` with `Default` `(150, 100, 150)` and `From<&settings::Pdf>`.
+  - `pdf::render::init(library: PathBuf)`: stores the path in a `OnceLock`; the first call wins. Binding is lazy: the first render calls `Pdfium::bind_to_library(path)` once, held in a `OnceLock<Result<Pdfium, String>>`.
+  - `pdf::render::available() -> bool`: a path is set and the file exists.
+  - `pdf::render::page_count(bytes: &[u8]) -> Result<u32, OptimiseError>`.
+  - `pdf::render::render_pages(bytes: &[u8], pages: RangeInclusive<u32>, dpi: u16, cancel: &CancelToken, on_page: &mut dyn FnMut(u32, Raster) -> Result<(), OptimiseError>) -> Result<(), OptimiseError>`: loads once and renders 1-based pages in order.
+    - Size: `w = round(width_pt × dpi / 72)`, `h` the same, at least 1. When the long side exceeds `MAX_SIDE` or `w × h` exceeds `MAX_PIXELS`, both shrink by the same factor.
+    - `PdfRenderConfig` uses `set_target_width(w)`, `set_maximum_height(h)`, `render_form_data(true)`, `render_annotations(true)`, `set_clear_color(PdfColor::WHITE)`.
+    - Pixels come from `as_rgba_bytes()`; `icc: None`.
+    - The cancel token is checked before each page → `Err(OptimiseError::Cancelled)`.
+  - `pdf::render::render_page(bytes, page: u32, dpi: u16, max_side: u32) -> Result<Raster, OptimiseError>`: one page, with its long side also capped at `max_side`.
+  - Errors:
+    - no library, or it fails to load → `Unsupported(t("pdf.error.renderer"))`;
+    - PDFium rejects the file → `Decode(t("pdf.error.read"))`;
+    - a password-protected file → `Unsupported(t("pdf.error.encrypted"))`.
+  - `poster::png(bytes, Pdf, page, long_edge)` renders `page` at 72 dpi with `max_side = long_edge`.
+  - `testutil::pdfium() -> bool`: `init`s from `FERRY_PDFIUM`, else from `<CARGO_MANIFEST_DIR>/../../src-tauri/binaries/<Pdfium::pdfium_platform_library_name()>`; true when `render::available()`.
+  - `testutil::blank_pdf(pages: &[(f32, f32)]) -> Vec<u8>`: lopdf, one page per `(width_pt, height_pt)`, each with a small filled rectangle content stream.
+  - `src-tauri` `fn pdfium() -> Option<PathBuf>`:
+    - macOS: `exe/../Frameworks/libpdfium.dylib`;
+    - Windows (`cfg(windows)`): `exe_dir/pdfium.dll`;
+    - in debug builds only, fall back to `concat!(env!("CARGO_MANIFEST_DIR"), "/binaries/")` + the platform name, so `pnpm tauri dev` works;
+    - the first existing path wins.
+
+- [ ] **Step 1: Write the failing tests** (`pdf/render.rs`)
+
+```rust
+#[test]
+fn ci_always_has_pdfium() {
+    if std::env::var_os("CI").is_some() {
+        assert!(testutil::pdfium(), "FERRY_PDFIUM must point at the fetched library in CI");
+    }
+}
+
+#[test]
+fn a_letter_page_renders_at_the_asked_dpi_on_white() {
+    if !testutil::pdfium() { return; }
+    let r = render_page(&testutil::blank_pdf(&[(612.0, 792.0)]), 1, 150, u32::MAX).unwrap();
+    assert_eq!((r.width, r.height), (1275, 1650));
+    assert_eq!(r.rgba[..4], [255, 255, 255, 255]);
+}
+
+#[test]
+fn the_long_side_is_capped() {
+    if !testutil::pdfium() { return; }
+    let r = render_page(&testutil::blank_pdf(&[(612.0, 792.0)]), 1, 150, 600).unwrap();
+    assert_eq!(r.height, 600);
+}
+
+#[test]
+fn every_page_is_counted_and_rendered_in_order() {
+    if !testutil::pdfium() { return; }
+    let pdf = testutil::blank_pdf(&[(100.0, 100.0), (200.0, 100.0), (100.0, 300.0)]);
+    assert_eq!(page_count(&pdf).unwrap(), 3);
+    let mut seen = Vec::new();
+    render_pages(&pdf, 2..=3, 72, &CancelToken::new(), &mut |n, r| { seen.push((n, r.width, r.height)); Ok(()) }).unwrap();
+    assert_eq!(seen, [(2, 200, 100), (3, 100, 300)]);
+}
+
+#[test]
+fn a_cancel_stops_before_the_next_page() {
+    if !testutil::pdfium() { return; }
+    let pdf = testutil::blank_pdf(&[(100.0, 100.0); 3]);
+    let cancel = CancelToken::new();
+    let mut pages = 0;
+    let result = render_pages(&pdf, 1..=3, 72, &cancel, &mut |_, _| { pages += 1; cancel.cancel(); Ok(()) });
+    assert!(matches!(result, Err(OptimiseError::Cancelled)));
+    assert_eq!(pages, 1);
+}
+
+#[test]
+fn a_library_that_is_not_there_says_reinstall() {
+    assert_eq!(load(Path::new("/nowhere/libpdfium.dylib")).err(), Some(t("pdf.error.renderer")));
+}
+```
+
+`load(path) -> Result<Pdfium, String>` is the private binding helper. A missing file fails in `Library::new`, before PDFium's global bindings are touched, so this test is safe beside the others.
+
+Add to `poster.rs`:
+
+```rust
+#[test]
+fn a_pdf_poster_is_its_first_page() {
+    if !testutil::pdfium() { return; }
+    assert_eq!(png(&testutil::blank_pdf(&[(612.0, 792.0)]), Format::Pdf, 1, CARD_EDGE).unwrap().1, (464, 600));
+}
+```
+
+- [ ] **Step 2: Fetch PDFium and run the tests to see them fail**
+
+Run: `bash scripts/fetch-pdfium.sh "$(rustc -vV | sed -n 's/^host: //p')"` (expect `fetched …/libpdfium.dylib`), then `cargo test -p ferry-core render`
+Expected: FAIL (module missing).
+
+- [ ] **Step 3: Implement the script, the overlays, the CI steps, `pdf::render`, the poster arm and the app path**
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.error.renderer": "PDF renderer missing — reinstall Ferry",
+  "pdf.error.read": "Can't read this PDF — it may be damaged",
+  "pdf.error.encrypted": "This PDF is encrypted — Ferry leaves it as it is",
+```
+
+- [ ] **Step 4: Run the tests and a local bundle check**
+
+Run: `cargo test -p ferry-core render`, `cargo test -p ferry-core poster`, `cargo build -p ferry`, `cargo clippy --workspace --all-targets -- -D warnings`
+Expected: PASS.
+
+**Manual check (ask first; this takes several minutes):** `pnpm tauri build --bundles app`, then `ls target/release/bundle/macos/Ferry.app/Contents/Frameworks/`. It should list `libpdfium.dylib`, and `Contents/Resources/pdfium-NOTICE.txt` should exist.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/fetch-pdfium.sh src-tauri/tauri.macos.conf.json src-tauri/tauri.windows.conf.json package.json .github/workflows crates/ferry-core Cargo.lock src-tauri/src/lib.rs src/lib/i18n/en.json
+git commit -m "build: bundle PDFium chromium/7881 and render PDF pages through it"
+```
+
+The message also states that the Windows path and smoke-test line are CI-verified only.
+
+### Task 13: PDF jobs: facts, refusals, structural optimise, PDF output rules
+
+**Files:**
+- Modify: `crates/ferry-core/src/pdf/mod.rs` (`Facts`, `facts`, `optimise`, `PdfResult`, `apply` skeleton, `target_dpi`)
+- Modify: `crates/ferry-core/src/pipeline.rs`:
+  - `RunOptions` fields `pdf_output: settings_model::Output` and `pdf: pdf::Defaults` at the end of the struct, filled in `RunOptions::new` from `settings.pdf`;
+  - `Job::file`: the size limit picks `settings.pdf.max_size_mb` for a PDF;
+  - `run_recipe`: right after the existing `original()` match, `if let Err(reason) = self.capture_facts(&original, backups) { return Some(self.fail(reason.clone(), reason)); }`. This replaces Task 4's poster call; `capture_facts` calls `capture_poster`;
+  - right after the `emit(Optimising …)` call: `if self.source_format == Format::Pdf { return self.finish_pdf(&original, &options, o, emit); }`;
+  - extract the location logic of `put`'s `Source::File` branch into `fn place_result(&mut self, ext: &str, kind: OutputKind, original: &[u8], o: &RunOptions, write: &mut dyn FnMut(&Self, &Path) -> Result<(), (String, String)>) -> Result<PathBuf, (String, String)>`. It contains everything from `let source = …` to `self.output = path;`, with `self.write_file(&path, bytes, &source, o)?` replaced by `write(self, &path)?`. The rules are `&o.pdf_output` when `self.source_format == Format::Pdf`, else `&o.output`. `put` calls it;
+  - `detail()` starts with `if self.source_format == Format::Pdf { return self.pdf_detail(); }`.
+- Modify: `crates/ferry-core/src/pipeline_formats.rs` (`capture_facts`, `finish_pdf`, `pdf_detail`)
+- Modify: `crates/ferry-core/src/testutil.rs` (`pdf(pages: &[PdfPage], extras: &PdfExtras) -> Vec<u8>`)
+- Modify: `src/lib/i18n/en.json`
+
+**Interfaces:**
+- Consumes: Task 12's renderer (posters), lopdf.
+- Produces:
+  - `pdf::Facts { pub pages: u32, pub size: (u32, u32), pub encrypted: bool, pub signed: bool, pub pdfa1: bool }`.
+  - `pdf::facts(bytes: &[u8]) -> Result<Facts, OptimiseError>`:
+    - `Document::load_mem_with_options(bytes, LoadOptions::with_max_decompressed_size(1 << 30))`;
+    - `encrypted = doc.was_encrypted() || doc.trailer.has(b"Encrypt")`. A load error on bytes that contain `/Encrypt` → `Ok(Facts { encrypted: true, .. })`; any other load error → `Decode(t("pdf.error.read"))`;
+    - `size` = page 1's visible box (`crop::visible_box`, written in Task 15; until then `MediaBox` ∩ `CropBox` inline) in points, rounded, swapped when `/Rotate` is 90 or 270;
+    - `signed` = catalog `/AcroForm` `/SigFlags & 1`, or any field with `/FT /Sig` and a `/V`;
+    - `pdfa1` = the catalog's `/Metadata` stream contains `pdfaid:part="1"` or `<pdfaid:part>1<`.
+  - `pdf::optimise(input: &[u8], dpi: u16, o: &OptimiseOptions, progress: &mut dyn FnMut(f32)) -> Result<Vec<u8>, OptimiseError>`:
+    - load as above, then (Task 14 inserts image recompression here) `doc.prune_objects()`, `doc.delete_zero_length_streams()`, `doc.compress()`;
+    - save with `save_modern`, or with `save_to` (classic xref, no object streams) when `pdfa1`;
+    - call `progress(1.0)`.
+  - `pdf::PdfResult { Pdf { bytes: Vec<u8>, missed_target: bool }, Pages { format: Format, pages: Vec<(u32, Vec<u8>)>, size: (u32, u32) } }`.
+  - `pdf::target_dpi(edits: &Edits, d: &Defaults, extracting: bool) -> u16`: `edits.dpi`, else `d.extract_dpi` when extracting, else `d.dpi_aggressive` for `Level::Aggressive`, else `d.dpi`.
+  - `pdf::apply(original: &[u8], edits: &Edits, o: &OptimiseOptions, d: &Defaults, progress: &mut dyn FnMut(f32, String)) -> Result<PdfResult, OptimiseError>`:
+    - for PDF output: `fit_under` searches quality with `edit::fit::search` over `optimise`, else one `optimise` at `edits.compression` or `o.compression`;
+    - a recipe with `aspect` or `uncrop` (Task 15) or a `Png`/`Jpeg` format (Task 16) returns `Unsupported(tf("pdf.write_unsupported", …))` until those tasks replace it; no `todo!`.
+  - `Job::capture_facts(&mut self, original: &[u8], backups: &Backups) -> Result<(), String>` (private, `pipeline_formats.rs`): for a PDF, runs `pdf::facts`; a read error → `Err(t("pdf.error.read"))`, encrypted → `Err(t("pdf.error.encrypted"))`; it sets `self.pages = Some(facts.pages)` and `self.dims = Some(facts.size)`, then `capture_poster`.
+  - `Job::finish_pdf(&mut self, original: &[u8], options: &OptimiseOptions, o: &RunOptions, emit: &mut dyn FnMut(JobUpdate)) -> Option<Finished>`:
+    - a recipe whose `format` is `Png`/`Jpeg` goes to Task 16 (`Unsupported` placeholder until then);
+    - otherwise a signed PDF → `fail(t("pdf.error.signed"))`;
+    - otherwise a plain recipe runs `pdf::optimise` at `target_dpi`, graded with `optimise::classify` as images are;
+    - a non-plain recipe runs `pdf::apply` and always writes;
+    - progress goes to `emit(self.update(Optimising { progress, step }, None))`, emitted only when progress rose by at least 0.02 since the last emit, or reached 1.0, with step `t("pdf.step.pdf")`;
+    - cancel checks follow `run_recipe`'s: return `None` before anything is written;
+    - writing reuses `put` (single file) or `put_back`.
+  - `Job::pdf_detail(&self) -> String`: `"3 pages · 150 dpi"`; `"1 page"` for one page; `" · cropped"` when `edits.aspect` is set or `edits.uncrop`; plus `card.detail.aggressive` when aggressive.
+  - `testutil::PdfPage { pub media: [f32; 4], pub crop: Option<[f32; 4]>, pub rotate: i64, pub images: Vec<PdfImage>, pub padding: usize }` (`padding`: bytes of uncompressed comment content, to make a bloated file).
+  - `testutil::PdfImage { pub px: (u32, u32), pub drawn: (f32, f32), pub kind: ImageKind }`, with `ImageKind::{DctRgb, DctGray, DctCmyk, FlateScreenshot, FlatePhoto, OneBit, Jpx}`.
+  - `testutil::PdfExtras { pub signed: bool, pub pdfa1: bool, pub encrypt_dict: bool, pub shared_image: bool }` (`Default` everywhere, letter-size `media`).
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// pdf/mod.rs
+#[test]
+fn facts_count_pages_and_turn_rotated_pages() {
+    let pdf = testutil::pdf(&[PdfPage { rotate: 90, ..PdfPage::default() }, PdfPage::default()], &PdfExtras::default());
+    let f = facts(&pdf).unwrap();
+    assert_eq!((f.pages, f.size, f.encrypted, f.signed), (2, (792, 612), false, false));
+}
+
+#[test]
+fn signatures_encryption_and_pdfa_are_noticed() {
+    assert!(facts(&testutil::pdf(&[PdfPage::default()], &PdfExtras { signed: true, ..Default::default() })).unwrap().signed);
+    assert!(facts(&testutil::pdf(&[PdfPage::default()], &PdfExtras { encrypt_dict: true, ..Default::default() })).unwrap().encrypted);
+    assert!(facts(&testutil::pdf(&[PdfPage::default()], &PdfExtras { pdfa1: true, ..Default::default() })).unwrap().pdfa1);
+}
+
+#[test]
+fn a_bloated_pdf_shrinks_and_keeps_its_pages() {
+    let input = testutil::pdf(&[PdfPage { padding: 200_000, ..PdfPage::default() }; 3], &PdfExtras::default());
+    let out = optimise(&input, 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert!(out.len() * 2 < input.len());
+    assert_eq!(facts(&out).unwrap().pages, 3);
+}
+
+#[test]
+fn pdfa1_is_saved_without_object_streams() {
+    let input = testutil::pdf(&[PdfPage { padding: 50_000, ..PdfPage::default() }], &PdfExtras { pdfa1: true, ..Default::default() });
+    let out = optimise(&input, 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert!(!out.windows(7).any(|w| w == b"/ObjStm"));
+}
+
+#[test]
+fn the_dpi_follows_recipe_level_and_extraction() {
+    let d = Defaults::default();
+    assert_eq!(target_dpi(&Edits::default(), &d, false), 150);
+    assert_eq!(target_dpi(&Edits { level: Level::Aggressive, ..Edits::default() }, &d, false), 100);
+    assert_eq!(target_dpi(&Edits::default(), &d, true), 150);
+    assert_eq!(target_dpi(&Edits { dpi: Some(72), ..Edits::default() }, &d, true), 72);
+}
+```
+
+`pipeline.rs`:
+
+```rust
+fn pdf_file(env: &Env, name: &str, pages: &[PdfPage], extras: &PdfExtras) -> (PathBuf, Vec<u8>) {
+    let bytes = testutil::pdf(pages, extras);
+    (env.file(name, &bytes), bytes)
+}
+
+#[test]
+fn a_bloated_pdf_is_optimised_in_place() {
+    let env = Env::new();
+    let (path, input) = pdf_file(&env, "doc.pdf", &[PdfPage { padding: 200_000, ..PdfPage::default() }; 3], &PdfExtras::default());
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    let card = run(&mut job, Level::Normal, &options(), &env).0.unwrap().update;
+    assert_eq!((card.state, card.pages, card.dims_before), (JobState::Done, Some(3), Some((612, 792))));
+    assert_eq!(card.detail, "3 pages · 150 dpi");
+    assert!(fs::read(&path).unwrap().len() < input.len());
+}
+
+#[test]
+fn an_already_tight_pdf_is_already_optimal() {
+    let env = Env::new();
+    let (path, _) = pdf_file(&env, "doc.pdf", &[PdfPage::default()], &PdfExtras::default());
+    let tight = crate::pdf::optimise(&fs::read(&path).unwrap(), 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    fs::write(&path, &tight).unwrap();
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    assert_eq!(run(&mut job, Level::Normal, &options(), &env).0.unwrap().update.state, JobState::AlreadyOptimal);
+}
+
+#[test]
+fn an_encrypted_pdf_is_refused_and_left_alone() {
+    let env = Env::new();
+    let (path, input) = pdf_file(&env, "doc.pdf", &[PdfPage::default()], &PdfExtras { encrypt_dict: true, ..Default::default() });
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    let card = run(&mut job, Level::Normal, &options(), &env).0.unwrap().update;
+    assert_eq!(card.state, JobState::Error { reason: t("pdf.error.encrypted") });
+    assert_eq!(fs::read(&path).unwrap(), input);
+}
+
+#[test]
+fn a_signed_pdf_is_never_rewritten() {
+    let env = Env::new();
+    let (path, input) = pdf_file(&env, "doc.pdf", &[PdfPage { padding: 100_000, ..PdfPage::default() }], &PdfExtras { signed: true, ..Default::default() });
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    let card = run(&mut job, Level::Normal, &options(), &env).0.unwrap().update;
+    assert_eq!(card.state, JobState::Error { reason: t("pdf.error.signed") });
+    assert_eq!(fs::read(&path).unwrap(), input);
+}
+
+#[test]
+fn a_damaged_pdf_is_an_error() {
+    let env = Env::new();
+    let path = env.file("doc.pdf", b"%PDF-1.7\nthis is not a PDF body");
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    assert_eq!(run(&mut job, Level::Normal, &options(), &env).0.unwrap().update.state, JobState::Error { reason: t("pdf.error.read") });
+}
+
+#[test]
+fn pdfs_have_their_own_size_limit() {
+    let env = Env::new();
+    let (path, _) = pdf_file(&env, "doc.pdf", &[PdfPage { padding: 1_200_000, ..PdfPage::default() }], &PdfExtras::default());
+    let mut settings = Settings::default();
+    settings.images.max_size_mb = 1;
+    assert!(Job::file(&path, &settings, true).is_ok());
+    settings.pdf.max_size_mb = 1;
+    assert!(Job::file(&path, &settings, true).is_err());
+}
+
+#[test]
+fn pdf_results_follow_the_pdf_output_rules() {
+    let env = Env::new();
+    let (path, input) = pdf_file(&env, "doc.pdf", &[PdfPage { padding: 200_000, ..PdfPage::default() }], &PdfExtras::default());
+    let mut settings = Settings::default();
+    settings.pdf.output.optimised.location = Location::SameFolder;
+    let mut job = Job::file(&path, &settings, true).unwrap();
+    run(&mut job, Level::Normal, &options_with(&settings), &env);
+    assert!(path.with_file_name("doc_optimised.pdf").exists());
+    assert_eq!(fs::read(&path).unwrap(), input);
+}
+
+#[test]
+fn image_only_edits_are_dropped_on_pdfs() {
+    let env = Env::new();
+    let (path, _) = pdf_file(&env, "doc.pdf", &[PdfPage::default()], &PdfExtras::default());
+    let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+    job.edit(scale(50));
+    assert_eq!(job.edits.scale, None);
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core pdf::`, `cargo test -p ferry-core pipeline`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+The `place_result` extraction must leave every existing pipeline test green. Run `cargo test -p ferry-core pipeline` after the extraction alone, before adding the PDF branch.
+
+Append to the `pdf.*` block:
+
+```json
+  "pdf.error.signed": "This PDF is signed — changing it would break the signature",
+  "pdf.step.pdf": "Recompressing PDF images",
+  "pdf.detail.page": "1 page",
+  "pdf.detail.pages": "{n} pages",
+  "pdf.detail.dpi": "{n} dpi",
+  "pdf.detail.cropped": "cropped",
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core`, `cargo clippy --workspace --all-targets -- -D warnings`
+Expected: PASS.
+
+**Manual check (ask first):** copy a PDF in Finder and press ⌃⇧C. The card shows page 1 as its thumbnail, a "3 pages" badge, and "3 pages · 150 dpi". Open the PDF in Preview: text, links and outline are intact.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core src/lib/i18n/en.json
+git commit -m "feat(core): PDF jobs with structural optimise, encrypted and signed refusals, PDF output rules"
+```
+
+### Task 14: Downsample PDF images to a DPI
+
+**Files:**
+- Modify: `crates/ferry-core/Cargo.toml` (`flate2 = "1.1"`, `rayon = "1.12"`)
+- Create: `crates/ferry-core/src/pdf/images.rs`; `pdf/mod.rs` (`mod images;`; `optimise` calls `images::recompress_all` before pruning)
+- Modify: `crates/ferry-core/src/optimise/jpeg.rs` (`encode_gray`, appended before `#[cfg(test)]` under `// sE pdf-formats`)
+
+**Interfaces:**
+- Consumes: lopdf `Document`, `Stream`, `Object`, `content::Content`; `raster::cut`; `jpeg::{decode_raster, encode_raster}`; `optimise::quality`.
+- Produces:
+  - `images::concat(m: [f32; 6], ctm: [f32; 6]) -> [f32; 6]`: PDF's `cm` rule, new CTM = `m × ctm`:
+
+    ```text
+    a = m.a*c.a + m.b*c.c          b = m.a*c.b + m.b*c.d
+    c = m.c*c.a + m.d*c.c          d = m.c*c.b + m.d*c.d
+    e = m.e*c.a + m.f*c.c + c.e    f = m.e*c.b + m.f*c.d + c.f
+    ```
+  - `images::image_dpis(doc: &Document) -> HashMap<ObjectId, f32>`:
+    - for each page, take its content (`get_page_content`), `Content::decode`, and the resources dict (the page's own `/Resources`, else the nearest ancestor's);
+    - walk the operators with a CTM stack: `q` pushes, `Q` pops (never below the start), `cm` concatenates, `Do /Name` looks up `/XObject`;
+    - for an Image, `w_pt = hypot(a, b)` and `h_pt = hypot(c, d)`. Skip the use when either is below 0.01. `dpi = min(px_w × 72 / w_pt, px_h × 72 / h_pt)`; keep the minimum per ObjectId;
+    - for a Form, recurse with `concat(form /Matrix or identity, ctm)`, the form's `/Resources` (else the parent's) and its decoded content. Stop at depth 12, and skip a form already on the current chain;
+    - inline images and images never drawn are absent.
+  - `images::photo_like(pixels: &[u8], channels: usize) -> bool`: samples at most 65 536 pixels at an even stride; true when there are 1024 or more distinct colours.
+  - `images::DOWNSAMPLE_SLACK: f32 = 1.1`.
+  - `images::recompress_all(doc: &mut Document, target_dpi: u16, o: &OptimiseOptions, progress: &mut dyn FnMut(f32)) -> Result<usize, OptimiseError>`:
+    - collect candidate image XObjects;
+    - recompress them in parallel with `rayon` (`par_iter`, cancel checked per image → `Err(Cancelled)`);
+    - write the replacements back in ObjectId order, calling `progress(done / total)` as each finishes (from the collecting thread);
+    - return the number replaced.
+  - Candidates: `/Subtype /Image`, `/BitsPerComponent 8`, no `/ImageMask true`, no `/Mask`, no `/Decode`, no `/SMask` that has `/Matte`.
+    - `/ColorSpace` is `/DeviceRGB`, `/DeviceGray`, or `[/ICCBased ref]` with `/N` 1 or 3 (the colour space object is kept as is).
+    - `/Filter` is absent, `/FlateDecode`, `/DCTDecode`, or a one-element array of those.
+    - A DCT image must not be CMYK (`decode_raster` is not called on anything with a 4-component colour space).
+    - `width × height ≤ MAX_PIXELS`.
+  - One image:
+    - `f = target / dpi` when `dpi > target × DOWNSAMPLE_SLACK`, else 1; the new size is `round(side × f)`, at least 1;
+    - DCT source → JPEG at `quality(o)`;
+    - Flate/raw source → JPEG when `photo_like` (on the resized pixels), else Flate (`flate2`, `Compression::best()`);
+    - Gray stays Gray (`jpeg::encode_gray`; Flate keeps one channel);
+    - an `/SMask` is resized to the same size when the image is, and Flate-encoded;
+    - the dict gets `Width`, `Height`, `BitsPerComponent 8`, `Filter`, and loses `DecodeParms`; everything else stays;
+    - the replacement is used only when image + smask bytes are smaller than before.
+  - `jpeg::encode_gray(width: u32, height: u32, luma: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError>`: mozjpeg `JCS_GRAYSCALE`, progressive, optimised coding, `quality(o)`.
+
+- [ ] **Step 1: Write the failing tests** (`pdf/images.rs`; `width_of(pdf, n)` reads image n's `/Width` with lopdf, a test helper)
+
+```rust
+#[test]
+fn concat_scales_and_nests() {
+    let id = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    assert_eq!(concat([720.0, 0.0, 0.0, 360.0, 0.0, 0.0], id), [720.0, 0.0, 0.0, 360.0, 0.0, 0.0]);
+    assert_eq!(concat([720.0, 0.0, 0.0, 360.0, 10.0, 0.0], [0.5, 0.0, 0.0, 0.5, 0.0, 0.0]), [360.0, 0.0, 0.0, 180.0, 5.0, 0.0]);
+}
+
+#[test]
+fn an_image_drawn_across_ten_inches_is_three_hundred_dpi() {
+    let pdf = testutil::pdf(&[PdfPage { images: vec![PdfImage { px: (3000, 1500), drawn: (720.0, 360.0), kind: ImageKind::DctRgb }], ..PdfPage::default() }], &PdfExtras::default());
+    let doc = lopdf::Document::load_mem(&pdf).unwrap();
+    assert_eq!(image_dpis(&doc).values().copied().collect::<Vec<_>>(), [300.0]);
+}
+
+#[test]
+fn a_shared_image_keeps_the_dpi_of_its_largest_use() {
+    // shared_image: page 1 draws the image 720 pt wide, page 2 draws the same object 360 pt wide.
+    let pdf = testutil::pdf(&[PdfPage { images: vec![PdfImage { px: (3000, 1500), drawn: (720.0, 360.0), kind: ImageKind::DctRgb }], ..PdfPage::default() }, PdfPage::default()], &PdfExtras { shared_image: true, ..Default::default() });
+    let doc = lopdf::Document::load_mem(&pdf).unwrap();
+    assert_eq!(image_dpis(&doc).values().copied().collect::<Vec<_>>(), [300.0]);
+    let out = crate::pdf::optimise(&pdf, 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert_eq!(width_of(&out, 0), 1500);
+}
+
+#[test]
+fn a_300_dpi_scan_comes_down_to_150() {
+    let pdf = scan(2550, 3300, ImageKind::DctRgb); // helper: one letter page, image drawn full page
+    let out = crate::pdf::optimise(&pdf, 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert!((1274..=1276).contains(&width_of(&out, 0)));
+    assert!(out.len() < pdf.len());
+}
+
+#[test]
+fn an_image_just_above_the_target_keeps_its_size() {
+    let out = crate::pdf::optimise(&scan(1360, 1760, ImageKind::DctRgb), 150, &OptimiseOptions::default(), &mut |_| {}).unwrap(); // 160 dpi
+    assert_eq!(width_of(&out, 0), 1360);
+}
+
+#[test]
+fn a_screenshot_stays_lossless_and_a_photo_becomes_jpeg() {
+    let shot = crate::pdf::optimise(&scan(2550, 3300, ImageKind::FlateScreenshot), 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert_eq!(filter_of(&shot, 0), b"FlateDecode");
+    let photo = crate::pdf::optimise(&scan(2550, 3300, ImageKind::FlatePhoto), 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert_eq!(filter_of(&photo, 0), b"DCTDecode");
+}
+
+#[test]
+fn gray_stays_gray() {
+    let out = crate::pdf::optimise(&scan(2550, 3300, ImageKind::DctGray), 150, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+    assert_eq!(colour_space_of(&out, 0), b"DeviceGray");
+}
+
+#[test]
+fn images_the_engine_cannot_handle_are_left_alone() {
+    for kind in [ImageKind::DctCmyk, ImageKind::OneBit, ImageKind::Jpx] {
+        let pdf = scan(2550, 3300, kind);
+        let out = crate::pdf::optimise(&pdf, 72, &OptimiseOptions::default(), &mut |_| {}).unwrap();
+        assert_eq!(image_bytes(&out, 0), image_bytes(&pdf, 0), "{kind:?}");
+    }
+}
+
+#[test]
+fn photo_like_counts_colours() {
+    assert!(!photo_like(&[10, 20, 30].repeat(10_000), 3));
+    let gradient: Vec<u8> = (0..90_000_u32).flat_map(|i| [(i % 251) as u8, (i / 251 % 251) as u8, (i % 7) as u8]).collect();
+    assert!(photo_like(&gradient, 3));
+}
+
+#[test]
+fn a_cancel_stops_recompressing() {
+    let o = OptimiseOptions::default();
+    o.cancel.cancel();
+    assert!(matches!(crate::pdf::optimise(&scan(2550, 3300, ImageKind::DctRgb), 150, &o, &mut |_| {}), Err(OptimiseError::Cancelled)));
+}
+```
+
+Add the test helpers `scan`, `width_of`, `filter_of`, `colour_space_of` and `image_bytes` in the test module, using lopdf. Add one pipeline test, `aggressive_and_the_dpi_recipe_choose_the_resolution`: a 300 dpi scan job run aggressive gives width ≈ 850 (100 dpi); after `job.edit(dpi 72)` it gives ≈ 612.
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `cargo test -p ferry-core images`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement as specified**
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p ferry-core`, `cargo clippy --workspace --all-targets -- -D warnings`
+Expected: PASS.
+
+**Manual check (ask first):** a 20+ MB scanned PDF shrinks substantially and looks right at 100 % in Preview. A 400-page PDF finishes, and Activity Monitor shows more than one core busy during the run.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/ferry-core Cargo.lock
+git commit -m "feat(core): downsample and recompress PDF images to a DPI"
+```
