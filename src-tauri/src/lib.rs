@@ -3,6 +3,7 @@ mod commands;
 mod hotkeys;
 mod jobs;
 mod logging;
+mod menu;
 mod platform;
 mod prefs;
 mod state;
@@ -65,6 +66,7 @@ pub fn run() {
             commands::card_rename,
             windows::stack_focus,
             commands::crop_sizes_reset,
+            commands::card_menu,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
@@ -106,6 +108,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let registered = hotkeys::register(app);
     app.manage(registered);
     tray::build(app)?;
+    menu::init(app);
     clipboard::start(app);
     housekeeping(app);
     if let LoadStatus::Recovered { .. } = status {

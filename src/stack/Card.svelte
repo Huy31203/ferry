@@ -299,7 +299,7 @@
     };
   });
 
-  // The ⋯ button opens the native menu just under itself (Task 8 builds it).
+  // The ⋯ button opens the native menu just under itself; right-click opens it at the pointer.
   function openMenu(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     void act('card_menu', { x: rect.left, y: rect.bottom + 4 });
@@ -354,6 +354,10 @@
   bind:this={cardEl}
   aria-label={label}
   onmousedown={drag}
+  oncontextmenu={(event) => {
+    event.preventDefault();
+    void act('card_menu', { x: event.clientX, y: event.clientY });
+  }}
   onfocusin={() => (focused = true)}
   onfocusout={() => (focused = false)}
   out:fade={{ duration: motionOut }}
