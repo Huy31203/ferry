@@ -30,6 +30,8 @@ jobs:
     env:
       # The GIF tests run the real sidecar; ci_always_has_gifsicle fails if this is unset.
       FERRY_GIFSICLE: ${{ github.workspace }}/src-tauri/binaries/gifsicle-${{ matrix.triple }}${{ matrix.exe }}
+      # The video tests run the real sidecar; ci_always_has_ffmpeg fails if this is unset.
+      FERRY_FFMPEG: ${{ github.workspace }}/src-tauri/binaries/ffmpeg-${{ matrix.triple }}${{ matrix.exe }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -38,6 +40,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      - id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            src-tauri/binaries/ffmpeg-*
+            src-tauri/binaries/licenses
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'THIRD-PARTY-NOTICES.md') }}
+      - name: Build ffmpeg sidecar (macOS)
+        if: runner.os == 'macOS' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          softwareupdate --install-rosetta --agree-to-license || true
+          brew install nasm pkgconf meson ninja
+          bash scripts/build-ffmpeg.sh universal-apple-darwin
+      - if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git make diffutils mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-meson mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+      - name: Build ffmpeg sidecar (Windows)
+        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg.sh x86_64-pc-windows-msvc
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.triple }}
@@ -94,6 +121,31 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      - id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            src-tauri/binaries/ffmpeg-*
+            src-tauri/binaries/licenses
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'THIRD-PARTY-NOTICES.md') }}
+      - name: Build ffmpeg sidecar (macOS)
+        if: runner.os == 'macOS' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          softwareupdate --install-rosetta --agree-to-license || true
+          brew install nasm pkgconf meson ninja
+          bash scripts/build-ffmpeg.sh universal-apple-darwin
+      - if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git make diffutils mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-meson mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+      - name: Build ffmpeg sidecar (Windows)
+        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg.sh x86_64-pc-windows-msvc
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.target }}
@@ -102,6 +154,14 @@ jobs:
       - run: cargo test -p ferry
       - name: Build installer
         run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Check installer size
+        shell: bash
+        run: |
+          for f in target/${{ matrix.target }}/release/bundle/nsis/*.exe target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+            [ -f "$f" ] || continue
+            echo "$f: $(du -m "$f" | cut -f1) MB"
+            [ "$(du -m "$f" | cut -f1)" -le 120 ]
+          done
       - name: Smoke test installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -115,6 +175,8 @@ jobs:
             throw "Ferry.exe not found at $exe"
           }
           if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'Ferry\gifsicle.exe'))) { throw "gifsicle sidecar missing from install" }
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'Ferry\ffmpeg.exe'))) { throw "ffmpeg sidecar missing from install" }
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'Ferry\licenses\ffmpeg\COPYING.GPLv3'))) { throw "ffmpeg licence missing from install" }
           $proc = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 10
           if ($proc.HasExited) { throw "Ferry exited early with code $($proc.ExitCode)" }

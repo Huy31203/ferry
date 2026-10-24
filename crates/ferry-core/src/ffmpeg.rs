@@ -364,6 +364,17 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil;
+
+    #[test]
+    fn ci_always_has_ffmpeg() {
+        if std::env::var_os("CI").is_some() {
+            assert!(
+                testutil::ffmpeg().is_some(),
+                "FERRY_FFMPEG must be set in CI"
+            );
+        }
+    }
 
     #[test]
     fn the_inputs_duration_is_read_from_stderr() {

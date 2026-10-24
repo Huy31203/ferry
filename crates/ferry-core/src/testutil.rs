@@ -267,6 +267,14 @@ pub fn gifsicle() -> Option<std::path::PathBuf> {
         .filter(|path| path.exists())
 }
 
+/// `FERRY_FFMPEG` (the sidecar's path), when it is set and exists. Video tests
+/// skip without it; CI sets it and fails if it is missing.
+pub fn ffmpeg() -> Option<std::path::PathBuf> {
+    std::env::var_os(crate::ffmpeg::ENV)
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.exists())
+}
+
 /// Insert a comment extension right after the global colour table.
 pub fn with_gif_comment(gif: &[u8], text: &str) -> Vec<u8> {
     let at = 13 + 768; // header + screen descriptor + 256-colour table
