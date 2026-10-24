@@ -8,6 +8,7 @@ export type PaneId =
   | 'videos' // stream A: video
   | 'files'
   | 'floating'
+  | 'drop' // stream D
   | 'hotkeys' // svc
   | 'about'; // svc
 
@@ -18,6 +19,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'videos', label: 'video.pane' }, // stream A: video
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
+  { id: 'drop', label: 'drop.pane' }, // stream D
   { id: 'hotkeys', label: 'svc.pane.hotkeys' }, // svc
   { id: 'about', label: 'svc.pane.about' }, // svc
 ];
@@ -594,6 +596,103 @@ const all: Setting[] = [
     help: 'svc.updates.auto.help',
     path: 'svc.updates.auto_check',
     control: { kind: 'switch' },
+  },
+
+  // Stream D
+  {
+    id: 'drop_enabled',
+    pane: 'drop',
+    label: 'drop.settings.enabled',
+    help: 'drop.settings.enabled.help',
+    path: 'drop_zone.enabled',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'drop_show_on',
+    pane: 'drop',
+    label: 'drop.settings.show_on',
+    help: 'drop.settings.show_on.help',
+    path: 'drop_zone.show_on',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'any_drag', label: 'drop.settings.show_on.any_drag' },
+        { value: 'modifier', label: 'drop.settings.show_on.modifier' },
+      ],
+    },
+    depends_on: 'drop_zone.enabled',
+  },
+  {
+    id: 'drop_position',
+    pane: 'drop',
+    label: 'drop.settings.position',
+    help: 'drop.settings.position.help',
+    path: 'drop_zone.position',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'near_results', label: 'drop.settings.position.near_results' },
+        { value: 'under_cursor', label: 'drop.settings.position.under_cursor' },
+      ],
+    },
+    depends_on: 'drop_zone.enabled',
+  },
+  {
+    id: 'drop_modifier',
+    pane: 'drop',
+    label: 'drop.settings.modifier',
+    help: 'drop.settings.modifier.help',
+    path: 'drop_zone.modifier',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'alt', label: 'drop.mod.alt' },
+        { value: 'shift', label: 'drop.mod.shift' },
+      ],
+    },
+    depends_on: 'drop_zone.enabled',
+  },
+  {
+    id: 'drop_keep_modifier',
+    pane: 'drop',
+    label: 'drop.settings.keep_modifier',
+    help: 'drop.settings.keep_modifier.help',
+    path: 'drop_zone.keep_original_modifier',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'shift', label: 'drop.mod.shift' },
+        { value: 'alt', label: 'drop.mod.alt' },
+      ],
+    },
+    depends_on: 'drop_zone.enabled',
+  },
+  {
+    id: 'drop_batch_threshold',
+    pane: 'drop',
+    label: 'drop.settings.batch_threshold',
+    help: 'drop.settings.batch_threshold.help',
+    path: 'drop_zone.batch_threshold',
+    control: { kind: 'number', min: 1, max: 10000, unit: 'drop.unit.files' },
+    depends_on: 'drop_zone.enabled',
+  },
+  {
+    id: 'drop_ignored_apps',
+    pane: 'drop',
+    label: 'drop.settings.ignored_apps',
+    help: 'drop.settings.ignored_apps.help',
+    path: 'drop_zone.ignored_apps',
+    control: { kind: 'apps' },
+    depends_on: 'drop_zone.enabled',
+  },
+  {
+    id: 'list_after',
+    pane: 'floating',
+    label: 'drop.settings.list_after',
+    help: 'drop.settings.list_after.help',
+    path: 'results_list.after_cards',
+    control: { kind: 'number', min: 1, max: 50, unit: 'drop.unit.cards' },
+    depends_on: 'floating.enabled',
   },
 ];
 

@@ -29,6 +29,9 @@ pub struct Settings {
     pub clip: Clip,
     // stream A: video
     pub video: Video,
+    // ---- Stream D: drop zone and results list ----
+    pub drop_zone: DropZone,
+    pub results_list: ResultsList,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -236,6 +239,8 @@ impl Default for Settings {
             clip: Clip::default(),
             // stream A: video
             video: Video::default(),
+            drop_zone: DropZone::default(),
+            results_list: ResultsList::default(),
             extra: Map::new(),
         }
     }
@@ -414,6 +419,107 @@ impl Default for Video {
     }
 }
 
+// ---- Stream D: drop zone and results list ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneShowOn {
+    AnyDrag,
+    Modifier,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZonePosition {
+    NearResults,
+    UnderCursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DragKey {
+    Alt,
+    Shift,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DropZone {
+    pub enabled: bool,
+    pub show_on: ZoneShowOn,
+    pub position: ZonePosition,
+    pub modifier: DragKey,
+    pub keep_original_modifier: DragKey,
+    pub batch_threshold: u32,
+    pub ignored_apps: Vec<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for DropZone {
+    fn default() -> Self {
+        let mac = cfg!(target_os = "macos");
+        let apps: &[&str] = if mac {
+            &[
+                "com.apple.FinalCut",
+                "com.apple.iMovieApp",
+                "com.blackmagic-design.DaVinciResolve",
+                "com.adobe.PremierePro",
+                "com.adobe.AfterEffects",
+                "com.adobe.Photoshop",
+                "com.adobe.illustrator",
+                "com.figma.Desktop",
+                "com.bohemiancoding.sketch3",
+                "com.seriflabs.affinitydesigner2",
+                "com.seriflabs.affinityphoto2",
+            ]
+        } else {
+            &[
+                "Adobe Premiere Pro.exe",
+                "AfterFX.exe",
+                "Photoshop.exe",
+                "Illustrator.exe",
+                "Resolve.exe",
+                "Figma.exe",
+                "Affinity Designer 2.exe",
+                "Affinity Photo 2.exe",
+            ]
+        };
+        Self {
+            enabled: true,
+            // Windows has no drag-start signal: modifier tap only unless the user opts in to the edge tab.
+            show_on: if mac {
+                ZoneShowOn::AnyDrag
+            } else {
+                ZoneShowOn::Modifier
+            },
+            position: ZonePosition::NearResults,
+            modifier: DragKey::Alt,
+            keep_original_modifier: DragKey::Shift,
+            batch_threshold: 20,
+            ignored_apps: apps.iter().map(|a| a.to_string()).collect(),
+            extra: Map::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResultsList {
+    pub after_cards: u32,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for ResultsList {
+    fn default() -> Self {
+        Self {
+            after_cards: 5,
+            extra: Map::new(),
+        }
+    }
+}
+
 /// How `Settings::load` found the file.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LoadStatus {
@@ -487,8 +593,28 @@ impl Settings {
             .filter(|item| !item.is_empty())
             .collect();
         repair_output(&mut self.video.output, &Video::default().output);
+        self.sanitise_drop();
         self.version = self.version.max(VERSION);
         self
+    }
+
+    // ---- Stream D: drop zone and results list ----
+    fn sanitise_drop(&mut self) {
+        let z = &mut self.drop_zone;
+        z.batch_threshold = z.batch_threshold.clamp(1, 10_000);
+        if z.keep_original_modifier == z.modifier {
+            z.keep_original_modifier = match z.modifier {
+                DragKey::Alt => DragKey::Shift,
+                DragKey::Shift => DragKey::Alt,
+            };
+        }
+        z.ignored_apps = z
+            .ignored_apps
+            .iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect();
+        self.results_list.after_cards = self.results_list.after_cards.clamp(1, 50);
     }
 }
 
@@ -893,5 +1019,73 @@ mod tests {
         assert_eq!(s.video.encoder, Encoder::VisuallyLossless);
         let s: Settings = serde_json::from_str(r#"{"video":{"encoder":"small"}}"#).unwrap();
         assert_eq!(s.video.encoder, Encoder::Small);
+    }
+
+    #[test]
+    fn drop_zone_defaults_match_the_plan() {
+        let s = Settings::default();
+        let z = &s.drop_zone;
+        assert!(z.enabled);
+        // Windows shows the zone only on a modifier tap unless the user opts in to the edge tab.
+        let mac = cfg!(target_os = "macos");
+        let show_on = if mac {
+            ZoneShowOn::AnyDrag
+        } else {
+            ZoneShowOn::Modifier
+        };
+        assert_eq!(
+            (z.show_on, z.position),
+            (show_on, ZonePosition::NearResults)
+        );
+        assert_eq!(
+            (z.modifier, z.keep_original_modifier),
+            (DragKey::Alt, DragKey::Shift)
+        );
+        assert_eq!(z.batch_threshold, 20);
+        let figma = if mac {
+            "com.figma.Desktop"
+        } else {
+            "Figma.exe"
+        };
+        assert!(z.ignored_apps.iter().any(|a| a == figma));
+        assert_eq!(s.results_list.after_cards, 5);
+        let json = serde_json::to_value(z).unwrap();
+        assert_eq!(json["show_on"], if mac { "any_drag" } else { "modifier" });
+        assert_eq!(json["keep_original_modifier"], "shift");
+    }
+
+    #[test]
+    fn a_file_without_the_drop_sections_gets_their_defaults_and_keeps_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"version": 2, "drop_zone": {"future": 1}}"#).unwrap();
+        let (s, _) = Settings::load(&path);
+        assert_eq!(s.drop_zone.batch_threshold, 20);
+        assert_eq!(s.results_list, ResultsList::default());
+        s.save(&path).unwrap();
+        assert_eq!(read_json(&path)["drop_zone"]["future"], 1);
+    }
+
+    #[test]
+    fn drop_settings_are_clamped_and_the_two_modifiers_kept_apart() {
+        let mut s = Settings::default();
+        s.drop_zone.batch_threshold = 0;
+        s.results_list.after_cards = 99;
+        s.drop_zone.modifier = DragKey::Shift;
+        s.drop_zone.keep_original_modifier = DragKey::Shift;
+        s.drop_zone.ignored_apps = vec!["  ".into(), " com.x ".into()];
+        let s = s.sanitised();
+        assert_eq!(s.drop_zone.batch_threshold, 1);
+        assert_eq!(s.results_list.after_cards, 50);
+        assert_eq!(s.drop_zone.keep_original_modifier, DragKey::Alt);
+        assert_eq!(s.drop_zone.ignored_apps, ["com.x"]);
+        let mut big = Settings::default();
+        big.drop_zone.batch_threshold = 50_000;
+        big.results_list.after_cards = 0;
+        let big = big.sanitised();
+        assert_eq!(
+            (big.drop_zone.batch_threshold, big.results_list.after_cards),
+            (10_000, 1)
+        );
     }
 }

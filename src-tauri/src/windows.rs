@@ -48,7 +48,11 @@ pub fn create_stack(app: &AppHandle) -> tauri::Result<()> {
 /// Whether the window labelled `label` follows "Show app UI in screenshots":
 /// the stack and the compare window do; Settings always shows.
 pub fn follows_screenshot_setting(label: &str) -> bool {
-    label == STACK || label == crate::compare::COMPARE
+    match label {
+        STACK | crate::compare::COMPARE => true,
+        crate::drop_batch::ZONE => true, // Stream D: the drop zone is floating UI
+        _ => false,
+    }
 }
 
 /// Hide Ferry's floating UI from screenshots and screen sharing, or show it
