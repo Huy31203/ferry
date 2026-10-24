@@ -176,6 +176,29 @@ impl Plan {
         out
     }
 
+    /// `notify` refused to watch `dir`: report it for every folder that uses it
+    /// and stop routing files there.
+    pub fn mark_failed(&mut self, dir: &Path, reason: &str) {
+        let roles: Vec<Role> = self
+            .dirs
+            .iter()
+            .filter(|d| d.dir == dir)
+            .map(|d| d.role.clone())
+            .collect();
+        self.dirs.retain(|d| d.dir != dir);
+        for role in roles {
+            let slot = match role {
+                Role::Capture { slot, .. } => self.status.captures.get_mut(slot),
+                Role::Folder { index } => self.status.folders.get_mut(index),
+            };
+            if let Some(status) = slot {
+                status.state = DirState::Failed {
+                    reason: reason.to_owned(),
+                };
+            }
+        }
+    }
+
     /// The file's directories refused it: say so. Returns whether anything changed.
     pub fn mark_denied(&mut self, file: &Path) -> bool {
         let roles: Vec<Role> = self

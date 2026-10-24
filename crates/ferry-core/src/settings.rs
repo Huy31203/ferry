@@ -1248,7 +1248,11 @@ mod tests {
     fn a_folder_with_only_a_path_takes_every_other_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        fs::write(&path, r#"{"watch": {"folders": [{"path": "~/Downloads"}]}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"watch": {"folders": [{"path": "~/Downloads"}]}}"#,
+        )
+        .unwrap();
         let (s, status) = Settings::load(&path);
         assert_eq!(status, LoadStatus::Loaded);
         let f = &s.watch.folders[0];

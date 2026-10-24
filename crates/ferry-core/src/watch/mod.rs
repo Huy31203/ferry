@@ -7,7 +7,10 @@ pub mod capture;
 pub mod engine;
 pub mod events;
 pub mod filter;
+#[cfg(test)]
+mod live_tests;
 pub mod media;
 pub mod plan;
 pub mod probe;
+pub mod service;
 pub mod settle;
