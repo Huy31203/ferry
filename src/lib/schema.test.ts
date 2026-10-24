@@ -82,4 +82,10 @@ describe('the list of settings', () => {
       'svc_auto_check',
     ]);
   });
+
+  it('ends the General pane with the sync row under its own heading', () => {
+    const general = all.filter((s) => s.pane === 'general');
+    const last = general[general.length - 1];
+    expect([last.id, last.group]).toEqual(['svc_sync', 'svc.group.sync']);
+  });
 });
