@@ -1234,6 +1234,24 @@ mod tests {
         (job, input)
     }
 
+    // stream B: audio
+    #[test]
+    fn a_file_content_is_copied_not_read_into_memory() {
+        let env = Env::new();
+        let src = env.file("big.bin", &vec![7u8; 3_000_000]);
+        let target = env.file("t.bin", b"old");
+        let job = Job::file(
+            &env.file("a.png", &testutil::png(8, 8)),
+            &Settings::default(),
+            true,
+        )
+        .unwrap();
+        job.write_file(&target, Content::File(&src), &target, &options())
+            .unwrap();
+        assert_eq!(fs::read(&target).unwrap().len(), 3_000_000);
+        assert!(!target.with_file_name("t.bin.ferry-tmp").exists());
+    }
+
     #[test]
     fn a_clipboard_image_is_backed_up_optimised_and_put_back_on_the_clipboard() {
         let env = Env::new();
