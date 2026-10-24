@@ -29,6 +29,8 @@ pub struct Settings {
     pub clip: Clip,
     // stream A: video
     pub video: Video,
+    // stream B: audio
+    pub audio: crate::audio::settings::Audio,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -236,6 +238,8 @@ impl Default for Settings {
             clip: Clip::default(),
             // stream A: video
             video: Video::default(),
+            // stream B: audio
+            audio: crate::audio::settings::Audio::default(),
             extra: Map::new(),
         }
     }
@@ -487,13 +491,15 @@ impl Settings {
             .filter(|item| !item.is_empty())
             .collect();
         repair_output(&mut self.video.output, &Video::default().output);
+        // stream B: audio
+        self.audio.sanitise();
         self.version = self.version.max(VERSION);
         self
     }
 }
 
 /// An invalid or empty template, or an empty folder, goes back to the default.
-fn repair_output(out: &mut Output, defaults: &Output) {
+pub(crate) fn repair_output(out: &mut Output, defaults: &Output) {
     for (rule, default) in [
         (&mut out.optimised, &defaults.optimised),
         (&mut out.converted, &defaults.converted),
