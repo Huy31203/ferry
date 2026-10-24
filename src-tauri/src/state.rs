@@ -1,7 +1,7 @@
 //! Everything the app shares between the tray, hotkeys, clipboard watcher,
 //! job workers and commands.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
@@ -43,6 +43,8 @@ pub struct AppState {
     pub stack: Mutex<StackInbox>,
     /// The tray shows an error mark until its menu is opened.
     pub tray_error: AtomicBool,
+    /// Stream C: watched jobs whose folder shows no card; only an Error shows.
+    pub quiet: Mutex<HashSet<JobId>>,
 }
 
 impl AppState {
@@ -72,6 +74,7 @@ impl AppState {
             clipboard: Mutex::new(ClipboardLog::default()),
             stack: Mutex::new(StackInbox::default()),
             tray_error: AtomicBool::new(false),
+            quiet: Mutex::new(HashSet::new()),
         }
     }
 
@@ -82,10 +85,32 @@ impl AppState {
 
     /// Keep a finished job for the tray's "Recent results", newest first.
     pub fn remember(&self, update: &JobUpdate) {
+        if self.is_quiet(&update.id) {
+            return; // stream C
+        }
         let mut recent = self.recent.lock().unwrap();
         recent.retain(|u| u.id != update.id);
         recent.push_front(update.clone());
         recent.truncate(RECENT);
+    }
+
+    // ---- Stream C: quiet watched jobs ----
+    /// Whether `update` may be shown. A quiet job shows nothing until it fails;
+    /// its Error card shows, and from then on it is a normal card.
+    pub fn quiet_gate(&self, update: &JobUpdate) -> bool {
+        let mut quiet = relock(&self.quiet);
+        if !quiet.contains(&update.id) {
+            return true;
+        }
+        if matches!(update.state, JobState::Error { .. }) {
+            quiet.remove(&update.id);
+            return true;
+        }
+        false
+    }
+
+    pub fn is_quiet(&self, id: &JobId) -> bool {
+        relock(&self.quiet).contains(id)
     }
 }
 
@@ -384,6 +409,51 @@ mod tests {
         assert_eq!(recent.len(), RECENT);
         assert_eq!(recent[0].id, updates[11].id);
         assert_eq!(recent[1].id, updates[10].id);
+    }
+
+    // ---- Stream C: quiet watched jobs ----
+    fn test_state() -> AppState {
+        let dir = std::env::temp_dir();
+        AppState::new(
+            Settings::default(),
+            dir.join("s.json"),
+            dir.join("b"),
+            dir.join("w"),
+            dir.join("l"),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_quiet_job_shows_no_card_until_it_fails() {
+        let state = test_state();
+        let mut update = ferry_core::pipeline::notice("x".into());
+        state.quiet.lock().unwrap().insert(update.id.clone());
+        update.state = JobState::Queued;
+        assert!(!state.quiet_gate(&update));
+        update.state = JobState::Done;
+        assert!(!state.quiet_gate(&update));
+        update.state = JobState::Error {
+            reason: "Can't write to ~/In".into(),
+        };
+        assert!(state.quiet_gate(&update));
+        update.state = JobState::Queued; // the user pressed Retry on the Error card
+        assert!(
+            state.quiet_gate(&update),
+            "a failed quiet job becomes a normal card"
+        );
+    }
+
+    #[test]
+    fn a_quiet_job_stays_out_of_recent_results() {
+        let state = test_state();
+        let quiet = ferry_core::pipeline::notice("quiet".into());
+        let loud = ferry_core::pipeline::notice("loud".into());
+        state.quiet.lock().unwrap().insert(quiet.id.clone());
+        state.remember(&quiet);
+        assert!(state.recent.lock().unwrap().is_empty());
+        state.remember(&loud);
+        assert_eq!(state.recent.lock().unwrap().len(), 1);
     }
 
     fn entry(output: &str, last: JobState) -> Arc<Entry> {

@@ -3,7 +3,8 @@
   import { formatBytes } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import type { Setting } from '../lib/schema';
-  import type { OutputRule as Rule } from '../lib/settings';
+  import type { OutputRule as Rule, WatchedFolder } from '../lib/settings';
+  import CaptureDirs from './controls/CaptureDirs.svelte'; // stream C
   import Choice from './controls/Choice.svelte';
   import HotkeyRecorder from './controls/HotkeyRecorder.svelte';
   import EncoderPicker from './controls/EncoderPicker.svelte'; // stream A: video
@@ -18,6 +19,7 @@
   import TemplateField from './controls/TemplateField.svelte';
   import TrayStyle from './controls/TrayStyle.svelte';
   import UpdatePanel from './controls/UpdatePanel.svelte';
+  import WatchFolders from './controls/WatchFolders.svelte'; // stream C
 
   let {
     setting,
@@ -163,6 +165,10 @@
       <SyncControl {disabled} labelledby={labelId} />
     {:else if control.kind === 'update'}
       <UpdatePanel />
+    {:else if control.kind === 'capture_dirs'}
+      <CaptureDirs labelledby={labelId} />
+    {:else if control.kind === 'watch_folders'}
+      <WatchFolders folders={value as WatchedFolder[]} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'action'}
       <button
         type="button"

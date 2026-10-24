@@ -154,4 +154,17 @@ describe('the list of settings', () => {
     const last = general[general.length - 1];
     expect([last.id, last.group]).toEqual(['svc_sync', 'svc.group.sync']);
   });
+
+  it('has the Watched folders pane with captures and folders', () => {
+    const rows = all.filter((s) => s.pane === 'watch');
+    expect(rows.map((s) => s.id)).toEqual([
+      'watch_screenshots',
+      'watch_recordings',
+      'watch_capture_results',
+      'watch_capture_dirs',
+      'watch_folders',
+    ]);
+    expect(rows.find((s) => s.id === 'watch_recordings')?.requires).toBe('video');
+    expect(panes.map((p) => p.id)).toContain('watch');
+  });
 });

@@ -452,6 +452,7 @@ impl Job {
         fs::rename(&self.output, &to).map_err(|e| RenameError::Failed {
             reason: describe(&e),
         })?;
+        crate::selfwrite::record(&to); // stream C
         if !self.twin {
             // The source follows its name: it is the very file that was renamed,
             // or it is in the Trash and Restore will bring it back under this name.
@@ -2470,6 +2471,18 @@ mod tests {
             sniff::dimensions(&fs::read(&hero).unwrap(), Format::Png),
             Some((150, 100))
         );
+    }
+
+    #[test]
+    fn a_card_rename_is_ferrys_own_write() {
+        let env = Env::new();
+        let (mut job, _) = done_file(&env, "shot.png");
+        job.rename("renamed").unwrap();
+        let to = env.dir.path().join("renamed.png");
+        assert!(crate::selfwrite::is_own(
+            &to,
+            &crate::selfwrite::Stamp::of(&to).unwrap()
+        ));
     }
 
     #[test]

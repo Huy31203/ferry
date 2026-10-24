@@ -13,6 +13,7 @@ mod prefs;
 mod preview;
 mod state;
 mod tray;
+mod watch; // stream C
 mod windows;
 
 // svc (stream G)
@@ -99,6 +100,11 @@ pub fn run() {
             commands::card_hover,
             commands::output_preview,
             commands::pick_folder,
+            // stream C (watch)
+            watch::commands::watch_status,
+            watch::commands::watch_support,
+            watch::commands::watch_check_folder,
+            watch::commands::watch_pick_folder,
             // Stream D: drop-batch
             drop_batch::batch::batch_ready,
             drop_batch::batch::batch_pick_files,
@@ -185,6 +191,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     menu::init(app);
     drop_batch::init(app)?;
     clipboard::start(app);
+    watch::start(app); // stream C
     housekeeping(app);
     svc_commands::setup(app);
     if let LoadStatus::Recovered { .. } = status {
