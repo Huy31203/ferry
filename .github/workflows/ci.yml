@@ -182,6 +182,46 @@ jobs:
           if ($proc.HasExited) { throw "Ferry exited early with code $($proc.ExitCode)" }
           Stop-Process -Id $proc.Id -Force
           Write-Host "Ferry installed and stayed running for 10 s"
+      - name: Smoke test Explorer integration
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Ferry\Ferry.exe'
+          $verb = 'HKCU:\Software\Classes\SystemFileAssociations\.png\shell\Ferry.Optimise\command'
+          $command = (Get-ItemProperty -LiteralPath $verb).'(default)'
+          if ($command -ne "`"$exe`" --optimise `"%1`"") { throw "unexpected verb command: $command" }
+          $progids = Get-ItemProperty -LiteralPath 'HKCU:\Software\Classes\.png\OpenWithProgids'
+          if ($null -eq $progids.'Ferry.File') { throw 'Ferry is not under Open with for .png' }
+          $default = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Classes\.png' -ErrorAction SilentlyContinue).'(default)'
+          if ($default -eq 'Ferry.File') { throw 'Ferry made itself the default app for .png' }
+          Add-Type -AssemblyName System.Drawing
+          function New-TestPng([string]$path) {
+            $bmp = New-Object System.Drawing.Bitmap 256, 192
+            for ($x = 0; $x -lt 256; $x++) { for ($y = 0; $y -lt 192; $y++) {
+              $bmp.SetPixel($x, $y, [System.Drawing.Color]::FromArgb(255, $x, $y, ($x * $y) % 256)) } }
+            $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Dispose()
+          }
+          $dir = Join-Path $env:RUNNER_TEMP 'ferry smoke'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $cold = Join-Path $dir 'cold shot.png'
+          $warm = Join-Path $dir 'warm shot.png'
+          New-TestPng $cold
+          New-TestPng $warm
+          $coldBefore = (Get-Item -LiteralPath $cold).Length
+          $warmBefore = (Get-Item -LiteralPath $warm).Length
+          $proc = Start-Process -FilePath $exe -ArgumentList @('--optimise', "`"$cold`"") -PassThru
+          Start-Sleep -Seconds 10
+          if ((Get-Item -LiteralPath $cold).Length -ge $coldBefore) { throw 'a cold start did not optimise its file' }
+          Start-Process -FilePath $exe -ArgumentList @('--optimise', "`"$warm`"") -Wait
+          Start-Sleep -Seconds 8
+          if ((Get-Item -LiteralPath $warm).Length -ge $warmBefore) { throw 'a second launch did not hand its file over' }
+          if ($proc.HasExited) { throw 'the first Ferry exited' }
+          Stop-Process -Id $proc.Id -Force
+          Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'Ferry\uninstall.exe') -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $verb); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path -LiteralPath $verb) { throw 'uninstall left the Explorer verb behind' }
+          Write-Host 'Explorer verb, Open with and both launch paths work'
       - name: Upload installer
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v7
