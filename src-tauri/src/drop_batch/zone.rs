@@ -28,7 +28,6 @@ pub const TAB_SIZE: (f64, f64) = (24.0, 140.0);
 /// A zone opened from the tray menu hides itself after this long if nothing hovers it.
 pub const MENU_SHOW_SECS: u64 = 10;
 /// A drag that ends shortly before its drop event still gets the drop.
-#[allow(dead_code, reason = "used by the drag watcher (next commit)")]
 pub const DROP_GRACE_MS: u64 = 300;
 /// The drop collapse animation, plus a little.
 pub const COLLAPSE_MS: u64 = 220;
@@ -145,7 +144,6 @@ pub fn zone_ready(app: AppHandle) -> ZoneView {
     current_view(&app)
 }
 
-#[allow(dead_code, reason = "used by the drag watcher (next commit)")]
 pub fn visible(app: &AppHandle) -> bool {
     with_zone(app, |ctl| ctl.visible)
 }
@@ -191,7 +189,6 @@ pub fn show(app: &AppHandle, mode: ZoneMode, under_cursor: bool, summary: Option
 }
 
 /// The files under a drag are known a moment after the zone appears.
-#[allow(dead_code, reason = "used by the drag watcher (next commit)")]
 pub fn set_summary(app: &AppHandle, summary: Summary) {
     let shown = with_zone(app, |ctl| {
         if ctl.visible {
@@ -334,6 +331,35 @@ fn apply_geometry(window: &WebviewWindow, scale: f64, size: (u32, u32), at: (i32
     }
 }
 
+/// Hide shortly after a drag ends, unless a drop arrived or the zone was shown again.
+pub fn hide_after_grace(app: &AppHandle) {
+    let generation = with_zone(app, |ctl| ctl.generation);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(DROP_GRACE_MS));
+        if with_zone(&app, |ctl| ctl.generation == generation && !ctl.dropped) {
+            hide(&app);
+        }
+    });
+}
+
+/// Hold the keep modifier to write results beside the originals. Read while a
+/// drag is over the zone and again at the drop; emits only when it changed.
+fn refresh_keep(app: &AppHandle) -> bool {
+    let key = app
+        .state::<AppState>()
+        .settings
+        .read()
+        .unwrap()
+        .drop_zone
+        .keep_original_modifier;
+    let keep = platform::drop::mods().has(key.into());
+    if with_zone(app, |ctl| std::mem::replace(&mut ctl.keep, keep) != keep) {
+        emit_view(app);
+    }
+    keep
+}
+
 /// The edge tab becomes the full zone once a drag enters it.
 fn expand_tab(app: &AppHandle) {
     with_zone(app, |ctl| ctl.mode = ZoneMode::Zone);
@@ -351,6 +377,7 @@ fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
             let (app, paths) = (app.clone(), paths.clone());
             tauri::async_runtime::spawn_blocking(move || {
                 let summary = summarise(&paths, threshold(&app) as usize + 1);
+                refresh_keep(&app);
                 let tab = with_zone(&app, |ctl| {
                     ctl.summary = Some(summary);
                     ctl.hovering = true;
@@ -362,15 +389,19 @@ fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
                 emit_view(&app);
             });
         }
+        DragDropEvent::Over { .. } => {
+            refresh_keep(app);
+        }
         DragDropEvent::Leave => {
             with_zone(app, |ctl| ctl.hovering = false);
             emit_view(app);
         }
         DragDropEvent::Drop { paths, .. } => {
-            let (generation, keep) = with_zone(app, |ctl| {
+            let keep = refresh_keep(app);
+            let generation = with_zone(app, |ctl| {
                 ctl.dropped = true;
                 ctl.hovering = false;
-                (ctl.generation, ctl.keep)
+                ctl.generation
             });
             emit_view(app);
             let (worker, paths) = (app.clone(), paths.clone());
