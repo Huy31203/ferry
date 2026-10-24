@@ -60,4 +60,39 @@ describe('the list of settings', () => {
     expect(rows.map((s) => s?.depends_on)).toEqual([undefined, undefined, undefined]);
     expect(t('clip.auto_copy')).toBe('Copy results of drops and watched folders');
   });
+
+  it('has the Hotkeys pane with every binding in order', () => {
+    expect(all.filter((s) => s.pane === 'hotkeys').map((s) => s.path)).toEqual([
+      'hotkeys.optimise',
+      'hotkeys.aggressive',
+      'hotkeys.cycle_state',
+      'svc.shortcuts.preview',
+      'svc.shortcuts.compare',
+      'svc.shortcuts.step_down',
+      undefined,
+    ]);
+    expect(panes.map((p) => p.id).slice(-2)).toEqual(['hotkeys', 'about']);
+  });
+
+  it('puts the rail editor and the update pill under Floating results', () => {
+    const at = (id: string) => all.find((s) => s.id === id);
+    expect([at('svc_rail')?.pane, at('svc_rail')?.path]).toEqual(['floating', 'svc.rail.tools']);
+    expect([at('svc_update_pill')?.pane, at('svc_update_pill')?.path]).toEqual([
+      'floating',
+      'svc.updates.pill',
+    ]);
+  });
+
+  it('has the About pane with the update panel and the automatic-check switch', () => {
+    expect(all.filter((s) => s.pane === 'about').map((s) => s.id)).toEqual([
+      'svc_update',
+      'svc_auto_check',
+    ]);
+  });
+
+  it('ends the General pane with the sync row under its own heading', () => {
+    const general = all.filter((s) => s.pane === 'general');
+    const last = general[general.length - 1];
+    expect([last.id, last.group]).toEqual(['svc_sync', 'svc.group.sync']);
+  });
 });

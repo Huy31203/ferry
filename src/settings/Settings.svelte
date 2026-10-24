@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { listen } from '@tauri-apps/api/event';
+  import { invoke } from '@tauri-apps/api/core';
   import { onMount, tick } from 'svelte';
   import { matches } from '../lib/fuzzy';
   import { t } from '../lib/i18n';
   import { isMac } from '../lib/ipc';
   import { panes, settingsFor, type PaneId, type Setting } from '../lib/schema';
   import { getPath } from '../lib/settings';
+  import type { PaneRequest } from '../lib/svc';
   import Row from './Row.svelte';
   import { change, load, store } from './store.svelte';
 
@@ -35,8 +38,19 @@
   });
 
   onMount(() => {
-    void load();
+    void load().then(takePane);
+    // svc: another part of Ferry opens Settings at a pane (and a row)
+    const unlisten = listen('svc:open-pane', () => void takePane());
+    return () => void unlisten.then((off) => off());
   });
+
+  async function takePane() {
+    const request = await invoke<PaneRequest | null>('svc_settings_pane');
+    if (!request) return;
+    const target = all.find((s) => s.id === request.row);
+    if (target) await jump(target);
+    else if (panes.some((p) => p.id === request.pane)) pane = request.pane as PaneId;
+  }
 
   /** The switch a row depends on, when it is off. */
   function blocker(setting: Setting): Setting | null {

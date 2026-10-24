@@ -6,10 +6,13 @@
   import type { CropFrame } from '../lib/edits';
   import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
+  import type { UpdateView } from '../lib/svc';
+  import { DEFAULT_RAIL_TOOLS } from '../lib/rail';
   import Card from './Card.svelte';
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
   import DragAllBar from './DragAllBar.svelte';
+  import UpdatePill from './UpdatePill.svelte';
 
   let cards = $state<JobUpdate[]>([]);
   let config = $state<StackConfig>({
@@ -19,7 +22,10 @@
     compression: 80,
     crop_sizes: [],
     hover_hotkeys: true,
+    rail: [...DEFAULT_RAIL_TOOLS],
   });
+  /** svc: the updater's state, for the "Update available" pill. */
+  let update = $state<UpdateView | null>(null);
   let hovered = $state<string | null>(null);
   /** The button the pointer is on: its card (null for the Drag all bar) and its `data-action`. */
   let hot = $state<{ card: string | null; action: string } | null>(null);
@@ -172,6 +178,7 @@
           compression: images.compression,
           crop_sizes: images.crop_sizes,
           hover_hotkeys: floating.hover_hotkeys,
+          rail: event.payload.svc.rail.tools,
         };
       }),
       // A restored keep-both copy is gone, and its card goes with it.
@@ -181,12 +188,18 @@
       listen('stack:clear', () => {
         cards = [];
       }),
+      listen<UpdateView>('svc:update', (event) => {
+        update = event.payload;
+      }),
     ]).then(async (stops) => {
       const [stackConfig, pending] = await invoke<[StackConfig, JobUpdate[]]>('stack_ready');
       config = stackConfig;
       for (const card of pending) cards = upsert(cards, card);
       return stops;
     });
+    invoke<UpdateView>('svc_update_state')
+      .then((view) => (update = view))
+      .catch((e) => console.warn('svc_update_state', e));
     const observer = new ResizeObserver(report);
     if (root) observer.observe(root);
     return () => {
@@ -219,6 +232,9 @@
   onpointerdown={clickAway}
 >
   <!-- The bar sits at the screen-edge end of the stack, because an overflowing stack is clipped at the far end. -->
+  {#if cards.length > 0 && top && update?.pill}
+    <UpdatePill view={update} hotAction={hot && hot.card === null ? hot.action : null} />
+  {/if}
   {#if cards.length > 1 && top}
     <DragAllBar
       cards={draggable(cards)}
@@ -241,6 +257,7 @@
         {railRight}
         autoHideSecs={config.auto_hide_secs}
         compression={config.compression}
+        railTools={config.rail}
         tool={open}
         onclose={() => close(card.id)}
         ondrag={dragState}
@@ -268,6 +285,9 @@
       onclear={clearAll}
       ondrag={dragState}
     />
+  {/if}
+  {#if cards.length > 0 && !top && update?.pill}
+    <UpdatePill view={update} hotAction={hot && hot.card === null ? hot.action : null} />
   {/if}
 </div>
 

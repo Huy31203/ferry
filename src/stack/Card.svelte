@@ -25,6 +25,7 @@
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
+  import { DEFAULT_RAIL_TOOLS, MAX_TOOLS, addable, knownCount, toolLabel } from '../lib/rail';
   import FormatBar from './FormatBar.svelte';
   import Slider from './Slider.svelte';
 
@@ -37,6 +38,7 @@
     hotAction = null,
     autoHideSecs,
     compression,
+    railTools = DEFAULT_RAIL_TOOLS,
     tool = null,
     frame = null,
     onclose,
@@ -54,6 +56,8 @@
     autoHideSecs: number;
     /** The settings' compression quality: where the Compression slider starts on a card without its own. */
     compression: number;
+    /** svc: the tool ids the rail shows, in the user's order. */
+    railTools?: string[];
     /** This card's open tool, if any. */
     tool?: Tool | null;
     /** The crop popover's live frame, drawn over the thumbnail. */
@@ -76,8 +80,18 @@
   const busy = $derived(isBusy(card.state));
   const notice = $derived(card.name === '' && card.ext === '');
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
-  const rail = $derived(railActions(card, compact));
+  const rail = $derived(railActions(card, compact, railTools));
   const canRename = $derived(canDrag(card));
+
+  // svc: the rail's visual order follows the setting; the blocks below keep their built-in order in the DOM
+  $effect(() => {
+    const order = rail;
+    if (!cardEl) return;
+    for (const button of cardEl.querySelectorAll<HTMLElement>('.rail > [data-action]')) {
+      const action = button.dataset.action as string;
+      button.style.order = String(action === 'add' ? order.length : order.indexOf(action));
+    }
+  });
   const frameRect = $derived(
     frame && card.dims_before
       ? frameBox(frame, card.dims_before, compact ? [220, 150] : [300, 200])
@@ -280,6 +294,13 @@
         return copied === 'ok' ? t('card.copied') : copied === 'failed' ? t('card.copy_failed') : t('card.copy');
       case 'restore':
         return t('card.restore');
+      case 'reveal':
+      case 'aggressive':
+      case 'preview':
+      case 'fit':
+        return toolLabel(action, isMac);
+      case 'add':
+        return t('svc.rail.add');
       case 'more':
         return t('card.menu');
       case 'close':
@@ -323,6 +344,20 @@
   function openMenu(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     void act('card_menu', { x: rect.left, y: rect.bottom + 4 });
+  }
+
+  // svc: the + button lists the tools that are not on the rail; full means none can be added
+  function openAddMenu(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const full = knownCount(railTools) >= MAX_TOOLS;
+    const items = addable(railTools).map((tool) => ({
+      id: tool.id,
+      label: toolLabel(tool.id, isMac),
+      enabled: !full,
+    }));
+    invoke('svc_rail_menu', { x: rect.left, y: rect.bottom + 4, items }).catch((e) =>
+      console.warn('svc_rail_menu', e),
+    );
   }
 
   function close() {
@@ -473,9 +508,40 @@
           {/if}
         </button>
       {/if}
+      <!-- svc: rail tools (stream G) -->
+      {#if rail.includes('reveal')}
+        <button type="button" data-action="reveal" class:hot={hotAction === 'reveal'} aria-label={tipText('reveal')} onclick={() => act('card_reveal')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('aggressive')}
+        <button type="button" data-action="aggressive" class:hot={hotAction === 'aggressive'} aria-label={tipText('aggressive')} disabled={!card.can_edit} onclick={() => act('card_rerun', { aggressive: true })}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('rename')}
+        <button type="button" data-action="rename" class:hot={hotAction === 'rename'} aria-label={tipText('rename')} onclick={() => ontool('rename')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('preview')}
+        <button type="button" data-action="preview" class:hot={hotAction === 'preview'} aria-label={tipText('preview')} onclick={() => act('quick_preview')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" /></svg>
+        </button>
+      {/if}
+      {#if rail.includes('fit')}
+        <button type="button" data-action="fit" class:hot={hotAction === 'fit'} aria-label={tipText('fit')} disabled={!card.can_edit} onclick={() => ontool(tool === 'fit' ? null : 'fit')}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M12 18v-6" /><path d="m9 15 3 3 3-3" /></svg>
+        </button>
+      {/if}
       {#if rail.includes('more')}
         <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} onclick={(event) => openMenu(event)}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+        </button>
+      {/if}
+      {#if !compact}
+        <button type="button" data-action="add" class:hot={hotAction === 'add'} aria-label={tipText('add')} onclick={openAddMenu}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
         </button>
       {/if}
     </div>

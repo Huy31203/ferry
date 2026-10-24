@@ -18,6 +18,12 @@ export interface Settings {
     tray_style: 'default' | 'classic' | 'flat';
     language: string;
   };
+  svc: {
+    updates: { auto_check: boolean; pill: boolean; skipped_version: string };
+    sync: { enabled: boolean; folder: string };
+    rail: { tools: string[] };
+    shortcuts: { preview: string; compare: string; step_down: string; disabled: string[] };
+  };
   clipboard: {
     enabled: boolean;
     skip_multiple_files: boolean;

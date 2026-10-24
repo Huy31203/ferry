@@ -5,14 +5,18 @@
   import type { Setting } from '../lib/schema';
   import type { OutputRule as Rule } from '../lib/settings';
   import Choice from './controls/Choice.svelte';
+  import HotkeyRecorder from './controls/HotkeyRecorder.svelte';
   import ListEditor from './controls/ListEditor.svelte';
   import NumberField from './controls/NumberField.svelte';
   import OutputRule from './controls/OutputRule.svelte';
+  import RailEditor from './controls/RailEditor.svelte';
   import SizeList from './controls/SizeList.svelte';
   import Slider from './controls/Slider.svelte';
   import Switch from './controls/Switch.svelte';
+  import SyncControl from './controls/SyncControl.svelte';
   import TemplateField from './controls/TemplateField.svelte';
   import TrayStyle from './controls/TrayStyle.svelte';
+  import UpdatePanel from './controls/UpdatePanel.svelte';
 
   let {
     setting,
@@ -68,7 +72,7 @@
   }
 </script>
 
-<div class="row" class:highlight id={`row-${setting.id}`}>
+<div class="row" class:highlight class:wide={setting.wide} id={`row-${setting.id}`}>
   <div class="text">
     <div class="label" id={labelId}>{t(setting.label)}</div>
     {#if hint}
@@ -141,6 +145,20 @@
       <SizeList sizes={value as [number, number][]} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'tray_style'}
       <TrayStyle value={value as string} labelledby={labelId} {onchange} />
+    {:else if control.kind === 'hotkey'}
+      <HotkeyRecorder
+        action={control.action}
+        value={value as string | undefined}
+        {disabled}
+        labelledby={labelId}
+        label={t(setting.label)}
+      />
+    {:else if control.kind === 'rail'}
+      <RailEditor value={value as string[]} {disabled} labelledby={labelId} {onchange} />
+    {:else if control.kind === 'sync'}
+      <SyncControl {disabled} labelledby={labelId} />
+    {:else if control.kind === 'update'}
+      <UpdatePanel />
     {:else if control.kind === 'action'}
       <button
         type="button"
@@ -167,6 +185,13 @@
   }
   .row:last-child {
     border-bottom: 0;
+  }
+  .row.wide {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .wide .control {
+    flex-shrink: 1;
   }
   .row.highlight {
     background: color-mix(in srgb, var(--accent) 22%, transparent);

@@ -4,11 +4,14 @@
     onchange,
     labelledby,
     disabled = false,
+    label,
   }: {
     checked: boolean;
     onchange: (value: boolean) => void;
     labelledby: string;
     disabled?: boolean;
+    /** svc: an accessible name of its own, instead of the row's label. */
+    label?: string;
   } = $props();
 </script>
 
@@ -18,7 +21,8 @@
   class="switch"
   class:on={checked}
   aria-checked={checked}
-  aria-labelledby={labelledby}
+  aria-label={label}
+  aria-labelledby={label ? undefined : labelledby}
   {disabled}
   onclick={() => onchange(!checked)}
 >

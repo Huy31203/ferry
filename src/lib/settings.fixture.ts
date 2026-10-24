@@ -11,6 +11,12 @@ export const sample: Settings = {
     tray_style: 'default',
     language: 'en',
   },
+  svc: {
+    updates: { auto_check: true, pill: true, skipped_version: '' },
+    sync: { enabled: false, folder: '' },
+    rail: { tools: ['downscale', 'compression', 'crop', 'restore', 'compare', 'copy'] },
+    shortcuts: { preview: 'Space', compare: 'CmdOrCtrl+D', step_down: '-', disabled: [] },
+  },
   clipboard: {
     enabled: true,
     skip_multiple_files: true,

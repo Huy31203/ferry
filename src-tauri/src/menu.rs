@@ -220,8 +220,16 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &item(Action::CopyPath, t("menu.copy_path"), None)?,
             &item(Action::Rename, t("menu.rename"), None)?,
             &PredefinedMenuItem::separator(app)?,
-            &item(Action::Compare, t("card.compare"), Some("CmdOrCtrl+D"))?,
-            &item(Action::Preview, t("menu.preview"), Some("Space"))?,
+            &item(
+                Action::Compare,
+                t("card.compare"),
+                crate::hotkeys::hover_accelerator(app, "compare").as_deref(),
+            )?,
+            &item(
+                Action::Preview,
+                t("menu.preview"),
+                crate::hotkeys::hover_accelerator(app, "preview").as_deref(),
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &item(Action::Rerun, t("card.reoptimise"), None)?,
             &item(Action::Aggressive, t("card.aggressive"), None)?,
