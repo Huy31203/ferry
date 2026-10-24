@@ -66,6 +66,10 @@ pub struct CompareView {
 /// What the window shows for `card`, or why it can't. `single` leaves the
 /// original out, so an expired backup does not matter.
 pub fn view(card: &JobUpdate, single: bool) -> Result<CompareView, String> {
+    // stream B: audio (Quick Look on macOS still previews it)
+    if card.audio.is_some() && (!single || !cfg!(target_os = "macos")) {
+        return Err(t("audio.compare_unavailable"));
+    }
     if matches!(card.state, JobState::Queued | JobState::Optimising { .. }) {
         return Err("the job is still running".into());
     }
@@ -512,5 +516,25 @@ mod tests {
         assert_eq!(json["now"]["dims"], serde_json::json!([1440, 900]));
         assert_eq!(json["original"]["format"], "PNG");
         assert!(json["id"].is_string());
+    }
+
+    // stream B: audio
+    #[test]
+    fn an_audio_card_has_no_compare_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = JobUpdate {
+            audio: Some(ferry_core::audio::AudioCard {
+                bitrate_before: None,
+                bitrate_after: Some(192),
+                lossless: false,
+                has_cover: false,
+            }),
+            ..converted(dir.path())
+        };
+        assert_eq!(
+            view(&card, false).unwrap_err(),
+            "Audio compare isn't available yet"
+        );
+        assert_eq!(view(&card, true).is_ok(), cfg!(target_os = "macos"));
     }
 }

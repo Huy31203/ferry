@@ -3,6 +3,7 @@
 //! What ends in the page (rename, crop, fit, compare, preview, close) goes to
 //! the stack as a `card:action` event; the rest runs here.
 
+use ferry_core::audio::{BAR, CoverPolicy, Loudness};
 use ferry_core::i18n::{t, tf};
 use ferry_core::job::{JobId, JobState, JobUpdate};
 use ferry_core::sniff::Format;
@@ -41,9 +42,15 @@ pub enum Action {
     // stream A: video
     Speed,
     Mute,
+    // ---- stream B: audio ----
+    Loudness(Loudness),
+    Cover(CoverPolicy),
+    /// Downscale the cover to a square this many pixels wide.
+    CoverSquare(u32),
+    ExtractCover,
 }
 
-const FORMATS: [Format; 10] = [
+const FORMATS: [Format; 14] = [
     Format::Png,
     Format::Jpeg,
     Format::Gif,
@@ -55,10 +62,38 @@ const FORMATS: [Format; 10] = [
     Format::WebM,
     Format::Mov,
     Format::Mkv,
+    // ---- stream B: audio ----
+    Format::Mp3,
+    Format::M4a,
+    Format::Opus,
+    Format::Wav,
 ];
 
+/// Square cover sizes in "Cover art ▸ Downscale ▸".
+const COVER_SQUARES: [u32; 4] = [1400, 1000, 600, 300];
+const LOUDNESS: [Loudness; 5] = [
+    Loudness::Off,
+    Loudness::Streaming,
+    Loudness::AppleMusic,
+    Loudness::Podcast,
+    Loudness::Broadcast,
+];
+const COVERS: [CoverPolicy; 3] = [
+    CoverPolicy::Keep,
+    CoverPolicy::Optimise,
+    CoverPolicy::Remove,
+];
+
+/// A value's part of an item id: its serde name.
+fn serde_key<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
 /// The actions without a value, by their id part.
-const NAMED: [(&str, Action); 15] = [
+const NAMED: [(&str, Action); 16] = [
     ("open", Action::Open),
     ("reveal", Action::Reveal),
     ("copy", Action::Copy),
@@ -75,6 +110,8 @@ const NAMED: [(&str, Action); 15] = [
     // stream A: video
     ("speed", Action::Speed),
     ("mute", Action::Mute),
+    // stream B: audio
+    ("extract_cover", Action::ExtractCover),
 ];
 
 impl Action {
@@ -84,6 +121,10 @@ impl Action {
             Action::Scale(percent) => format!("scale-{percent}"),
             Action::Convert(format) => format!("convert-{}", format_key(format)),
             Action::KeepBoth(format) => format!("keep_both-{}", format_key(format)),
+            // stream B: audio
+            Action::Loudness(l) => format!("loudness-{}", serde_key(&l)),
+            Action::Cover(c) => format!("cover-{}", serde_key(&c)),
+            Action::CoverSquare(n) => format!("cover_square-{n}"),
             named => NAMED
                 .iter()
                 .find(|(_, a)| *a == named)
@@ -98,6 +139,16 @@ impl Action {
             Some(("scale", value)) => value.parse().ok().map(Action::Scale),
             Some(("convert", value)) => format(value).map(Action::Convert),
             Some(("keep_both", value)) => format(value).map(Action::KeepBoth),
+            // stream B: audio
+            Some(("loudness", value)) => LOUDNESS
+                .into_iter()
+                .find(|l| serde_key(l) == value)
+                .map(Action::Loudness),
+            Some(("cover", value)) => COVERS
+                .into_iter()
+                .find(|c| serde_key(c) == value)
+                .map(Action::Cover),
+            Some(("cover_square", value)) => value.parse().ok().map(Action::CoverSquare),
             Some(_) => None,
             None => NAMED.iter().find(|(k, _)| *k == key).map(|(_, a)| *a),
         }
@@ -163,12 +214,16 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         Action::Restore => idle && card.can_restore,
         Action::Convert(format) => card.can_edit && card.format != Some(format),
         Action::Scale(percent) => card.can_edit && card.edits.scale.unwrap_or(100) != percent,
-        Action::Compare
-        | Action::Rerun
-        | Action::Aggressive
-        | Action::Fit
-        | Action::Crop
-        | Action::KeepBoth(_) => card.can_edit,
+        Action::Rerun | Action::Aggressive | Action::Fit | Action::Crop | Action::KeepBoth(_) => {
+            card.can_edit
+        }
+        // stream B: audio (no compare for audio yet)
+        Action::Compare => card.can_edit && card.audio.is_none(),
+        Action::Loudness(l) => card.can_edit && card.edits.loudness != Some(l),
+        Action::Cover(_) | Action::CoverSquare(_) => {
+            card.can_edit && card.audio.as_ref().is_some_and(|a| a.has_cover)
+        }
+        Action::ExtractCover => idle && card.audio.as_ref().is_some_and(|a| a.has_cover),
         // stream A: video
         Action::Speed | Action::Mute => card.can_edit && card.video.is_some(),
     }
@@ -177,6 +232,10 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
 /// "Convert to ▸": PNG, JPEG, WebP, and GIF first on a card that started as a
 /// GIF (like the format bar).
 pub fn convert_formats(card: &JobUpdate) -> Vec<Format> {
+    // stream B: audio
+    if card.audio.is_some() {
+        return BAR.to_vec();
+    }
     // stream A: video (HEVC is hardware only: offered where an encoder exists)
     if card.source_format.is_some_and(Format::is_video) {
         let hevc = card.video.as_ref().is_some_and(|v| v.hevc_encoder);
@@ -221,6 +280,10 @@ pub fn popup(
 }
 
 fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
+    // stream B: audio
+    if card.audio.is_some() {
+        return build_audio(app, card);
+    }
     let item = |action: Action, label: String, accelerator: Option<&str>| {
         MenuItem::with_id(
             app,
@@ -307,6 +370,99 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
+// ---- stream B: audio ----
+fn refs(items: &[MenuItem<Wry>]) -> Vec<&dyn IsMenuItem<Wry>> {
+    items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect()
+}
+
+/// An audio card's menu: no Compare, Downscale or Crop; loudness and cover art instead.
+fn build_audio(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
+    let item = |action: Action, label: String| {
+        MenuItem::with_id(
+            app,
+            item_id(&card.id, action),
+            label,
+            enabled(card, action),
+            None::<&str>,
+        )
+    };
+    let sub = |label: String, items: &[&dyn IsMenuItem<Wry>]| {
+        Submenu::with_items(app, label, card.can_edit, items)
+    };
+    let reveal = if cfg!(target_os = "macos") {
+        "card.reveal.mac"
+    } else {
+        "card.reveal.windows"
+    };
+    let formats = convert_formats(card);
+    let converts = formats
+        .iter()
+        .map(|&f| item(Action::Convert(f), f.label().into()))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let twins = formats
+        .iter()
+        .map(|&f| item(Action::KeepBoth(f), f.label().into()))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let loudness = LOUDNESS
+        .iter()
+        .map(|&l| {
+            item(
+                Action::Loudness(l),
+                t(&format!("audio.loudness.{}", serde_key(&l))),
+            )
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let squares = COVER_SQUARES
+        .iter()
+        .map(|&n| {
+            let label = tf("audio.cover.square", &[("n", &n.to_string())]);
+            item(Action::CoverSquare(n), label)
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let keep = item(Action::Cover(CoverPolicy::Keep), t("audio.cover.keep"))?;
+    let optimise = item(
+        Action::Cover(CoverPolicy::Optimise),
+        t("audio.cover.optimise"),
+    )?;
+    let remove = item(Action::Cover(CoverPolicy::Remove), t("audio.cover.remove"))?;
+    let extract = item(Action::ExtractCover, t("audio.cover.extract"))?;
+    let square_refs: Vec<&dyn IsMenuItem<Wry>> =
+        squares.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
+    let downscale = sub(t("audio.cover.downscale"), &square_refs)?;
+    let rule = PredefinedMenuItem::separator(app)?;
+    let cover = sub(
+        t("audio.menu.cover"),
+        &[&keep, &optimise, &downscale, &remove, &rule, &extract],
+    )?;
+    Menu::with_items(
+        app,
+        &[
+            &item(Action::Open, t("menu.open"))?,
+            &item(Action::Reveal, t(reveal))?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(Action::Copy, t("menu.copy"))?,
+            &item(Action::CopyPath, t("menu.copy_path"))?,
+            &item(Action::Rename, t("menu.rename"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(Action::Preview, t("menu.preview"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(Action::Rerun, t("card.reoptimise"))?,
+            &item(Action::Aggressive, t("card.aggressive"))?,
+            &item(Action::Fit, t("menu.fit"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &sub(t("menu.convert"), &refs(&converts))?,
+            &sub(t("menu.keep_both"), &refs(&twins))?,
+            &PredefinedMenuItem::separator(app)?,
+            &sub(t("audio.menu.loudness"), &refs(&loudness))?,
+            &cover,
+            &PredefinedMenuItem::separator(app)?,
+            &item(Action::Restore, t("card.restore"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(Action::Close, t("card.close"))?,
+        ],
+    )
+}
+
 /// Route card menu items. Other menus' items (the tray's) are not ours.
 pub fn init(app: &AppHandle) {
     app.on_menu_event(|app, event| {
@@ -363,6 +519,36 @@ fn run(app: &AppHandle, id: JobId, action: Action) {
             Action::Restore => jobs::restore(&app, &id),
             // stream A: video
             Action::Mute => jobs::toggle_mute(&app, &id),
+            // stream B: audio
+            Action::Loudness(l) => jobs::edit(
+                &app,
+                &id,
+                ferry_core::edit::EditsPatch {
+                    loudness: Some(Some(l)),
+                    ..Default::default()
+                },
+            ),
+            Action::Cover(c) => jobs::edit(
+                &app,
+                &id,
+                ferry_core::edit::EditsPatch {
+                    cover: Some(Some(c)),
+                    ..Default::default()
+                },
+            ),
+            Action::CoverSquare(n) => jobs::edit(
+                &app,
+                &id,
+                ferry_core::edit::EditsPatch {
+                    size: Some(Some(ferry_core::edit::Size::Exact {
+                        width: n,
+                        height: n,
+                    })),
+                    framing: Some(ferry_core::edit::Framing::Centre),
+                    ..Default::default()
+                },
+            ),
+            Action::ExtractCover => crate::audio::extract_cover(&app, &id).map(drop),
             _ => Ok(()),
         };
         if let Err(e) = done {
@@ -557,5 +743,63 @@ mod tests {
             [Format::Gif, Format::Png, Format::Jpeg, Format::WebP]
         );
         assert!(enabled(&card, Action::Convert(Format::Gif)));
+    }
+
+    // ---- stream B: audio ----
+    /// A finished MP3 result with a cover, converted from a WAV.
+    fn done_audio() -> JobUpdate {
+        let mut card = done();
+        card.format = Some(Format::Mp3);
+        card.source_format = Some(Format::Wav);
+        card.output = Some("/tmp/song.mp3".into());
+        card.audio = Some(ferry_core::audio::AudioCard {
+            bitrate_before: None,
+            bitrate_after: Some(192),
+            lossless: false,
+            has_cover: true,
+        });
+        card
+    }
+
+    #[test]
+    fn audio_item_ids_read_back() {
+        let card = done_audio();
+        for a in [
+            Action::Loudness(Loudness::AppleMusic),
+            Action::Cover(CoverPolicy::Remove),
+            Action::CoverSquare(600),
+            Action::ExtractCover,
+            Action::Convert(Format::Opus),
+            Action::KeepBoth(Format::Wav),
+        ] {
+            assert_eq!(parse_id(&item_id(&card.id, a)), Some((card.id.clone(), a)));
+        }
+        assert_eq!(parse_id("card:18f-1:loudness-loud"), None);
+    }
+
+    #[test]
+    fn an_audio_card_offers_audio_tools_and_no_compare() {
+        let mut card = done_audio();
+        assert!(!enabled(&card, Action::Compare));
+        assert!(
+            enabled(&card, Action::Loudness(Loudness::Streaming))
+                && enabled(&card, Action::ExtractCover)
+        );
+        assert_eq!(
+            convert_formats(&card),
+            [Format::Mp3, Format::M4a, Format::Opus, Format::Wav]
+        );
+        assert!(!enabled(&card, Action::Convert(Format::Mp3)));
+        card.edits.loudness = Some(Loudness::Streaming);
+        assert!(!enabled(&card, Action::Loudness(Loudness::Streaming)));
+        card.audio = Some(ferry_core::audio::AudioCard {
+            has_cover: false,
+            ..card.audio.clone().unwrap()
+        });
+        assert!(
+            !enabled(&card, Action::Cover(CoverPolicy::Optimise))
+                && !enabled(&card, Action::CoverSquare(600))
+                && !enabled(&card, Action::ExtractCover)
+        );
     }
 }
