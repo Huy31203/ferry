@@ -19,6 +19,7 @@ export default defineConfig({
         stack: page('stack.html'),
         settings: page('settings.html'),
         compare: page('compare.html'),
+        batch: page('batch.html'),
       },
     },
   },
