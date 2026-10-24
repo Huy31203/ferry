@@ -7,6 +7,7 @@ use crate::sniff::Format;
 
 pub mod loudness;
 pub mod probe;
+pub mod settings;
 pub mod tool;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
