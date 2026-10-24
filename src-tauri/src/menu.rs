@@ -48,6 +48,8 @@ pub enum Action {
     /// Downscale the cover to a square this many pixels wide.
     CoverSquare(u32),
     ExtractCover,
+    /// Stream H: integrations (share, open with, edit with, upload, shelf).
+    Integration(crate::integrations::menu::Item),
 }
 
 const FORMATS: [Format; 14] = [
@@ -125,6 +127,7 @@ impl Action {
             Action::Loudness(l) => format!("loudness-{}", serde_key(&l)),
             Action::Cover(c) => format!("cover-{}", serde_key(&c)),
             Action::CoverSquare(n) => format!("cover_square-{n}"),
+            Action::Integration(item) => format!("h-{}", item.key()),
             named => NAMED
                 .iter()
                 .find(|(_, a)| *a == named)
@@ -149,6 +152,9 @@ impl Action {
                 .find(|c| serde_key(c) == value)
                 .map(Action::Cover),
             Some(("cover_square", value)) => value.parse().ok().map(Action::CoverSquare),
+            Some(("h", value)) => {
+                crate::integrations::menu::Item::parse(value).map(Action::Integration)
+            }
             Some(_) => None,
             None => NAMED.iter().find(|(k, _)| *k == key).map(|(_, a)| *a),
         }
@@ -165,6 +171,8 @@ impl Action {
             Action::Close => "close",
             // stream A: video
             Action::Speed => "speed",
+            // Stream H: integrations (the page measures the card, then calls card_share)
+            Action::Integration(crate::integrations::menu::Item::Share) => "share",
             _ => return None,
         })
     }
@@ -211,6 +219,7 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         | Action::CopyPath
         | Action::Rename
         | Action::Preview => file,
+        Action::Integration(_) => file,
         Action::Restore => idle && card.can_restore,
         Action::Convert(format) => card.can_edit && card.format != Some(format),
         Action::Scale(percent) => card.can_edit && card.edits.scale.unwrap_or(100) != percent,
@@ -274,6 +283,8 @@ pub fn popup(
         .map(|entry| entry.last.lock().unwrap().clone())
         .ok_or("this card's job is gone")?;
     let menu = build(app, &card).map_err(|e| e.to_string())?;
+    // Stream H: Open With, Edit with, Upload, Add to Shelf.
+    crate::integrations::menu::extend(app, &menu, &card).map_err(|e| e.to_string())?;
     window
         .popup_menu_at(&menu, LogicalPosition::new(x, y))
         .map_err(|e| e.to_string())
@@ -549,6 +560,8 @@ fn run(app: &AppHandle, id: JobId, action: Action) {
                 },
             ),
             Action::ExtractCover => crate::audio::extract_cover(&app, &id).map(drop),
+            // Stream H: integrations
+            Action::Integration(item) => crate::integrations::menu::run(&app, &id, item),
             _ => Ok(()),
         };
         if let Err(e) = done {

@@ -47,3 +47,19 @@ pub mod capture;
 #[cfg(windows)]
 #[path = "windows_capture.rs"]
 pub mod capture;
+// Stream H: integrations
+#[cfg(target_os = "macos")]
+#[path = "macos_apps.rs"]
+pub mod apps;
+#[cfg(windows)]
+#[path = "windows_apps.rs"]
+pub mod apps;
+#[cfg(target_os = "macos")]
+#[path = "macos_services.rs"]
+pub mod services;
+#[cfg(target_os = "macos")]
+#[path = "macos_share.rs"]
+pub mod share;
+#[cfg(windows)]
+#[path = "windows_share.rs"]
+pub mod share;

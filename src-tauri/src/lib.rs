@@ -5,6 +5,7 @@ mod compare;
 mod drop_batch;
 mod hotkeys;
 mod hover_keys;
+mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
@@ -32,10 +33,10 @@ use tracing::info;
 use crate::state::AppState;
 
 pub fn run() {
-    // Must be the first plugin: a second launch focuses Settings instead of adding a tray icon.
+    // Must be the first plugin: a second launch hands its files to this one (Explorer, Open with) or focuses Settings.
     let builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            windows::open_settings(app)
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            integrations::launch::second_instance(app, args, cwd)
         }));
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
@@ -105,6 +106,9 @@ pub fn run() {
             watch::commands::watch_support,
             watch::commands::watch_check_folder,
             watch::commands::watch_pick_folder,
+            // Stream H: integrations
+            integrations::commands::card_share,
+            integrations::commands::share_pick_app,
             // Stream D: drop-batch
             drop_batch::batch::batch_ready,
             drop_batch::batch::batch_pick_files,
@@ -160,6 +164,9 @@ pub fn run() {
             tauri::RunEvent::Reopen { .. } => windows::open_settings(_app),
             // stream A: video
             tauri::RunEvent::Exit => ferry_core::ffmpeg::kill_all(),
+            // Stream H: Finder "Open With" and files dropped on the Dock icon.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => integrations::launch::opened(_app, urls),
             _ => {}
         });
 }
@@ -192,6 +199,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     drop_batch::init(app)?;
     clipboard::start(app);
     watch::start(app); // stream C
+    integrations::init(app); // Stream H
     housekeeping(app);
     svc_commands::setup(app);
     if let LoadStatus::Recovered { .. } = status {
