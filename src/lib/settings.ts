@@ -48,6 +48,7 @@ export interface Settings {
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
+  clip: { auto_copy: boolean };
 }
 
 /** The value at a dotted path such as `images.compression`, or undefined. */
