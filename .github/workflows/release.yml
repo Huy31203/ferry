@@ -23,7 +23,7 @@ jobs:
             os: macos-latest
             target: universal-apple-darwin
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -44,9 +44,22 @@ jobs:
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.target }}
+      - name: Check updater signing
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secrets"; exit 1
+          fi
+          if grep -q 'REPLACE_WITH_UPDATER_PUBLIC_KEY' src-tauri/tauri.conf.json; then
+            echo "::error::Put the updater public key in src-tauri/tauri.conf.json (plugins.updater.pubkey)"; exit 1
+          fi
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Ferry ${{ github.ref_name }}
@@ -55,4 +68,20 @@ jobs:
             choose More info → Run anyway. macOS: right-click Ferry.app → Open the first time.
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.updater.conf.json
+  updater-manifest:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check latest.json lists every platform, signed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir manifest
+          jq -e --arg v "${GITHUB_REF_NAME#v}" '. as $m
+            | ($m.version | ltrimstr("v")) == $v
+            and (["darwin-aarch64", "darwin-x86_64", "windows-x86_64"]
+                 | all(. as $p | (($m.platforms[$p].signature // "") != "") and (($m.platforms[$p].url // "") != "")))' \
+            manifest/latest.json
