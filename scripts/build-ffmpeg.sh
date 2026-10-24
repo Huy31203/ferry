@@ -272,6 +272,8 @@ if [ "$WINDOWS" = 1 ]; then
   fresh amf
   mkdir -p "$PREFIX/include/AMF" && cp -R amf/public/include/* "$PREFIX/include/AMF/"
   fresh libvpl
+  # libvpl's pre-VS2005 fallback (_MSC_VER < 1400) also fires under MinGW and breaks wcscpy_s.
+  sed -i 's/^#if _MSC_VER < 1400/#if defined(_MSC_VER) \&\& _MSC_VER < 1400/' libvpl/src/windows/mfx_dispatcher_defs.h
   cmake -G Ninja -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF \
     -DBUILD_TOOLS=OFF -DCMAKE_INSTALL_PREFIX="$PREFIX" >/dev/null
   cmake --build build --target install
