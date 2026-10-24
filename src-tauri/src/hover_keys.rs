@@ -15,7 +15,9 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{debug, warn};
 
+use crate::compare::COMPARE;
 use crate::state::AppState;
+use crate::windows::STACK;
 use crate::{jobs, menu, platform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,9 @@ struct Keys {
     card: Option<JobId>,
     /// The stack has the keyboard (a text field is open).
     keyed: bool,
+    /// The focused Ferry window that takes typing (Settings, later windows),
+    /// never the stack or the compare window.
+    typing: Option<String>,
     /// The accelerators this module registered, to unregister exactly those.
     held: Vec<&'static str>,
     /// A registration failure was logged once already (spec §6).
@@ -56,14 +61,15 @@ struct Keys {
 static STATE: Mutex<Keys> = Mutex::new(Keys {
     card: None,
     keyed: false,
+    typing: None,
     held: Vec::new(),
     warned: false,
 });
 
 /// Whether to register (`Some(true)`) or unregister (`Some(false)`) now, or
 /// leave the keys as they are (`None`).
-fn plan(held: bool, card: bool, enabled: bool, keyed: bool) -> Option<bool> {
-    let want = card && enabled && !keyed;
+fn plan(held: bool, card: bool, enabled: bool, keyed: bool, typing: bool) -> Option<bool> {
+    let want = card && enabled && !keyed && !typing;
     (want != held).then_some(want)
 }
 
@@ -86,6 +92,32 @@ pub fn set_keyed(app: &AppHandle, keyed: bool) {
     apply(app);
 }
 
+/// The typing window after `label` gained or lost focus. The stack and the
+/// compare window never count; a blur of another window changes nothing.
+fn typing_after(current: Option<String>, label: &str, focused: bool) -> Option<String> {
+    if label == STACK || label == COMPARE {
+        return current;
+    }
+    if focused {
+        Some(label.to_owned())
+    } else if current.as_deref() == Some(label) {
+        None
+    } else {
+        current
+    }
+}
+
+// ---- sI clipboard-fixes ----
+/// A Ferry window gained or lost focus: while one takes typing, Space and
+/// digits are not ours to take.
+pub fn window_focus(app: &AppHandle, label: &str, focused: bool) {
+    {
+        let mut state = STATE.lock().unwrap();
+        state.typing = typing_after(state.typing.take(), label, focused);
+    }
+    apply(app);
+}
+
 fn apply(app: &AppHandle) {
     let enabled = app
         .state::<AppState>()
@@ -102,6 +134,7 @@ fn apply(app: &AppHandle) {
             state.card.is_some(),
             enabled,
             state.keyed,
+            state.typing.is_some(),
         );
         (change, state.held.clone())
     };
@@ -191,22 +224,45 @@ mod tests {
 
     #[test]
     fn keys_are_held_only_over_a_card_with_the_setting_on() {
-        assert_eq!(plan(false, true, true, false), Some(true));
-        assert_eq!(plan(true, false, true, false), Some(false));
-        assert_eq!(plan(true, true, false, false), Some(false));
-        assert_eq!(plan(false, true, false, false), None);
-        assert_eq!(plan(false, false, true, false), None);
+        assert_eq!(plan(false, true, true, false, false), Some(true));
+        assert_eq!(plan(true, false, true, false, false), Some(false));
+        assert_eq!(plan(true, true, false, false, false), Some(false));
+        assert_eq!(plan(false, true, false, false, false), None);
+        assert_eq!(plan(false, false, true, false, false), None);
     }
 
     #[test]
     fn moving_between_cards_keeps_the_keys() {
-        assert_eq!(plan(true, true, true, false), None);
+        assert_eq!(plan(true, true, true, false, false), None);
     }
 
     #[test]
     fn a_key_window_never_keeps_the_hover_keys() {
-        assert_eq!(plan(true, true, true, true), Some(false));
-        assert_eq!(plan(false, true, true, true), None);
+        assert_eq!(plan(true, true, true, true, false), Some(false));
+        assert_eq!(plan(false, true, true, true, false), None);
+    }
+
+    #[test]
+    fn a_typing_window_never_keeps_the_hover_keys() {
+        assert_eq!(plan(true, true, true, false, true), Some(false));
+        assert_eq!(plan(false, true, true, false, true), None);
+    }
+
+    #[test]
+    fn focus_follows_the_typing_window() {
+        let settings = || Some("settings".to_owned());
+        assert_eq!(typing_after(None, "settings", true), settings());
+        assert_eq!(typing_after(settings(), STACK, true), settings());
+        assert_eq!(typing_after(settings(), COMPARE, true), settings());
+        assert_eq!(typing_after(settings(), "settings", false), None);
+        assert_eq!(
+            typing_after(Some("batch".to_owned()), "settings", false),
+            Some("batch".to_owned())
+        );
+        assert_eq!(
+            typing_after(settings(), "batch", true),
+            Some("batch".to_owned())
+        );
     }
 
     #[test]

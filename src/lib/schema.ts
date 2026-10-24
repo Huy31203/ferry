@@ -172,7 +172,6 @@ const all: Setting[] = [
     help: 'clipboard.accumulate.help',
     path: 'clipboard.accumulate',
     control: { kind: 'switch' },
-    depends_on: 'clipboard.enabled',
   },
   {
     id: 'copy_paths',
@@ -181,7 +180,15 @@ const all: Setting[] = [
     help: 'clipboard.copy_paths.help',
     path: 'clipboard.copy_paths',
     control: { kind: 'switch' },
-    depends_on: 'clipboard.enabled',
+  },
+  // sI clipboard-fixes
+  {
+    id: 'auto_copy',
+    pane: 'clipboard',
+    label: 'clip.auto_copy',
+    help: 'clip.auto_copy.help',
+    path: 'clip.auto_copy',
+    control: { kind: 'switch' },
   },
   {
     id: 'file_template',

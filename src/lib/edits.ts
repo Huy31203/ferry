@@ -45,10 +45,18 @@ function scaled(side: number, percent: number): number {
   return Math.max(1, Math.round((side * percent) / 100));
 }
 
+/** What a scale applies to: the picture, or an Exact size's cut, clamped to it like ferry_core's `output_size`. */
+function scaleBase(dims: [number, number], size: Size | null): [number, number] {
+  if (size?.kind !== 'exact') return dims;
+  const [cw, ch] = fitRatio(dims, [size.width, size.height]);
+  return size.width < cw && size.height < ch ? [size.width, size.height] : [cw, ch];
+}
+
 /** "50 % · 1440×900"; just "50 %" when a crop changes the size first or the size is unknown. */
 export function scaleLabel(scale: number, dims: [number, number] | null, edits: Edits): string {
   if (!dims || edits.aspect !== null) return t('slider.scale_only', { n: scale });
-  return t('slider.scale', { n: scale, w: scaled(dims[0], scale), h: scaled(dims[1], scale) });
+  const base = scaleBase(dims, edits.size);
+  return t('slider.scale', { n: scale, w: scaled(base[0], scale), h: scaled(base[1], scale) });
 }
 
 /** "q 60" or "Extreme". */

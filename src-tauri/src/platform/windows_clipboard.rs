@@ -3,11 +3,11 @@
 //! from a clipboard listener on its own thread. Only CI has run this so far;
 //! no real Windows desktop has (spec §1).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use clipboard_win::{Clipboard, Monitor, formats, raw};
+use clipboard_win::{Clipboard, Monitor, formats, options, raw};
 use ferry_core::bitmap;
 use ferry_core::sniff::{Format, sniff};
 use ferry_core::trigger::Snapshot;
@@ -144,9 +144,8 @@ pub fn seq() -> u64 {
 }
 
 /// Put an image on the clipboard in its own format, plus a `CF_DIBV5` for apps
-/// that paste only bitmaps (not for GIF), plus the working file when `file` is
-/// given. Returns the new sequence number.
-pub fn write_image(format: Format, bytes: &[u8], file: Option<&Path>) -> Result<u64, String> {
+/// that paste only bitmaps (not for GIF). Returns the new sequence number.
+pub fn write_image(format: Format, bytes: &[u8]) -> Result<u64, String> {
     // Decode before opening the clipboard, so it is held as briefly as possible.
     let dib = bitmap::decode_rgba(bytes, format)
         .ok()
@@ -158,9 +157,6 @@ pub fn write_image(format: Format, bytes: &[u8], file: Option<&Path>) -> Result<
         raw::set_without_clear(id, bytes).map_err(|e| e.to_string())?;
         if let Some(dib) = dib {
             raw::set_without_clear(formats::CF_DIBV5, &dib).map_err(|e| e.to_string())?;
-        }
-        if let Some(file) = file {
-            raw::set_file_list(&[file.to_string_lossy()]).map_err(|e| e.to_string())?;
         }
     } // closing the clipboard publishes the change
     Ok(seq())
@@ -177,6 +173,23 @@ pub fn write_files(paths: &[PathBuf]) -> Result<u64, String> {
         raw::empty().map_err(|e| e.to_string())?;
         raw::set_file_list(&names).map_err(|e| e.to_string())?;
     }
+    Ok(seq())
+}
+
+/// Put files on the clipboard with their full paths as text, one per line
+/// ("Copy file paths"). Returns the new sequence number.
+pub fn write_paths(paths: &[PathBuf]) -> Result<u64, String> {
+    let names: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let text = names.join("\r\n");
+    {
+        let _open = Clipboard::new_attempts(ATTEMPTS).map_err(|e| e.to_string())?;
+        raw::empty().map_err(|e| e.to_string())?;
+        raw::set_file_list(&names).map_err(|e| e.to_string())?; // does not empty the clipboard
+        raw::set_string_with(&text, options::NoClear).map_err(|e| e.to_string())?;
+    } // closing the clipboard publishes the change
     Ok(seq())
 }
 
@@ -226,7 +239,7 @@ mod tests {
     fn an_image_round_trips_and_the_sequence_moves() {
         let _one = CLIPBOARD.lock().unwrap();
         let before = seq();
-        let written = write_image(Format::Png, PNG, None).unwrap();
+        let written = write_image(Format::Png, PNG).unwrap();
         assert!(written > before);
         let snap = read().unwrap();
         assert_eq!(snap.seq, written);
@@ -241,6 +254,21 @@ mod tests {
         let paths = vec![dir.join("ferry a.png"), dir.join("b.jpg")];
         write_files(&paths).unwrap();
         assert_eq!(read().unwrap().files, paths);
+    }
+
+    #[test]
+    fn paths_go_on_as_files_and_as_text() {
+        let _one = CLIPBOARD.lock().unwrap();
+        let dir = std::env::temp_dir();
+        let paths = vec![dir.join("ferry a.png"), dir.join("b.jpg")];
+        write_paths(&paths).unwrap();
+        assert_eq!(read().unwrap().files, paths);
+        let want = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        assert_eq!(clipboard_win::get_clipboard_string().unwrap(), want);
     }
 
     #[test]

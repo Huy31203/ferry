@@ -59,6 +59,9 @@ describe('downscale steps', () => {
     expect(scaleLabel(10, [3, 3], edits)).toBe('10 % · 1×1');
     expect(scaleLabel(50, null, edits)).toBe('50 %');
     expect(scaleLabel(50, [2880, 1800], { ...edits, aspect: [16, 9] })).toBe('50 %');
+    const exact = (width: number, height: number) => ({ ...edits, size: { kind: 'exact' as const, width, height } });
+    expect(scaleLabel(50, [2880, 1800], exact(1200, 628))).toBe('50 % · 600×314');
+    expect(scaleLabel(50, [2880, 1800], exact(5000, 2000))).toBe('50 % · 1440×576');
   });
 });
 
