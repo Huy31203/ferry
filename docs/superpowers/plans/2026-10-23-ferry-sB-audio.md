@@ -14,7 +14,7 @@
 
 **Start B only after stream A's ffmpeg task group is merged into the branch you start from.** That group is A's Tasks 1–4 in `docs/superpowers/plans/2026-10-23-ferry-sA-video.md`. B needs these from it:
 
-- Task 1: `crates/ferry-core/src/ffmpeg.rs` with `locate`, `run`, `exec`, `capture`, `Exec`, `Captured`, and `FerryError` in `crates/ferry-core/src/error.rs` (re-exported as `ffmpeg::FerryError`).
+- Task 1: `crates/ferry-core/src/ffmpeg.rs` with `locate() -> Result<PathBuf, FerryError>`, `run`, `run_expecting`, `capture`, `exec -> Result<Captured, FerryError>`, `kill_all`, `Exec`, `Captured { code, stderr }`, and `FerryError` in `crates/ferry-core/src/error.rs` (re-exported as `ffmpeg::FerryError`).
 - Task 2: the `src-tauri/binaries/ffmpeg-<triple>` sidecar (FFmpeg 9.0.2 with LAME and Opus, and on macOS AudioToolbox: A's macOS configure line has `--enable-audiotoolbox`, which gives the `aac_at` encoder B prefers for M4A).
 - Task 3: CI sets `FERRY_FFMPEG` in the `core` job.
 - Task 4: the video variants in `sniff::Format`, so `sniff.rs` merges without conflict.
@@ -40,7 +40,7 @@
   | Filters | `loudnorm`, `aresample`, `anullsrc` | LGPL-2.1-or-later | `anullsrc` (silence) feeds the `aac_at` test encode |
   | Input device | `lavfi` | LGPL-2.1-or-later | The `aac_at` test encode reads `-f lavfi -i anullsrc=…`. A's own checks use `-f lavfi` too |
 
-  A's build is FFmpeg 9.0.2 configured `--enable-gpl --enable-version3`, never `--enable-nonfree`, so the sidecar is **GPL-3.0-or-later**. That comes from x264/x265, which A needs for video. LAME (LGPL-2.0-or-later) and Opus (BSD-3-Clause) are linked into it, and both are compatible. Ferry itself is already GPL-3.0-or-later, so B adds no licence obligation. A's `THIRD-PARTY-NOTICES.md` and `licenses/` bundle already cover LAME and Opus.
+  A's build is FFmpeg 9.0.2 configured `--enable-gpl --enable-version3`, never `--enable-nonfree`, so the sidecar is **GPL-3.0-or-later**. That comes from x264, which A needs for video. LAME (LGPL-2.0-or-later) and Opus (BSD-3-Clause) are linked into it, and both are compatible. Ferry itself is already GPL-3.0-or-later, so B adds no licence obligation. A's `THIRD-PARTY-NOTICES.md` and `licenses/` bundle already cover LAME and Opus.
 - **Original is sacred (C1§3.3).** Back up first. Write to the working folder, then atomically replace or move into place. Never read a whole audio file into memory: audio is passed by path (`Content::File`). Delete working files when the run ends.
 - **Never raise the bitrate above the original. Lossless targets show no bitrate** (R§2.3).
 - **Settings:** one new `[audio]` section (`#[serde(default)]`, `extra` map). `settings::VERSION` stays `2`.
@@ -67,9 +67,9 @@ The inputs and failures most likely to hurt a user that the spec does not spell 
 1. **Files whose loudness cannot be measured** (digital silence, clips under 0.4 s; `loudnorm` reports `-inf`). The file must still convert, with its loudness left alone and an amber note. It must not crash or produce a `measured_I=-inf` filter. Tests: Task 4 `silence_is_not_measurable`, Task 11 `an_unmeasurable_file_keeps_its_loudness_and_says_so`.
 2. **Cancel, or an ffmpeg failure, in either pass.** The source stays byte-identical and no `out.*` or `.ferry-tmp` is left behind. A cancel puts the card back. A failure gives an Error card with Retry. Tests: Task 11 `a_cancel_during_the_encode_changes_nothing_and_leaves_no_temp_file`, `an_encoder_failure_is_an_error_with_retry_and_the_source_is_untouched`.
 3. **An already-efficient lossy file** (a 128 kbps MP3 when the setting says 192). It is never re-encoded upward and never re-encoded at all for no gain: the result is Already optimal, after one probe call and no encode. Tests: Task 7 `the_bitrate_never_rises_above_a_lossy_source`, Task 11 `a_low_bitrate_mp3_is_already_optimal_without_encoding`.
-4. **Things that look like audio but are not, and audio that looks like video.** An `ftyp isom`/`mp42` MP4 video, raw ADTS `.aac`, and AVI-in-RIFF must not become audio jobs. An `ftyp M4A ` file must become one, even when A's video sniffing also inspects `ftyp`. Tests: Task 2 `video_and_raw_streams_are_not_audio`, Task 10 `an_mp4_video_is_not_taken_for_audio`.
+4. **Things that look like audio but are not, and audio that looks like video.** An `ftyp isom`/`mp42` MP4 video, raw ADTS `.aac`, and a non-WAVE RIFF file (RIFF MIDI, `RMID`) must not become audio jobs. An `ftyp M4A ` file must become one, even when A's video sniffing also inspects `ftyp`. Tests: Task 2 `video_and_raw_streams_are_not_audio`, Task 10 `an_mp4_video_is_not_taken_for_audio`.
 5. **Awkward file names and big files:** spaces, non-ASCII, a name starting with `-` (`-intro.wav`), and hour-long WAVs. Every path handed to ffmpeg is absolute, so nothing is read as an option, and audio is never buffered in memory. Tests: Task 7 `every_path_argument_is_absolute`, Task 11 `a_source_named_like_an_option_is_passed_safely`, Task 9 `a_file_content_is_copied_not_read_into_memory` (asserts the `Content::File` path is used).
-6. **A Mac whose ffmpeg lacks `aac_at`, or where it fails to open.** M4A must still work, with native `aac`, and nothing may break on Windows, which never asks. AudioToolbox also rounds a bitrate to the nearest rate it supports, which can be *higher*, so B snaps down first to keep "never raise". Tests: Task 1 `audiotoolbox_aac_is_chosen_only_when_a_test_encode_succeeds`, Task 7 `m4a_uses_audiotoolbox_when_offered_and_native_aac_otherwise`, `audiotoolbox_bitrates_snap_down_never_up`, Task 11 `an_m4a_on_audiotoolbox_reports_the_snapped_bitrate`.
+6. **A Mac whose ffmpeg lacks `aac_at`, or where it fails to open.** M4A must still work, with native `aac`, and nothing may break on Windows, which never asks. AudioToolbox also rounds a bitrate to the nearest rate it supports, which can be *higher*, so B snaps down first to keep "never raise". Tests: Task 1 `audiotoolbox_aac_is_chosen_only_when_a_test_encode_succeeds`, `only_macos_runs_the_aac_at_test_encode`, Task 7 `m4a_uses_audiotoolbox_when_offered_and_native_aac_otherwise`, `audiotoolbox_bitrates_snap_down_never_up`, `fit_under_retries_snap_down_on_audiotoolbox_only`, Task 11 `an_m4a_on_audiotoolbox_reports_the_snapped_bitrate`, `fit_under_on_audiotoolbox_uses_cbr_and_snapped_retries`, Task 12 `a_real_m4a_comes_out_of_each_aac_encoder_this_system_offers`.
 
 ---
 
@@ -98,7 +98,8 @@ The inputs and failures most likely to hurt a user that the spec does not spell 
 - **Vocabulary** (`audio/tool.rs`, Task 1): `AacEncoder { Native, AudioToolbox }`, default `Native`. `codec()` gives the ffmpeg encoder name, `"aac"` or `"aac_at"`. There is no setting and no UI for it; the card says "M4A" either way.
 - **Detection, once per process:** `audio::tool::aac_encoder()` caches its answer in a `std::sync::OnceLock<AacEncoder>`.
   - On macOS (`cfg!(target_os = "macos")`), when `installed()` finds ffmpeg, it runs `detect_aac`: **one test encode** of 0.1 s of silence, `-f lavfi -i anullsrc=r=48000:cl=stereo -t 0.1 -c:a aac_at -b:a 128k -f null -`, through the `AudioTool` seam (so through A's `ffmpeg::exec`). `Ok` means `AudioToolbox`; any error means `Native`.
-  - Everywhere else, and on a Mac without ffmpeg, it returns `Native` without running anything.
+  - Everywhere else, and on a Mac without ffmpeg, it returns `Native` without running anything. Windows never runs the test encode.
+  - The choice itself is the pure `choose_aac(macos, tool)`, so the macOS-only rule and the fallback are unit-tested on every OS; `aac_encoder()` only adds the cache.
   - Why a test encode and not `ffmpeg -encoders`: `-encoders` prints to stdout, which A's `exec` consumes as progress and does not return (A's Task 3 note), and B may not start ffmpeg itself. A test encode also proves the encoder opens, not just that it was compiled in. It takes well under a second.
   - "At start-up": the app calls `aac_encoder()` on a background thread in `setup()` and logs the answer (Task 13). `RunOptions::new` reads the cached value (Task 10). A job that starts before the warm-up ends waits for it (`OnceLock` blocks the second caller), it never runs a second probe.
 - **Arguments:**
@@ -280,7 +281,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
 
 **ferry-core (new):**
 - `src/audio/mod.rs`: vocabulary: `Loudness`, `CoverPolicy`, `AudioCard`, `TARGETS`, `BAR`, `supports_cover`, `is_lossless_format`.
-- `src/audio/tool.rs`: `AudioTool` seam, `ToolError`, `Ffmpeg` (production), `installed()`; `AacEncoder`, `detect_aac`, `aac_encoder()` (the cached macOS `aac_at` check).
+- `src/audio/tool.rs`: `AudioTool` seam, `ToolError`, `Ffmpeg` (production), `installed()`; `AacEncoder`, `aac_at_probe_args`, `detect_aac`, `choose_aac`, `aac_encoder()` (the cached macOS `aac_at` check).
 - `src/audio/probe.rs`: probe arguments and the parser for ffmpeg's stream info → `AudioInfo`.
 - `src/audio/loudness.rs`: target table, pass-1 arguments, JSON parsing, pass-2 filter.
 - `src/audio/settings.rs`: the `[audio]` settings section.
@@ -323,7 +324,8 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   impl AacEncoder { pub fn codec(self) -> &'static str; }  // "aac" | "aac_at"
   pub fn aac_at_probe_args() -> Vec<OsString>;            // -f lavfi -i anullsrc=r=48000:cl=stereo -t 0.1 -c:a aac_at -b:a 128k -f null -
   pub fn detect_aac(tool: &dyn AudioTool) -> AacEncoder;  // one test encode: Ok → AudioToolbox, any Err → Native
-  pub fn aac_encoder() -> AacEncoder;                     // cached (OnceLock); macOS: installed() → detect_aac, else Native; other OS: Native, no ffmpeg run
+  pub fn choose_aac(macos: bool, tool: Option<&dyn AudioTool>) -> AacEncoder; // !macos or None → Native without a call; else detect_aac
+  pub fn aac_encoder() -> AacEncoder;                     // cached (OnceLock): choose_aac(cfg!(target_os = "macos"), installed()); other OS: Native, no ffmpeg run
   // testutil.rs (#[cfg(test)])
   pub fn wav_tone(segments: &[(f32, f32)], rate: u32, channels: u16) -> Vec<u8>; // (seconds, amplitude 0..1) runs of a 440 Hz sine, 16-bit PCM
   pub enum FakeStep { Log(String), Write { log: String, bytes: Vec<u8> }, Fail(String) }
@@ -332,7 +334,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   ```
   `FakeTool::run` records the arguments, then (when `cancel_on_call == Some(this call's index)`) cancels `cancel` and returns `Err(ToolError::Cancelled)`. Otherwise it calls `on_progress(0.5)` and `on_progress(1.0)`, pops the next step, and acts on it. `Write` writes `bytes` to the **last argument** as a path, unless that argument is `-`. `Fail` returns `Failed`. An empty script returns `Ok(String::new())`.
 
-- [ ] **Step 1: Check A's contract and build.** Run `grep -n "pub fn\|pub struct\|pub enum" crates/ferry-core/src/ffmpeg.rs crates/ferry-core/src/error.rs`. Expected: `locate`, `run`, `exec`, `capture`, `Exec`, `Captured` and `FerryError`. Then, with `F="$FERRY_FFMPEG"`, run:
+- [ ] **Step 1: Check A's contract and build.** Run `grep -n "pub fn\|pub struct\|pub enum" crates/ferry-core/src/ffmpeg.rs crates/ferry-core/src/error.rs`. Expected: `locate`, `run`, `run_expecting`, `capture`, `exec`, `kill_all`, `Exec`, `Captured` and `FerryError`, with `exec(program: &Path, args: &[OsString], how: &Exec, cancel: &CancelToken, on_progress: &mut dyn FnMut(f32)) -> Result<Captured, FerryError>`. B uses only `locate`, `exec`, `Exec::default()` and `Captured::stderr`. Then, with `F="$FERRY_FFMPEG"`, run:
   ```bash
   "$F" -hide_banner -encoders | grep -E ' libmp3lame | aac | libopus | flac | pcm_s16le | pcm_s24le '
   "$F" -hide_banner -filters  | grep -E ' loudnorm | aresample '
@@ -382,6 +384,16 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       assert_eq!(detect_aac(&*no), AacEncoder::Native);
       assert_eq!((AacEncoder::default(), AacEncoder::Native.codec(), AacEncoder::AudioToolbox.codec()), (AacEncoder::Native, "aac", "aac_at"));
   }
+  #[test] fn only_macos_runs_the_aac_at_test_encode() {   // Review Focus 6
+      let works = testutil::FakeTool::new(vec![testutil::FakeStep::Log(String::new())]);
+      assert_eq!(choose_aac(false, Some(&*works)), AacEncoder::Native);      // Windows/Linux: never asks
+      assert!(works.calls().is_empty());
+      assert_eq!(choose_aac(true, None), AacEncoder::Native);                // Mac without ffmpeg
+      assert_eq!(choose_aac(true, Some(&*works)), AacEncoder::AudioToolbox);
+      assert_eq!(works.calls().len(), 1);
+      let broken = testutil::FakeTool::new(vec![testutil::FakeStep::Fail("Error while opening encoder".into())]);
+      assert_eq!(choose_aac(true, Some(&*broken)), AacEncoder::Native);      // compiled in but fails to open
+  }
   #[cfg(target_os = "macos")]
   #[test] fn the_macos_sidecar_offers_audiotoolbox_aac() {   // skipped without ffmpeg
       let Some(tool) = installed() else { return };
@@ -409,10 +421,11 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       assert_eq!(fake.calls(), vec![vec!["-i".to_string(), out.display().to_string()]]);
   }
   ```
-- [ ] **Step 4: Run them and confirm they fail:** `cargo test -p ferry-core audio::tool`. Expected: FAIL, because `Ffmpeg`, `installed`, `AacEncoder`, `detect_aac` and `aac_encoder` are not defined.
+- [ ] **Step 4: Run them and confirm they fail:** `cargo test -p ferry-core audio::tool`. Expected: FAIL, because `Ffmpeg`, `installed`, `AacEncoder`, `detect_aac`, `choose_aac` and `aac_encoder` are not defined.
 - [ ] **Step 5: Implement.** `Ffmpeg::run` returns `Err(Cancelled)` when `cancel.is_cancelled()` before calling. It then calls `crate::ffmpeg::exec(&ffmpeg::locate()?, args, &ffmpeg::Exec::default(), cancel, on_progress)` and returns `Captured::stderr` (or `run_logged` in the fallback). A `locate` error maps to `Failed`. On `Err(e)` it returns `Cancelled` for `FerryError::Cancelled` or when the token is now cancelled, else `Failed(e.to_string())`.
   - `detect_aac(tool)` runs `tool.run(&aac_at_probe_args(), &CancelToken::new(), &mut |_| {})` once and maps `Ok(_)` to `AudioToolbox`, any `Err` to `Native`. It does not look at the log.
-  - `aac_encoder()`: `static AAC: OnceLock<AacEncoder>`; `*AAC.get_or_init(|| if cfg!(target_os = "macos") { installed().map_or(AacEncoder::Native, |t| detect_aac(&*t)) } else { AacEncoder::Native })`. Use `cfg!` (not `#[cfg]`), so the code compiles and is linted on every OS.
+  - `choose_aac(macos, tool)`: `if !macos { return Native }` before touching `tool`; then `tool.map_or(Native, detect_aac)`.
+  - `aac_encoder()`: `static AAC: OnceLock<AacEncoder>`; `*AAC.get_or_init(|| { let macos = cfg!(target_os = "macos"); let tool = if macos { installed() } else { None }; choose_aac(macos, tool.as_deref()) })`. Use `cfg!` (not `#[cfg]`), so the code compiles and is linted on every OS. There is no setting, env switch or UI for the encoder.
   - `wav_tone` writes a 44-byte canonical header (`fmt ` chunk PCM 1, `channels`, `rate`, 16 bits) followed by interleaved `i16` samples of `amp × sin(2π·440·t)`. Add the `audio.*` JSON block to `en.json`, keeping the file valid flat JSON.
 - [ ] **Step 6: Run** `cargo test -p ferry-core audio::tool`, then `cargo test -p ferry-core testutil`, then `pnpm test -- i18n`. Expected: PASS. The real-ffmpeg tests return early when ffmpeg is absent. On the Mac with `FERRY_FFMPEG` set, `the_macos_sidecar_offers_audiotoolbox_aac` must pass; if it fails, stop and report (see Step 1).
 - [ ] **Step 7: Commit** `feat(core): audio tool seam over the ffmpeg helper, with its log and the aac_at check`.
@@ -484,7 +497,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       assert!(not_audio(&ftyp(b"isom", &[b"isom", b"iso2", b"avc1", b"mp41"])));
       assert!(not_audio(&ftyp(b"qt  ", &[b"qt  "])));
       assert!(not_audio(&[0xFF, 0xF1, 0x50, 0x80, 0, 0]));     // ADTS AAC (layer bits 00)
-      assert!(not_audio(b"RIFF\x24\0\0\0AVI LIST"));
+      assert!(not_audio(b"RIFF\x24\0\0\0RMIDdata"));      // RIFF MIDI: RIFF but not WAVE
       assert!(not_audio(&ogg(b"\x80theora")));
       assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(Format::Jpeg));
   }
@@ -498,7 +511,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       assert!(!Format::Png.is_audio());
   }
   ```
-  Change the existing `rejects_other_riff_files` to use `b"RIFF\x24\0\0\0AVI LIST"`. WAVE is now audio. In `trigger.rs` tests, add `assert_eq!(normalise_ext(".AIF"), "aiff"); assert_eq!(normalise_ext("aifc"), "aiff");`. In `audio/mod.rs`, add:
+  Change the existing `rejects_other_riff_files` to use `b"RIFF\x24\0\0\0RMIDdata"`. WAVE is now audio. In `trigger.rs` tests, add `assert_eq!(normalise_ext(".AIF"), "aiff"); assert_eq!(normalise_ext("aifc"), "aiff");`. In `audio/mod.rs`, add:
   ```rust
   #[test] fn targets_and_covers() {
       assert_eq!(serde_json::to_string(&Loudness::AppleMusic).unwrap(), "\"apple_music\"");
@@ -983,6 +996,9 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       let fit = AudioPlan { fit_under: Some(1_000_000), ..at.clone() };
       assert!(args(&fit).contains(" -c:a aac_at -b:a 192k -aac_at_mode cbr -ar 48000 "));
       for p in [&at, &fit] { let a = args(p); assert!(!a.contains("-q:a") && !a.contains("global_quality") && !a.contains("aac_at_quality") && !a.contains("mode vbr")); }
+      // Native AAC never gets an AudioToolbox option, with or without fit under size.
+      let native_fit = AudioPlan { fit_under: Some(1_000_000), ..native.clone() };
+      assert!(args(&native_fit).contains(" -c:a aac -b:a 192k -ar 48000 ") && !args(&native_fit).contains("aac_at"));
       // Other targets ignore the AAC encoder.
       let mp3 = resolve_with(&Inputs { edits: &Edits { format: Some(Format::Mp3), ..Edits::default() }, ..inputs }, AacEncoder::AudioToolbox);
       assert!(args(&mp3).contains("-c:a libmp3lame") && !args(&mp3).contains("aac"));
@@ -1003,6 +1019,14 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
       let copy = resolve_with(&Inputs { info: &aac_150, source: Format::M4a, edits: &Edits::default(), level: Level::Normal, settings: &Audio::default() }, AacEncoder::AudioToolbox);
       assert!(copy.copy_audio && copy.kbps == Some(150) && copy.nothing_to_do(Format::M4a));
   }
+  #[test] fn fit_under_retries_snap_down_on_audiotoolbox_only() {    // Review Focus 6
+      let next = |aac, cur| retry_kbps(Format::M4a, cur, 1_000_000, 1_200_000).map(|k| encoder_kbps(Format::M4a, aac, k));
+      assert_eq!(next(AacEncoder::Native, 128), Some(103));          // 128 × 0.97 / 1.2
+      assert_eq!(next(AacEncoder::AudioToolbox, 128), Some(96));     // 103 snapped down
+      assert_eq!(next(AacEncoder::AudioToolbox, 96), Some(64));      // 77 → 64: every retry is a real step down
+      assert_eq!(next(AacEncoder::AudioToolbox, 32), None);          // already at the M4A minimum
+      assert_eq!(encoder_kbps(Format::M4a, AacEncoder::AudioToolbox, fit_kbps(1_000_000, 60.0, 0)), 128);  // 130 → 128
+  }
   ```
   `every_path_argument_is_absolute` uses Unix paths. Run it under `#[cfg(unix)]`, and add a `#[cfg(windows)]` twin with `C:\b\-intro ü.wav`.
 - [ ] **Step 2: Run** `cargo test -p ferry-core audio::plan`. Expected: FAIL.
@@ -1018,7 +1042,7 @@ Existing keys B reuses without changing them: `error.decode`, `error.encode`, `e
   - `-ar` and `-b:a` are omitted with `copy_audio`. `-b:a` is omitted for lossless targets.
   - Codec arguments: `libmp3lame`; M4A `plan.aac.codec()`, so `aac` or `aac_at`; `libopus … -vbr on` (`-vbr on` right after `-b:a`); `pcm_s16le`/`pcm_s24le`; `flac -compression_level 8`.
   - `aac_at` only: `-aac_at_mode cvbr` right after `-b:a`, or `-aac_at_mode cbr` when `plan.fit_under.is_some()`. With `copy_audio` there is no `-c:a aac_at` and no mode (the audio is copied). Never emit `-q:a`, `-global_quality` or `-aac_at_quality`.
-  - `encoder_kbps`: for `(Format::M4a, AacEncoder::AudioToolbox)`, the largest `MP3_KBPS` value ≤ `kbps` (32 when `kbps` < 32); otherwise `kbps` unchanged. `resolve(i)` is `resolve_with(i, AacEncoder::Native)`.
+  - `encoder_kbps`: for `(Format::M4a, AacEncoder::AudioToolbox)`, the largest `MP3_KBPS` value ≤ `kbps` (32 when `kbps` < 32); otherwise `kbps` unchanged. `resolve(i)` is `resolve_with(i, AacEncoder::Native)`. `retry_kbps` stays encoder-agnostic (it floors and clamps only); the caller snaps its answer with `encoder_kbps` (Task 11 step 11). Because a retry is at most 0.97 of the current rate and the snap only goes down, a snapped retry is always below the current rate, so a retry never repeats a bitrate.
   - Add `debug_assert!(input.is_absolute() && output.is_absolute())` in `encode_args`.
 - [ ] **Step 4: Run** `cargo test -p ferry-core audio::plan`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(core): plan an audio run and its encoder arguments`.
@@ -1347,6 +1371,12 @@ The algorithm is the order of side effects that tests cannot fully pin. Follow i
       // assert: Done, output ends ".m4a"; call 2 contains "-c:a","aac_at" and "-b:a","128k" and "-aac_at_mode","cvbr";
       // u.audio.bitrate_after == Some(128); u.detail == "128 kbps · M4A"
   }
+  #[test] fn fit_under_on_audiotoolbox_uses_cbr_and_snapped_retries() {  // Review Focus 6
+      // as fit_under_retries_with_a_lower_bitrate_then_notes_a_miss, but o.audio.aac = AacEncoder::AudioToolbox and edits.format = Some(M4a)
+      // script: probe (Duration 00:01:00.00), Write 1_200_000, Write 1_100_000, Write 1_050_000
+      // assert: 4 calls; calls 2..4 have "-c:a","aac_at" and "-aac_at_mode","cbr" (never "cvbr"); their -b:a values are "128k", "96k", "80k"
+      // (each in MP3_KBPS, strictly decreasing); note fit_missed; u.audio.bitrate_after == Some(80)
+  }
   ```
   The bodies given as comments are fixed by their asserts. Write them in the style of the first test.
 - [ ] **Step 2: Run** `cargo test -p ferry-core pipeline::audio`. Expected: FAIL.
@@ -1673,7 +1703,8 @@ Make them with the bundled ffmpeg; the commands from Task 12's fixtures work. Re
   - `album.m4a` from item 2 plays in Music.app without clicks or a gap at the start, and Finder Get Info → More Info → Codecs shows AAC.
   - `"$FERRY_FFMPEG" -hide_banner -i ~/Desktop/ferry-audio/album.m4a 2>&1 | grep Audio` shows `aac (LC)`, 44100 or 48000 Hz, and a bitrate close to 192 kb/s (constrained VBR stays near the target; well over 200 kb/s is a failure).
   - Listen once in Music.app to `tone.wav` converted with "WAV becomes" = M4A (from item 10) next to the original: no audible difference.
-- [ ] **13. Windows:** not verified. It is built in CI only, as in Cycles 1–2. Native `aac` is used there; CI's Windows `core` job runs Task 1's `other_systems_use_native_aac_without_asking_ffmpeg`. Say so in the PR.
+  - **Fallback to native `aac`.** Quit Ferry. Make `~/Desktop/ferry-audio/no-aac-at.sh`, a wrapper that refuses `aac_at` and otherwise runs the sidecar: `#!/bin/sh` / `case " $* " in *" aac_at "*) echo "Unknown encoder 'aac_at'" >&2; exit 1;; esac` / `exec "<absolute path of the sidecar>" "$@"`, then `chmod +x` it. Ask the user, then start `FERRY_FFMPEG=~/Desktop/ferry-audio/no-aac-at.sh pnpm tauri dev` (A's `locate()` takes `FERRY_FFMPEG` first). The log reads `aac=Native`; converting a fresh copy of `album.flac` still gives a playable `album.m4a` whose `grep Audio` line shows `aac (LC)` at about 192 kb/s. Quit and restart without the variable; the log reads `aac=AudioToolbox` again. Delete the wrapper.
+- [ ] **13. Windows:** not verified. It is built in CI only, as in Cycles 1–2. Native `aac` is used there; CI's Windows `core` job runs Task 1's `other_systems_use_native_aac_without_asking_ffmpeg` and `only_macos_runs_the_aac_at_test_encode`. Say so in the PR.
 
 ---
 
