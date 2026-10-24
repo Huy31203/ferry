@@ -15,6 +15,7 @@
   import Switch from './controls/Switch.svelte';
   import TemplateField from './controls/TemplateField.svelte';
   import TrayStyle from './controls/TrayStyle.svelte';
+  import UpdatePanel from './controls/UpdatePanel.svelte';
 
   let {
     setting,
@@ -153,6 +154,8 @@
       />
     {:else if control.kind === 'rail'}
       <RailEditor value={value as string[]} {disabled} labelledby={labelId} {onchange} />
+    {:else if control.kind === 'update'}
+      <UpdatePanel />
     {:else if control.kind === 'action'}
       <button
         type="button"
