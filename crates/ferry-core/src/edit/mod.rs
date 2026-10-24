@@ -80,9 +80,9 @@ pub struct Edits {
     /// Crop to this ratio, such as `(16, 9)`; `None` is "Free".
     pub aspect: Option<(u32, u32)>,
     pub framing: Framing,
-    /// Mutually exclusive with `scale`.
+    /// Width/Height/LongEdge and `scale` replace each other; an Exact size keeps a later scale.
     pub size: Option<Size>,
-    /// 10..=90 percent of the cropped original.
+    /// 10..=90 percent of the cropped original, or of an Exact size.
     pub scale: Option<u8>,
     /// `None` keeps the source format.
     pub format: Option<Format>,
@@ -122,7 +122,8 @@ impl Edits {
         }
         if let Some(scale) = patch.scale {
             self.scale = scale.map(|s| s.clamp(10, 90));
-            if self.scale.is_some() {
+            // An Exact size is a crop, which a scale applies on top of.
+            if self.scale.is_some() && !matches!(self.size, Some(Size::Exact { .. })) {
                 self.size = None;
             }
         }
@@ -360,6 +361,43 @@ mod tests {
         );
         edits.merge(patch(json!({ "scale": 40 })));
         assert_eq!((edits.size, edits.scale), (None, Some(40)));
+    }
+
+    #[test]
+    fn a_downscale_keeps_an_exact_crop() {
+        let mut edits = Edits::default();
+        edits.merge(patch(
+            json!({ "size": { "kind": "exact", "width": 1200, "height": 628 } }),
+        ));
+        edits.merge(patch(json!({ "scale": 50 })));
+        assert_eq!(
+            (edits.size, edits.scale),
+            (
+                Some(Size::Exact {
+                    width: 1200,
+                    height: 628
+                }),
+                Some(50)
+            )
+        );
+        edits.merge(patch(json!({ "size": { "kind": "width", "width": 800 } })));
+        assert_eq!(
+            (edits.size, edits.scale),
+            (Some(Size::Width { width: 800 }), None)
+        );
+    }
+
+    #[test]
+    fn an_exact_crop_then_downscale_comes_out_smaller() {
+        let a = applied(&testutil::png(300, 200), Format::Png, |e| {
+            e.size = Some(Size::Exact {
+                width: 120,
+                height: 60,
+            });
+            e.scale = Some(50);
+        });
+        assert_eq!(a.dims, (60, 30));
+        assert_eq!(dimensions(&a.bytes, Format::Png), Some((60, 30)));
     }
 
     #[test]

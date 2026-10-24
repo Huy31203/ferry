@@ -143,7 +143,7 @@ pub fn clear_all(app: AppHandle) {
         .clipboard
         .lock()
         .unwrap()
-        .accumulated
+        .collected
         .clear();
 }
 

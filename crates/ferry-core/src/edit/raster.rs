@@ -29,12 +29,20 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
             "{w} x {h} pixels is too large to edit"
         )));
     }
-    match format {
+    let mut r = match format {
         Format::Png => png::decode_raster(bytes),
         Format::Jpeg => jpeg::decode_raster(bytes).map(|(r, o)| orient(r, o)),
         Format::WebP => webp::decode_raster(bytes),
         Format::Gif => first_gif_frame(bytes),
-    }
+    }?;
+    r.icc = rgb_profile(r.icc);
+    Ok(r)
+}
+
+/// The pixels are always RGBA, so a grey profile (colour space `GRAY` at bytes
+/// 16..20 of the header) would mislabel them.
+fn rgb_profile(icc: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    icc.filter(|p| p.get(16..20) != Some(b"GRAY".as_slice()))
 }
 
 /// The size a card shows for the original: the header's, turned for JPEG
@@ -280,6 +288,50 @@ mod tests {
                 "{target:?}"
             );
         }
+    }
+
+    /// An APP2 payload: `ICC_PROFILE\0`, chunk 1 of 1, then a 128-byte profile
+    /// whose colour space is `space`.
+    fn app2_profile(space: &[u8; 4]) -> (Vec<u8>, Vec<u8>) {
+        let mut profile = vec![0_u8; 128];
+        profile[16..20].copy_from_slice(space);
+        let mut payload = b"ICC_PROFILE\0".to_vec();
+        payload.extend([1, 1]);
+        payload.extend(&profile);
+        (payload, profile)
+    }
+
+    #[test]
+    fn a_grey_profile_is_dropped_once_the_pixels_are_rgb() {
+        let (payload, _) = app2_profile(b"GRAY");
+        let mut enc = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_GRAYSCALE);
+        enc.set_size(16, 16);
+        enc.set_quality(90.0);
+        let mut enc = enc.start_compress(Vec::new()).unwrap();
+        enc.write_marker(mozjpeg::Marker::APP(2), &payload);
+        enc.write_scanlines(&[0x80; 16 * 16]).unwrap();
+        let jpeg = enc.finish().unwrap();
+        let r = decode(&jpeg, Format::Jpeg).unwrap();
+        assert_eq!(r.icc, None);
+        for target in [Format::Png, Format::Jpeg, Format::WebP] {
+            let out = encode(&r, target, &OptimiseOptions::default()).unwrap();
+            assert_eq!(decode(&out, target).unwrap().icc, None, "{target:?}");
+        }
+    }
+
+    #[test]
+    fn an_rgb_profile_survives_decoding() {
+        let (payload, profile) = app2_profile(b"RGB ");
+        let jpeg = testutil::jpeg(
+            32,
+            32,
+            90,
+            &testutil::JpegExtras {
+                icc: Some(payload),
+                ..Default::default()
+            },
+        );
+        assert_eq!(decode(&jpeg, Format::Jpeg).unwrap().icc, Some(profile));
     }
 
     #[test]

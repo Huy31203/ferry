@@ -3,8 +3,10 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { t } from '../lib/i18n';
+  import { isMac } from '../lib/ipc';
   import {
     clampPan,
+    closesCompare,
     cssScale,
     dividerAt,
     nowBox,
@@ -69,7 +71,7 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' || event.key === ' ') {
+    if (closesCompare(event, isMac)) {
       event.preventDefault();
       close();
     }

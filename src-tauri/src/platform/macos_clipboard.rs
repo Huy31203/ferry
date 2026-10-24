@@ -1,7 +1,7 @@
 //! macOS clipboard: NSPasteboard read, write and change polling (spec §4.4).
 //! NSPasteboard and NSWorkspace are thread-safe, so this runs off the main thread.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use ferry_core::sniff::{Format, sniff};
 use ferry_core::trigger::Snapshot;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_app_kit::{NSPasteboard, NSPasteboardWriting, NSWorkspace};
+use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting, NSWorkspace};
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 /// Read order: the first type present wins.
@@ -100,30 +100,19 @@ fn read_from(pb: &NSPasteboard) -> Snapshot {
     }
 }
 
-/// Put an image on the clipboard, plus the working file's URL when `file` is
-/// given. Returns the new change count, so the watcher can skip our own write.
-pub fn write_image(format: Format, bytes: &[u8], file: Option<&Path>) -> Result<u64, String> {
-    write_image_to(&NSPasteboard::generalPasteboard(), format, bytes, file)
+/// Put an image on the clipboard. Returns the new change count, so the watcher
+/// can skip our own write.
+pub fn write_image(format: Format, bytes: &[u8]) -> Result<u64, String> {
+    write_image_to(&NSPasteboard::generalPasteboard(), format, bytes)
 }
 
-fn write_image_to(
-    pb: &NSPasteboard,
-    format: Format,
-    bytes: &[u8],
-    file: Option<&Path>,
-) -> Result<u64, String> {
+fn write_image_to(pb: &NSPasteboard, format: Format, bytes: &[u8]) -> Result<u64, String> {
     let seq = pb.clearContents();
     if !pb.setData_forType(
         Some(&NSData::with_bytes(bytes)),
         &NSString::from_str(uti(format)),
     ) {
         return Err("the clipboard refused the image".into());
-    }
-    if let Some(file) = file {
-        let url = NSURL::from_file_path(file).ok_or("not an absolute path")?;
-        if let Some(text) = url.absoluteString() {
-            pb.setString_forType(&text, &NSString::from_str(FILE_URL));
-        }
     }
     Ok(seq as u64)
 }
@@ -141,6 +130,34 @@ fn write_files_to(pb: &NSPasteboard, paths: &[PathBuf]) -> Result<u64, String> {
         .ok_or("not an absolute path")?;
     let seq = pb.clearContents();
     if !pb.writeObjects(&NSArray::from_retained_slice(&urls)) {
+        return Err("the clipboard refused the files".into());
+    }
+    Ok(seq as u64)
+}
+
+/// Put files on the clipboard with each file's full path as text, one pasteboard
+/// item per file ("Copy file paths").
+pub fn write_paths(paths: &[PathBuf]) -> Result<u64, String> {
+    write_paths_to(&NSPasteboard::generalPasteboard(), paths)
+}
+
+fn write_paths_to(pb: &NSPasteboard, paths: &[PathBuf]) -> Result<u64, String> {
+    let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = paths
+        .iter()
+        .map(|p| {
+            let url = NSURL::from_file_path(p)?.absoluteString()?;
+            let item = NSPasteboardItem::new();
+            item.setString_forType(&url, &NSString::from_str(FILE_URL));
+            item.setString_forType(
+                &NSString::from_str(&p.to_string_lossy()),
+                &NSString::from_str(TEXT),
+            );
+            Some(ProtocolObject::from_retained(item))
+        })
+        .collect::<Option<_>>()
+        .ok_or("not an absolute path")?;
+    let seq = pb.clearContents();
+    if !pb.writeObjects(&NSArray::from_retained_slice(&items)) {
         return Err("the clipboard refused the files".into());
     }
     Ok(seq as u64)
@@ -204,7 +221,7 @@ mod tests {
     fn an_image_round_trips_and_the_change_count_moves() {
         let pb = Private::new();
         let before = pb.0.changeCount() as u64;
-        let seq = write_image_to(&pb.0, Format::Png, PNG, None).unwrap();
+        let seq = write_image_to(&pb.0, Format::Png, PNG).unwrap();
         assert!(seq > before);
         assert_eq!(pb.0.changeCount() as u64, seq);
         let snap = read_from(&pb.0);
@@ -228,7 +245,7 @@ mod tests {
     #[test]
     fn concealed_content_is_flagged_and_not_read() {
         let pb = Private::new();
-        write_image_to(&pb.0, Format::Png, PNG, None).unwrap();
+        write_image_to(&pb.0, Format::Png, PNG).unwrap();
         pb.0.setData_forType(
             Some(&NSData::with_bytes(b"")),
             &NSString::from_str("org.nspasteboard.ConcealedType"),
@@ -261,12 +278,30 @@ mod tests {
     }
 
     #[test]
-    fn an_image_can_carry_its_working_file() {
+    fn paths_go_on_as_files_with_their_text() {
         let pb = Private::new();
-        let file = std::env::temp_dir().join("ferry work.png");
-        write_image_to(&pb.0, Format::Png, PNG, Some(&file)).unwrap();
+        let dir = std::env::temp_dir();
+        let paths = vec![dir.join("ferry a.png"), dir.join("b.jpg")];
+        let seq = write_paths_to(&pb.0, &paths).unwrap();
+        assert_eq!(
+            pb.0.changeCount() as u64,
+            seq,
+            "the watcher must recognise this write"
+        );
         let snap = read_from(&pb.0);
-        assert_eq!(snap.image, Some((Format::Png, PNG.to_vec())));
-        assert_eq!(snap.files, vec![file]);
+        assert_eq!(snap.files, paths);
+        assert_eq!(snap.image, None);
+        let texts: Vec<String> =
+            pb.0.pasteboardItems()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item.stringForType(&NSString::from_str(TEXT)))
+                .map(|s| s.to_string())
+                .collect();
+        let want: Vec<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(texts, want);
     }
 }

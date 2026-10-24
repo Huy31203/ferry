@@ -123,7 +123,9 @@ fn run(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
             ColorSpace::JCS_GRAYSCALE,
         ),
         ColorSpace::JCS_CMYK | ColorSpace::JCS_YCCK => {
-            return Err(OptimiseError::Unsupported("CMYK JPEG".into()));
+            return Err(OptimiseError::Unsupported(crate::i18n::t(
+                "clip.error.cmyk",
+            )));
         }
         _ => (
             decoder
@@ -220,7 +222,9 @@ fn read_raster(input: &[u8]) -> Result<Raster, OptimiseError> {
             .flat_map(|v| [v, v, v, 255])
             .collect(),
         ColorSpace::JCS_CMYK | ColorSpace::JCS_YCCK => {
-            return Err(OptimiseError::Unsupported("CMYK JPEG".into()));
+            return Err(OptimiseError::Unsupported(crate::i18n::t(
+                "clip.error.cmyk",
+            )));
         }
         _ => decoder
             .rgb()
@@ -571,5 +575,26 @@ mod tests {
         let full = testutil::jpeg(300, 200, 90, &testutil::JpegExtras::default());
         let progressive = optimise(&full, &OptimiseOptions::default()).unwrap();
         assert!(optimise(&progressive, &OptimiseOptions::default()).is_ok());
+    }
+
+    #[test]
+    fn a_cmyk_jpeg_says_what_to_do() {
+        let mut enc = Compress::new(ColorSpace::JCS_CMYK);
+        enc.set_size(16, 16);
+        enc.set_quality(90.0);
+        let mut enc = enc.start_compress(Vec::new()).unwrap();
+        enc.write_scanlines(&vec![0x40; 16 * 16 * 4]).unwrap();
+        let input = enc.finish().unwrap();
+        let want = crate::i18n::t("clip.error.cmyk");
+        assert_eq!(want, "CMYK JPEGs aren't supported yet — save as RGB first");
+        let Err(OptimiseError::Unsupported(m)) = optimise(&input, &OptimiseOptions::default())
+        else {
+            panic!("optimise should refuse a CMYK JPEG");
+        };
+        assert_eq!(m, want);
+        let Err(OptimiseError::Unsupported(m)) = decode_raster(&input) else {
+            panic!("decode_raster should refuse a CMYK JPEG");
+        };
+        assert_eq!(m, want);
     }
 }

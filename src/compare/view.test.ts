@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampPan, cssScale, dividerAt, nowBox, shotLabel, versioned, type Shot } from './view';
+import { clampPan, closesCompare, cssScale, dividerAt, nowBox, shotLabel, versioned, type Shot } from './view';
 
 const original: Shot = { path: '/b/shot.png', bytes: 2_400_000, dims: [2880, 1800], format: 'PNG', version: 0 };
 const now: Shot = { path: '/w/shot.webp', bytes: 380_000, dims: [1440, 900], format: 'WebP', version: 1_700_000 };
@@ -81,5 +81,32 @@ describe('versioned', () => {
     expect(versioned('http://asset.localhost/%2Fw%2Fshot.webp', now)).toBe(
       'http://asset.localhost/%2Fw%2Fshot.webp?v=1700000',
     );
+  });
+});
+
+describe('closesCompare', () => {
+  const key = (k: string, mods: { metaKey?: boolean; ctrlKey?: boolean } = {}) => ({
+    key: k,
+    metaKey: false,
+    ctrlKey: false,
+    ...mods,
+  });
+
+  it('closes on Escape and Space on both systems', () => {
+    for (const mac of [true, false]) {
+      expect(closesCompare(key('Escape'), mac)).toBe(true);
+      expect(closesCompare(key(' '), mac)).toBe(true);
+    }
+  });
+
+  it('closes on the platform shortcut for D', () => {
+    expect(closesCompare(key('d', { metaKey: true }), true)).toBe(true);
+    expect(closesCompare(key('D', { ctrlKey: true }), false)).toBe(true);
+  });
+
+  it('ignores the other modifier and a plain d', () => {
+    expect(closesCompare(key('d', { ctrlKey: true }), true)).toBe(false);
+    expect(closesCompare(key('d', { metaKey: true }), false)).toBe(false);
+    expect(closesCompare(key('d'), true)).toBe(false);
   });
 });

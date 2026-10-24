@@ -53,4 +53,11 @@ describe('the list of settings', () => {
     expect(at('hover_hotkeys')?.path).toBe('floating.hover_hotkeys');
     expect(at('crop_sizes')?.control.kind).toBe('sizes');
   });
+
+  it('has the clipboard output rows, none tied to automatic clipboard work', () => {
+    const rows = ['accumulate', 'copy_paths', 'auto_copy'].map((id) => all.find((s) => s.id === id));
+    expect(rows.map((s) => s?.path)).toEqual(['clipboard.accumulate', 'clipboard.copy_paths', 'clip.auto_copy']);
+    expect(rows.map((s) => s?.depends_on)).toEqual([undefined, undefined, undefined]);
+    expect(t('clip.auto_copy')).toBe('Copy results of drops and watched folders');
+  });
 });
