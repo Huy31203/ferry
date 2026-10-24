@@ -21,7 +21,7 @@ One section per stream, added as each plan lands. Answer before implementation s
 - **Decided (user accepted recommendations):** 1 default off; 2 keep name fallback until the manual check; 3 no; 4 no; 5 yes. The implementer must change the plan's on-by-default screenshot/recording watching to off.
 
 ## H integrations (`plans/2026-10-23-ferry-sH-integrations.md`, 13 tasks; `windows` 0.62.2 + `windows-collections` 0.3.2 MIT/Apache, already in Cargo.lock; objc2 feature additions only)
-1. Which of Dropshare, Yoink, Dropover, Dockside are installed for the manual check? Bundle ids are guesses; detection falls back to the app name. **User to answer.**
+1. Which of Dropshare, Yoink, Dropover, Dockside are installed for the manual check? Bundle ids are guesses; detection falls back to the app name. **User answer (2026-10-24): none installed.** The manual check verifies the absent case only: no "Add to Shelf ▸" and no "Upload with" items, plus a shelf app added by hand through `share.shelf_apps`. Upload and shelf delivery to the real apps stay unverified.
 2. "Optimise with Ferry" sits under "Show more options" on Windows 11 (top-level needs a signed package). **Recommend: accept.**
 3. Register HEIC, TIFF, AVIF, MP4/MOV/M4V and PDF now? Until A and E merge they show the "isn't an image" card. **Recommend: register them; every stream merges into `feat/c3-all` before release, so the gap never ships.**
 4. macOS manual checks need the built `Ferry.app` in `/Applications`, replacing installed 0.2.0. **Recommend: OK; reinstall from the v0.2.0 release if needed.**
@@ -84,7 +84,7 @@ Aligned to A's plan: uses `ffmpeg::exec -> Captured`, A's refactor names (`Conte
 - Merge notes: C sets `AUDIO = true`, routes `audio_job` through `Job::file`, stops counting audio as image, and puts `selfwrite::record` in the shared `replace_with` helper. A: B's M4A brand check runs before A's `ftyp` branch. D: nothing needed.
 
 ## Decisions, 2026-10-23 (user: "all go with recommended, even E")
-Every **Recommend** above is accepted for D, G, A, F, B, H, and for E when its plan lands. H question 1 (which shelf apps are installed) still needs the user's answer before H's manual check.
+Every **Recommend** above is accepted for D, G, A, F, B, H, and for E when its plan lands. H question 1 answered: no shelf app or Dropshare is installed.
 Plan amendments this requires (applied in the plans themselves, since each implementer sees only its own plan):
 - A: drop x265 (HEVC by hardware encoders only); reuse F's `ferry_core::optimise::Encoder` and `Edits.encoder` instead of defining its own encoder choice.
 - B: use `aac_at` on macOS when present, native `aac` otherwise.
