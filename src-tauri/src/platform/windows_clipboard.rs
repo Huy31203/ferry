@@ -46,6 +46,14 @@ fn format_name(format: Format) -> &'static str {
         Format::WebP => "image/webp",
         // stream A: video. A video never goes on the clipboard as data.
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => "",
+        // stream B: audio never goes on the clipboard as data either.
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => "",
     }
 }
 

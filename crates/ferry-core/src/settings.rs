@@ -32,6 +32,8 @@ pub struct Settings {
     // ---- Stream D: drop zone and results list ----
     pub drop_zone: DropZone,
     pub results_list: ResultsList,
+    // stream B: audio
+    pub audio: crate::audio::settings::Audio,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -241,6 +243,8 @@ impl Default for Settings {
             video: Video::default(),
             drop_zone: DropZone::default(),
             results_list: ResultsList::default(),
+            // stream B: audio
+            audio: crate::audio::settings::Audio::default(),
             extra: Map::new(),
         }
     }
@@ -594,6 +598,8 @@ impl Settings {
             .collect();
         repair_output(&mut self.video.output, &Video::default().output);
         self.sanitise_drop();
+        // stream B: audio
+        self.audio.sanitise();
         self.version = self.version.max(VERSION);
         self
     }
@@ -619,7 +625,7 @@ impl Settings {
 }
 
 /// An invalid or empty template, or an empty folder, goes back to the default.
-fn repair_output(out: &mut Output, defaults: &Output) {
+pub(crate) fn repair_output(out: &mut Output, defaults: &Output) {
     for (rule, default) in [
         (&mut out.optimised, &defaults.optimised),
         (&mut out.converted, &defaults.converted),

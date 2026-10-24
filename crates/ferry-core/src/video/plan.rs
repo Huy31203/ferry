@@ -89,6 +89,14 @@ pub fn codec_for(target: Format, probe: &Probe) -> Option<Codec> {
             Codec::H264
         }),
         Format::Gif | Format::Png | Format::Jpeg | Format::WebP => None,
+        // stream B: audio
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => None,
     }
 }
 

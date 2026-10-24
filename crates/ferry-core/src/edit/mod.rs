@@ -8,6 +8,7 @@ pub mod smart;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::audio::{CoverPolicy, Loudness};
 use crate::i18n::tf;
 use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, gif};
 use crate::sniff::{self, Format};
@@ -97,6 +98,13 @@ pub struct Edits {
     // stream A: video
     pub speed: Option<Speed>,
     pub mute: bool,
+    // ---- stream B: audio ----
+    /// kbps, lossy audio results only. Mutually exclusive with `fit_under`.
+    pub bitrate: Option<u16>,
+    /// `None`: the settings' target.
+    pub loudness: Option<Loudness>,
+    /// `None`: the settings' policy. `size` and `scale` downscale the cover.
+    pub cover: Option<CoverPolicy>,
 }
 
 // stream A: video
@@ -117,6 +125,10 @@ impl Edits {
             && self.fit_under.is_none()
             && self.speed.is_none()
             && !self.mute
+            // stream B: audio
+            && self.bitrate.is_none()
+            && self.loudness.is_none()
+            && self.cover.is_none()
     }
 
     /// Whether the pixels change size: the raster path.
@@ -135,6 +147,10 @@ impl Edits {
             self.size = size.and_then(Size::normalised);
             if self.size.is_some() {
                 self.scale = None;
+                // stream B: audio (downscaling a cover brings it back)
+                if self.cover == Some(CoverPolicy::Remove) {
+                    self.cover = None;
+                }
             }
         }
         if let Some(scale) = patch.scale {
@@ -142,6 +158,10 @@ impl Edits {
             // An Exact size is a crop, which a scale applies on top of.
             if self.scale.is_some() && !matches!(self.size, Some(Size::Exact { .. })) {
                 self.size = None;
+            }
+            // stream B: audio
+            if self.scale.is_some() && self.cover == Some(CoverPolicy::Remove) {
+                self.cover = None;
             }
         }
         if let Some(format) = patch.format {
@@ -157,6 +177,7 @@ impl Edits {
             self.fit_under = fit_under.filter(|&bytes| bytes > 0);
             if self.fit_under.is_some() {
                 self.compression = None;
+                self.bitrate = None; // stream B: audio
             }
         }
         if let Some(level) = patch.level {
@@ -177,6 +198,23 @@ impl Edits {
         }
         if let Some(mute) = patch.mute {
             self.mute = mute;
+        }
+        // ---- stream B: audio ----
+        if let Some(bitrate) = patch.bitrate {
+            self.bitrate = bitrate.map(|b| b.clamp(16, 320));
+            if self.bitrate.is_some() {
+                self.fit_under = None;
+            }
+        }
+        if let Some(loudness) = patch.loudness {
+            self.loudness = loudness;
+        }
+        if let Some(cover) = patch.cover {
+            self.cover = cover;
+            if self.cover.is_some() {
+                self.size = None;
+                self.scale = None;
+            }
         }
     }
 }
@@ -207,6 +245,13 @@ pub struct EditsPatch {
     #[serde(deserialize_with = "present")]
     pub speed: Option<Option<Speed>>,
     pub mute: Option<bool>,
+    // ---- stream B: audio ----
+    #[serde(deserialize_with = "present")]
+    pub bitrate: Option<Option<u16>>,
+    #[serde(deserialize_with = "present")]
+    pub loudness: Option<Option<Loudness>>,
+    #[serde(deserialize_with = "present")]
+    pub cover: Option<Option<CoverPolicy>>,
 }
 
 /// A field that is in the JSON: `null` is `Some(None)`. Absent fields never
@@ -390,6 +435,35 @@ mod tests {
         assert_eq!(edits.scale, Some(50));
     }
 
+    // ---- stream B: audio ----
+    #[test]
+    fn audio_fields_merge_and_exclude_each_other() {
+        let mut e = Edits::default();
+        e.merge(patch(json!({ "bitrate": 500 })));
+        assert_eq!(e.bitrate, Some(320));
+        e.merge(patch(json!({ "fit_under": 1_000_000 })));
+        assert_eq!((e.bitrate, e.fit_under), (None, Some(1_000_000)));
+        e.merge(patch(json!({ "bitrate": 128 })));
+        assert_eq!((e.bitrate, e.fit_under), (Some(128), None));
+        e.merge(patch(json!({ "scale": 50 })));
+        e.merge(patch(json!({ "cover": "remove" })));
+        assert_eq!((e.cover, e.scale), (Some(CoverPolicy::Remove), None));
+        e.merge(patch(
+            json!({ "size": { "kind": "exact", "width": 600, "height": 600 } }),
+        ));
+        assert_eq!(e.cover, None);
+        e.merge(patch(json!({ "loudness": "podcast" })));
+        assert_eq!(e.loudness, Some(Loudness::Podcast));
+        assert!(!e.is_plain());
+        assert!(
+            !Edits {
+                loudness: Some(Loudness::Off),
+                ..Edits::default()
+            }
+            .is_plain()
+        );
+    }
+
     #[test]
     fn size_and_scale_replace_each_other() {
         let mut edits = Edits::default();
@@ -533,7 +607,10 @@ mod tests {
                 "level": "normal",
                 "encoder": null,
                 "speed": null,
-                "mute": false
+                "mute": false,
+                "bitrate": null,
+                "loudness": null,
+                "cover": null
             })
         );
     }

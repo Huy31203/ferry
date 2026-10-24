@@ -32,11 +32,15 @@ export function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate
       encoder: null,
       speed: null,
       mute: false,
+      bitrate: null,
+      loudness: null,
+      cover: null,
     },
     note: null,
     source_format: 'png',
     edit_hint: null,
     video: null,
+    audio: null,
     ...extra,
   };
 }

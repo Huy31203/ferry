@@ -244,7 +244,7 @@ pub fn output_preview(
     app: AppHandle,
     rule: OutputRule,
     converted: bool,
-    // stream A: video ("video" shows a clip instead of a screenshot)
+    // stream A: video ("video" shows a clip instead of a screenshot; "audio", a track)
     media: Option<String>,
 ) -> Result<String, Vec<String>> {
     let kind = if converted {
@@ -255,10 +255,10 @@ pub fn output_preview(
     let home = app.path().home_dir().unwrap_or_default();
     let work_dir = app.state::<AppState>().work_dir.clone();
     let today = chrono::Local::now().date_naive();
-    let sample = if media.as_deref() == Some("video") {
-        &output::Sample::VIDEO
-    } else {
-        &output::Sample::IMAGE
+    let sample = match media.as_deref() {
+        Some("video") => &output::Sample::VIDEO,
+        Some("audio") => &output::Sample::AUDIO, // stream B: audio
+        _ => &output::Sample::IMAGE,
     };
     output::example_for(kind, &rule, &home, &work_dir, today, sample)
 }

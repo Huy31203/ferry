@@ -16,8 +16,8 @@
     value: OutputRule;
     /** The Converted rule (its example is a WebP) rather than Optimised. */
     converted: boolean;
-    /** The Videos row: its example is a clip rather than a screenshot. */
-    media?: 'video';
+    /** The Videos or Audio row: its example is a clip or a track rather than a screenshot. */
+    media?: 'video' | 'audio';
     onchange: (value: OutputRule) => void;
     labelledby: string;
     disabled?: boolean;

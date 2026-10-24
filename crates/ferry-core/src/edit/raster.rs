@@ -38,6 +38,14 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
         }
+        // stream B: audio never reaches the image engine
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => Err(OptimiseError::Unsupported("audio has no pixels".into())),
     }?;
     r.icc = rgb_profile(r.icc);
     Ok(r)
@@ -142,6 +150,14 @@ pub fn encode(r: &Raster, format: Format, o: &OptimiseOptions) -> Result<Vec<u8>
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
         }
+        // stream B: audio never reaches the image engine
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => Err(OptimiseError::Unsupported("audio has no pixels".into())),
     }
 }
 

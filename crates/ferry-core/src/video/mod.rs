@@ -53,6 +53,14 @@ pub fn format_id(f: Format) -> &'static str {
         Format::WebM => "webm",
         Format::Mov => "mov",
         Format::Mkv => "mkv",
+        // stream B: audio
+        Format::Mp3 => "mp3",
+        Format::M4a => "m4a",
+        Format::Flac => "flac",
+        Format::Wav => "wav",
+        Format::Aiff => "aiff",
+        Format::Ogg => "ogg",
+        Format::Opus => "opus",
     }
 }
 

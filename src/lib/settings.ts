@@ -67,6 +67,7 @@ export interface Settings {
     ignored_apps: string[];
   };
   results_list: { after_cards: number };
+  audio: AudioSettings; // stream B: audio
 }
 
 // stream A: video
@@ -79,6 +80,21 @@ export interface VideoSettings {
   fps_cap: 'off' | '24' | '30' | '60';
   speed_frames: 'keep' | 'drop';
   preserve_dates: boolean;
+  ignored_extensions: string[];
+  max_size_mb: number;
+  output: { optimised: OutputRule; converted: OutputRule };
+}
+
+// ---- stream B: audio ----
+type AudioFormat = 'mp3' | 'm4a' | 'opus' | 'wav' | 'flac';
+
+export interface AudioSettings {
+  outputs: { wav: AudioFormat; aiff: AudioFormat; flac: AudioFormat; mp3: AudioFormat; m4a: AudioFormat; ogg: AudioFormat; opus: AudioFormat };
+  bitrate_kbps: number;
+  opus_bitrate_kbps: number;
+  loudness: 'off' | 'streaming' | 'apple_music' | 'podcast' | 'broadcast';
+  cover: 'keep' | 'optimise' | 'downscale' | 'remove';
+  cover_size: { shape: 'square' | 'long_edge'; side: number };
   ignored_extensions: string[];
   max_size_mb: number;
   output: { optimised: OutputRule; converted: OutputRule };

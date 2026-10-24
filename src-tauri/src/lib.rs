@@ -1,3 +1,4 @@
+mod audio; // stream B
 mod clipboard;
 mod commands;
 mod compare;
@@ -117,6 +118,8 @@ pub fn run() {
             drop_batch::list::list_edit,
             drop_batch::list::list_copy,
             drop_batch::list::list_save_to,
+            // stream B: audio
+            audio::card_extract_cover,
             svc_commands::svc_hotkeys_status,
             svc_commands::svc_hotkey_check,
             svc_commands::svc_hotkey_set,
@@ -188,6 +191,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         jobs::notice(app, t("error.settings_reset"));
     }
     video_startup(app);
+    audio::startup(); // stream B: audio
     Ok(())
 }
 

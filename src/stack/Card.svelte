@@ -4,15 +4,17 @@
   import { fade } from 'svelte/transition';
   import { autoHides, canDrag, isBusy, needsOriginal, railActions, type RailAction, type Tool } from '../lib/cards';
   import {
-    QUALITY_STOPS,
     SCALE_STOPS,
-    currentQuality,
+    // stream B: audio (the Compression button drives bitrate on audio cards)
+    compressionLabel,
+    compressionPatch,
+    compressionRound,
+    compressionStart,
+    compressionStops,
+    nextCompression,
     formatChoices,
     frameBox,
-    nextQuality,
     nextScale,
-    qualityLabel,
-    qualityPatch,
     scaleLabel,
     scalePatch,
     sliderIndex,
@@ -176,35 +178,38 @@
     moved: boolean;
     left: number;
   } | null>(null);
-  const quality = $derived(currentQuality(card.edits, compression));
+  const quality = $derived(compressionStart(card, compression)); // stream B: audio
+  const qualityStops = $derived(compressionStops(card));
   const slideLabel = $derived.by(() => {
     if (!slide) return '';
     return slide.kind === 'downscale'
       ? scaleLabel(SCALE_STOPS[slide.index], card.dims_before, card.edits)
-      : qualityLabel(QUALITY_STOPS[slide.index]);
+      : compressionLabel(card, qualityStops[slide.index]);
   });
 
   /** Every stop's short value, such as "50 %" or "q 60", for the slider's labels. */
   const slideStops = $derived(
     slide?.kind === 'downscale'
       ? SCALE_STOPS.map((scale) => scaleLabel(scale, null, card.edits))
-      : QUALITY_STOPS.map(qualityLabel),
+      : qualityStops.map((stop) => compressionLabel(card, stop)),
   );
 
   /** Every stop's distance from the track's top, px: the track is the value axis. */
   const slideYs = $derived.by(() => {
-    return stopYs(slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS, TRACK);
+    return stopYs(slide?.kind === 'downscale' ? SCALE_STOPS : qualityStops, TRACK);
   });
 
   /** The stops that get a value label (round ones, spaced for the track). */
-  const slideLabelled = $derived(labelledStops(slide?.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS, TRACK));
+  const slideLabelled = $derived(
+    slide?.kind === 'downscale' ? labelledStops(SCALE_STOPS, TRACK) : labelledStops(qualityStops, TRACK, compressionRound(card)),
+  );
 
   function edit(edits: EditsPatch) {
     void act('card_edit', { edits });
   }
 
   function step(kind: SliderKind) {
-    edit(kind === 'downscale' ? scalePatch(nextScale(card.edits.scale)) : qualityPatch(nextQuality(quality)));
+    edit(kind === 'downscale' ? scalePatch(nextScale(card.edits.scale)) : compressionPatch(card, nextCompression(card, quality)));
   }
 
   // Press and hold: a drag of a few px turns the press into a slider; a plain click is one step.
@@ -215,7 +220,7 @@
     const box = cardEl?.getBoundingClientRect();
     const rect = button.getBoundingClientRect();
     const start =
-      kind === 'downscale' ? stopIndex(SCALE_STOPS, card.edits.scale ?? 100) : stopIndex(QUALITY_STOPS, quality);
+      kind === 'downscale' ? stopIndex(SCALE_STOPS, card.edits.scale ?? 100) : stopIndex(qualityStops, quality);
     slide = {
       kind,
       startY: event.clientY,
@@ -231,7 +236,7 @@
     const dy = event.clientY - slide.startY;
     if (!slide.moved && Math.abs(dy) < 4) return;
     if (!slide.moved) ontool('slider');
-    const stops = slide.kind === 'downscale' ? SCALE_STOPS : QUALITY_STOPS;
+    const stops = slide.kind === 'downscale' ? SCALE_STOPS : qualityStops;
     slide = { ...slide, moved: true, index: sliderIndex(stops, slide.start, dy, TRACK) };
   }
 
@@ -249,7 +254,7 @@
     edit(
       done.kind === 'downscale'
         ? scalePatch(SCALE_STOPS[done.index])
-        : qualityPatch(QUALITY_STOPS[done.index]),
+        : compressionPatch(card, qualityStops[done.index]),
     );
   }
 
@@ -282,9 +287,9 @@
     if (needsOriginal(action as RailAction) && !card.can_edit) return card.edit_hint ?? t('card.no_original');
     switch (action) {
       case 'downscale':
-        return t('card.downscale');
+        return card.audio ? t('audio.card.cover_downscale') : t('card.downscale'); // stream B: audio
       case 'compression':
-        return t('card.compression');
+        return card.audio ? t('audio.card.bitrate') : t('card.compression');
       case 'crop':
         return t('card.crop');
       case 'compare':
@@ -421,6 +426,9 @@
   <div class="thumb" aria-hidden="true">
     {#if card.thumb_path}
       <img bind:this={thumb} src={convertFileSrc(card.thumb_path)} alt="" crossorigin="anonymous" />
+    {:else if card.audio}
+      <!-- stream B: audio -->
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2" /></svg>
     {:else if isVideo(card.source_format ?? card.format)}
       <!-- stream A: video -->
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 3v18" /><path d="M3 7.5h4" /><path d="M3 12h18" /><path d="M3 16.5h4" /><path d="M17 3v18" /><path d="M17 7.5h4" /><path d="M17 16.5h4" /></svg>

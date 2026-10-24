@@ -65,13 +65,63 @@ export function qualityLabel(quality: Quality): string {
   return quality === 'extreme' ? t('slider.extreme') : t('slider.quality', { q: quality });
 }
 
+// ---- stream B: audio ----
+/** Bitrate stops, top to bottom, in kbps. */
+export const BITRATE_STOPS: number[] = [320, 256, 192, 160, 128, 96, 64];
+
+/** The card's bitrate as the nearest stop at or below: its recipe, else its result, else its source, else 192. */
+export function currentBitrate(card: JobUpdate): number {
+  const kbps = card.edits.bitrate ?? card.audio?.bitrate_after ?? card.audio?.bitrate_before ?? 192;
+  return BITRATE_STOPS[stopIndex(BITRATE_STOPS, kbps)];
+}
+
+/** One click on Compression: the next lower stop; 64 stays. */
+export function nextBitrate(kbps: number): number {
+  return BITRATE_STOPS.find((stop) => stop < kbps) ?? BITRATE_STOPS[BITRATE_STOPS.length - 1];
+}
+
+export function bitratePatch(kbps: number): EditsPatch {
+  return { bitrate: kbps, level: 'normal' };
+}
+
+export function bitrateLabel(kbps: number): string {
+  return t('audio.slider.kbps', { n: kbps });
+}
+
+/** What the Compression button drives: encoder quality on images, bitrate on audio. */
+export function compressionStops(card: JobUpdate): Quality[] {
+  return card.audio ? BITRATE_STOPS : QUALITY_STOPS;
+}
+
+export function compressionStart(card: JobUpdate, fallback: number): Quality {
+  return card.audio ? currentBitrate(card) : currentQuality(card.edits, fallback);
+}
+
+export function compressionLabel(card: JobUpdate, stop: Quality): string {
+  return card.audio ? bitrateLabel(stop as number) : qualityLabel(stop);
+}
+
+export function compressionPatch(card: JobUpdate, stop: Quality): EditsPatch {
+  return card.audio ? bitratePatch(stop as number) : qualityPatch(stop);
+}
+
+export function nextCompression(card: JobUpdate, current: Quality): Quality {
+  return card.audio ? nextBitrate(current as number) : nextQuality(current);
+}
+
+/** Which stops are labelled: images the multiples of 25, audio the multiples of 64. */
+export function compressionRound(card: JobUpdate): (stop: Quality) => boolean {
+  return card.audio ? (stop) => typeof stop === 'number' && stop % 64 === 0 : roundQuality;
+}
+
 /** A stop's place on the slider's value axis: its number, Extreme at 0. */
 const axisValue = (stop: Quality): number => (stop === 'extreme' ? 0 : stop);
 
-/** A stop's distance from the top of a `track` px rail. The rail is the value axis: 100 at the top, the lowest stop at the bottom. */
+/** A stop's distance from the top of a `track` px rail. The rail is the value axis: the highest stop at the top, the lowest at the bottom. */
 export function stopY(stops: Quality[], i: number, track: number): number {
-  const span = 100 - Math.min(...stops.map(axisValue));
-  return span === 0 ? 0 : (track * (100 - axisValue(stops[i]))) / span;
+  const values = stops.map(axisValue);
+  const [top, span] = [Math.max(...values), Math.max(...values) - Math.min(...values)];
+  return span === 0 ? 0 : (track * (top - axisValue(stops[i]))) / span;
 }
 
 /** Every stop's `stopY` over a `track` px rail: what the card hands the slider to place its knob, ticks and labels. */
@@ -109,10 +159,12 @@ export function sliderTrack(cardHeight: number): number {
 /** The least distance between two value labels, px. */
 export const LABEL_PITCH = 18;
 
-/** Which stops over a `track` px rail get a value label: the first, the last and the multiples of 25. Where two are closer than LABEL_PITCH the round one nearest an end goes; the first and the last stay. */
-export function labelledStops(stops: Quality[], track: number): number[] {
+const roundQuality = (stop: Quality): boolean => typeof stop === 'number' && stop % 25 === 0;
+
+/** Which stops over a `track` px rail get a value label: the first, the last and the `round` ones (multiples of 25). Where two are closer than LABEL_PITCH the round one nearest an end goes; the first and the last stay. */
+export function labelledStops(stops: Quality[], track: number, round: (stop: Quality) => boolean = roundQuality): number[] {
   const last = stops.length - 1;
-  const shown = stops.flatMap((stop, i) => (i === 0 || i === last || (typeof stop === 'number' && stop % 25 === 0) ? [i] : []));
+  const shown = stops.flatMap((stop, i) => (i === 0 || i === last || round(stop) ? [i] : []));
   const y = (i: number) => stopY(stops, i, track);
   for (;;) {
     const n = shown.findIndex((i, k) => k > 0 && y(i) - y(shown[k - 1]) < LABEL_PITCH);
@@ -154,11 +206,26 @@ const FORMAT_LABELS: Record<Format, string> = {
   webm: 'WebM',
   mov: 'MOV',
   mkv: 'MKV',
+  // stream B: audio
+  mp3: 'MP3',
+  m4a: 'M4A',
+  flac: 'FLAC',
+  wav: 'WAV',
+  aiff: 'AIFF',
+  ogg: 'Ogg',
+  opus: 'Opus',
 };
+
+/** The format bar on an audio card, as `ferry_core::audio::BAR`. */
+const AUDIO_TARGETS: Format[] = ['mp3', 'm4a', 'opus', 'wav'];
 
 /** PNG · JPEG · WebP, with GIF first on a card that started as a GIF. */
 export function formatChoices(card: JobUpdate): FormatChoice[] {
   const source = card.source_format ?? card.format;
+  // stream B: audio
+  if (card.audio) {
+    return AUDIO_TARGETS.map((format) => ({ format, label: FORMAT_LABELS[format], current: card.format === format, firstFrame: false }));
+  }
   // stream A: video (HEVC is hardware only: a chip where an encoder exists, or where the card already is HEVC)
   if (isVideo(source)) {
     const hevc = card.video?.hevc_encoder || card.format === 'hevc';
