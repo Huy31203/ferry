@@ -26,6 +26,8 @@ pub struct Effects {
     pub updates: bool,
     /// Tell the sync worker to start, stop or move (svc).
     pub sync: bool,
+    /// Start, stop or move the watchers (stream C).
+    pub watch: bool,
 }
 
 impl Effects {
@@ -44,6 +46,7 @@ impl Effects {
                 || old.floating.hover_hotkeys != new.floating.hover_hotkeys,
             updates: old.svc.updates != new.svc.updates,
             sync: old.svc.sync != new.svc.sync,
+            watch: old.watch != new.watch, // stream C
         }
     }
 }
@@ -95,6 +98,10 @@ fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
     }
     if effects.sync {
         crate::sync_worker::reconfigure(app);
+    }
+    // stream C
+    if effects.watch {
+        crate::watch::reload(app, &new.watch);
     }
 }
 
@@ -160,6 +167,20 @@ mod tests {
     fn nothing_changes_nothing_happens() {
         let s = Settings::default();
         assert_eq!(Effects::between(&s, &s), Effects::default());
+    }
+
+    #[test]
+    fn a_watch_change_reloads_the_watchers() {
+        let base = Settings::default();
+        let mut s = base.clone();
+        s.watch.captures.screenshots = true; // the default is off; turning it on is the change
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                watch: true,
+                ..Effects::default()
+            }
+        );
     }
 
     #[test]

@@ -321,6 +321,10 @@ pub fn show(app: &AppHandle, update: JobUpdate) {
         return;
     }
     let state = app.state::<AppState>();
+    // stream C (watch): quiet jobs show only their Error card.
+    if !state.quiet_gate(&update) {
+        return;
+    }
     if !state.settings.read().unwrap().floating.enabled {
         return;
     }
