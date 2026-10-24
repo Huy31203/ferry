@@ -55,7 +55,7 @@
   // The stack takes the keyboard only while a tool is open (spec §2).
   let keyed = false;
   $effect(() => {
-    const on = tool !== null;
+    const on = tool !== null || listFocused;
     if (on === keyed) return;
     keyed = on;
     invoke('stack_focus', { on }).catch((e) => console.warn('stack_focus', e));
@@ -83,16 +83,35 @@
   let listAfter = $state(5);
   let listMode = $state(false);
   let overList = $state(false);
+  /** The user clicked the list, so it has the keyboard (never from hovering). */
+  let listFocused = $state(false);
+  /** The cards a crop from the selection bar applies to, instead of one card. */
+  let cropFor = $state<string[] | null>(null);
   $effect(() => {
-    const hold = held || overList || tool !== null;
+    const hold = held || overList || tool !== null || listFocused;
     listMode = nextListMode(cards.length, listAfter, untrack(() => listMode), hold);
   });
 
   // Crop or Fit: close the popover (handing the keyboard back), then run the edit.
   function apply(id: string, edits: EditsPatch) {
     setTool(id, null);
+    // Stream D: a crop from the selection bar applies to every selected card.
+    if (cropFor) {
+      const ids = cropFor;
+      cropFor = null;
+      invoke('list_edit', { ids, edits }).catch((e) => console.warn('list_edit', e));
+      return;
+    }
     invoke('card_edit', { id, edits }).catch((e) => console.warn('card_edit', e));
   }
+
+  // Stream D: the list gives the keyboard back when it goes away; a crop for the selection ends with its popover.
+  $effect(() => {
+    if (!listMode || cards.length === 0) listFocused = false;
+  });
+  $effect(() => {
+    if (tool === null) cropFor = null;
+  });
 
   // A click elsewhere in the stack closes a popover (spec §5.3 "click-away").
   function clickAway(event: PointerEvent) {
@@ -104,6 +123,7 @@
 
   // Another app took the keyboard: a popover or a rename field closes.
   function windowBlur() {
+    listFocused = false; // Stream D
     if (tool !== null && tool.kind !== 'slider') tool = null;
   }
 
@@ -280,12 +300,17 @@
         {hovered}
         {held}
         {overList}
+        bind:focused={listFocused}
         hotAction={hot}
         barAction={hot && hot.card === null ? hot.action : null}
         {tool}
         autoHideSecs={config.auto_hide_secs}
         onclose={close}
         onclear={clearAll}
+        oncrop={(ids, first) => {
+          cropFor = ids;
+          setTool(first, 'crop');
+        }}
         ondrag={dragState}
         ontool={setTool}
       />

@@ -12,6 +12,7 @@
     held = false,
     selecting = false,
     checked = false,
+    ring = false,
     hotAction = null,
     autoHideSecs,
     tool = null,
@@ -27,13 +28,15 @@
     /** Something is selected, so a click on the row toggles it instead of starting a drag. */
     selecting?: boolean;
     checked?: boolean;
+    /** The keyboard cursor is on this row (only while the list has the keyboard). */
+    ring?: boolean;
     hotAction?: string | null;
     autoHideSecs: number;
     tool?: Tool | null;
     onclose: () => void;
     ondrag: (active: boolean) => void;
     ontool: (kind: Tool | null) => void;
-    ontoggle: () => void;
+    ontoggle: (shift: boolean) => void;
   } = $props();
 
   let focused = $state(false);
@@ -121,7 +124,7 @@
   }
 
   function click(event: MouseEvent) {
-    if (selecting && !(event.target as HTMLElement).closest('button, input')) ontoggle();
+    if (selecting && !(event.target as HTMLElement).closest('button, input')) ontoggle(event.shiftKey);
   }
 
   const stateLabel = $derived(t(`card.state.${job.kind}` as StringKey));
@@ -132,6 +135,8 @@
   class="row"
   class:hover={hovered}
   class:checked
+  class:ring
+  id="row-{card.id}"
   role="option"
   tabindex="-1"
   aria-selected={checked}
@@ -151,7 +156,7 @@
       <img bind:this={thumb} src={convertFileSrc(card.thumb_path)} alt="" width="32" height="32" crossorigin="anonymous" />
     {/if}
     {#if hovered || checked || focused || selecting}
-      <input type="checkbox" {checked} aria-label={t('drop.list.select', { name: fileName })} onchange={ontoggle} />
+      <input type="checkbox" {checked} aria-label={t('drop.list.select', { name: fileName })} onclick={(e) => ontoggle(e.shiftKey)} />
     {/if}
   </span>
   <span class="main">
@@ -211,6 +216,10 @@
   .row.hover,
   .row.checked {
     background: var(--rail-line);
+  }
+  .row.ring {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
   .thumb {
     position: relative;
