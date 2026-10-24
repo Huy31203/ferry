@@ -457,7 +457,7 @@ fn finish(
     tray::rebuild(app);
 }
 
-fn idle_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
+pub(crate) fn idle_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
     let state = app.state::<AppState>();
     let entry = state
         .jobs
