@@ -48,7 +48,7 @@ One section per stream, added as each plan lands. Answer before implementation s
 5. Sync split: launch at login, Dock icon, sync settings and skipped version stay local; hotkeys, hover keys and ignored apps sync only between same-OS computers. **Recommend: yes, and the integrator adds C's watched folders and H's per-type "Edit with" apps to `settings_sync::LOCAL` (both hold machine-specific paths).**
 - Windows update install built but not tested on a real desktop.
 
-## A video (`plans/2026-10-23-ferry-sA-video.md`, 15 tasks; FFmpeg 9.0.2 sidecar built `--enable-gpl --enable-version3`, so GPL-3.0-or-later like Ferry; static x264, x265 (GPL-2.0+), LAME (LGPL-2.0+), libvpx, SVT-AV1, dav1d, Opus (BSD); Windows-only headers MIT; CI adds actions/cache@v6, msys2/setup-msys2@v2)
+## A video (`plans/2026-10-23-ferry-sA-video.md`, 15 tasks; FFmpeg 9.0.2 sidecar built `--enable-gpl --enable-version3`, so GPL-3.0-or-later like Ferry; static x264 (x265 dropped, see decision 1), LAME (LGPL-2.0+), libvpx, SVT-AV1, dav1d, Opus (BSD); Windows-only headers MIT; CI adds actions/cache@v6, msys2/setup-msys2@v2)
 Patent-encumbered: H.264, HEVC, AAC; VP9/AV1 have third-party pool claims.
 1. Patents on software encoders: (a) ship x264+x265, get legal advice before 1.0; (b) drop x265, HEVC by hardware only; (c) drop both, H.264/HEVC by hardware only. Plan assumes (a). **Recommend: (b). HEVC pools are the more aggressive, and VideoToolbox/NVENC/QSV/AMF cover HEVC on most current machines. Not legal advice.**
 2. GPL source offer: attach a third-party sources archive to each release; also adds gifsicle's licence and source, missing in 0.1.x and 0.2.0. **Recommend: yes (fixes a GPL compliance gap).**
