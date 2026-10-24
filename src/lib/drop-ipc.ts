@@ -106,3 +106,8 @@ export interface ZoneView {
   keep_original: boolean;
   opens_batch: boolean;
 }
+
+/** `list_config`: where the stack switches to the compact list. */
+export interface ListConfig {
+  after_cards: number;
+}
