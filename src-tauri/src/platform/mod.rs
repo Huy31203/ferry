@@ -6,13 +6,13 @@
 #[path = "macos_clipboard.rs"]
 pub mod clipboard;
 #[cfg(target_os = "macos")]
+#[path = "macos_drop.rs"]
+pub mod drop;
+#[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 #[path = "macos_preview.rs"]
-pub mod preview;
-#[cfg(target_os = "macos")]
-#[path = "macos_drop.rs"]
-pub mod drop; // Stream D
+pub mod preview; // Stream D
 #[cfg(target_os = "macos")]
 pub use macos::app_is_active;
 #[cfg(target_os = "macos")]
@@ -24,11 +24,11 @@ pub use macos::{accent_rgb, app_identifier, hide, make_non_activating, show_with
 #[path = "windows_clipboard.rs"]
 pub mod clipboard;
 #[cfg(windows)]
-#[path = "windows_preview.rs"]
-pub mod preview;
-#[cfg(windows)]
 #[path = "windows_drop.rs"]
 pub mod drop; // Stream D
+#[cfg(windows)]
+#[path = "windows_preview.rs"]
+pub mod preview;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
