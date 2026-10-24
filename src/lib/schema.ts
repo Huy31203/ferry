@@ -10,6 +10,7 @@ export type PaneId =
   | 'files'
   | 'floating'
   | 'drop' // stream D
+  | 'watch' // stream C
   | 'hotkeys' // svc
   | 'about'; // svc
 
@@ -22,6 +23,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
   { id: 'drop', label: 'drop.pane' }, // stream D
+  { id: 'watch', label: 'watch.pane' }, // stream C
   { id: 'hotkeys', label: 'svc.pane.hotkeys' }, // svc
   { id: 'about', label: 'svc.pane.about' }, // svc
 ];
@@ -43,7 +45,10 @@ export type Control =
   | { kind: 'hotkey'; action: HotkeyId }
   | { kind: 'rail' }
   | { kind: 'sync' }
-  | { kind: 'update' };
+  | { kind: 'update' }
+  // stream C
+  | { kind: 'capture_dirs' }
+  | { kind: 'watch_folders' };
 
 export interface Setting {
   id: string;
@@ -60,6 +65,8 @@ export interface Setting {
   mac_only?: boolean;
   /** svc: the control sits under the text, full width. */
   wide?: boolean;
+  /** Stream C: media support this row needs; off, the row is disabled with watch.unsupported. */
+  requires?: 'video' | 'audio' | 'pdf';
 }
 
 const SIZE_UNIT: StringKey = 'unit.mb';
@@ -836,6 +843,54 @@ const all: Setting[] = [
     path: 'results_list.after_cards',
     control: { kind: 'number', min: 1, max: 50, unit: 'drop.unit.cards' },
     depends_on: 'floating.enabled',
+  },
+  // stream C
+  {
+    id: 'watch_screenshots',
+    pane: 'watch',
+    group: 'watch.group.captures',
+    label: 'watch.screenshots',
+    help: 'watch.screenshots.help',
+    path: 'watch.captures.screenshots',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'watch_recordings',
+    pane: 'watch',
+    group: 'watch.group.captures',
+    label: 'watch.recordings',
+    help: 'watch.recordings.help',
+    path: 'watch.captures.recordings',
+    control: { kind: 'switch' },
+    requires: 'video',
+  },
+  {
+    id: 'watch_capture_results',
+    pane: 'watch',
+    group: 'watch.group.captures',
+    label: 'watch.capture_results',
+    help: 'watch.capture_results.help',
+    path: 'watch.captures.show_results',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'watch_capture_dirs',
+    pane: 'watch',
+    group: 'watch.group.captures',
+    label: 'watch.capture_dirs',
+    help: 'watch.capture_dirs.help',
+    control: { kind: 'capture_dirs' },
+    wide: true,
+  },
+  {
+    id: 'watch_folders',
+    pane: 'watch',
+    group: 'watch.group.folders',
+    label: 'watch.folders',
+    help: 'watch.folders.help',
+    path: 'watch.folders',
+    control: { kind: 'watch_folders' },
+    wide: true,
   },
 ];
 
