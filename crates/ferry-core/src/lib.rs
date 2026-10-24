@@ -16,6 +16,7 @@ pub mod output;
 pub mod pipeline;
 pub mod run_state;
 pub mod settings;
+pub mod settings_sync;
 pub mod sidecar;
 pub mod sniff;
 pub mod svc_settings;
