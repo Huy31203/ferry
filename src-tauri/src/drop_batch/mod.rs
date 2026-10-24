@@ -2,6 +2,8 @@
 //! hooks in `jobs.rs` consult. Pure logic is in `ferry_core::{intake, drag, batch}`.
 
 pub mod batch;
+pub mod intake;
+pub mod zone;
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -14,6 +16,8 @@ use ferry_core::pipeline::RunOptions;
 use tauri::{AppHandle, Manager};
 use tracing::warn;
 
+pub use zone::ZONE;
+
 pub struct DropState {
     /// Never held across a `jobs::*` call, a `tray::*` call or an emit:
     /// `jobs::show` calls back into `batch::claim`, which takes this lock.
@@ -22,6 +26,8 @@ pub struct DropState {
     keep: Mutex<HashSet<JobId>>,
     /// Jobs that came from a drop, for auto-copy and the zone.
     dropped: Mutex<HashSet<JobId>>,
+    /// The zone window's state; same lock rule as `batch`.
+    pub zone: Mutex<zone::ZoneCtl>,
     wake: mpsc::Sender<()>,
 }
 
@@ -32,6 +38,7 @@ impl DropState {
             batch: Mutex::new(BatchRun::new(limit)),
             keep: Mutex::new(HashSet::new()),
             dropped: Mutex::new(HashSet::new()),
+            zone: Mutex::new(zone::ZoneCtl::default()),
             wake,
         };
         (state, rx)
@@ -56,6 +63,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     app.on_menu_event(|app, event| {
         batch::on_menu(app, event.id().as_ref());
     });
+    zone::create(app)?;
     Ok(())
 }
 

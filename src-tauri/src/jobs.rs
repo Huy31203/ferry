@@ -612,7 +612,6 @@ fn follow_rename(app: &AppHandle, id: &JobId, old: &Path, new: &Path) {
 /// Like `start`, for a job that comes from a drop or a watched folder: when
 /// "Copy results of drops and watched folders" is on, its first result also goes
 /// on the clipboard, unless the user has copied something since it was queued.
-#[allow(dead_code, reason = "called by streams C and D")]
 pub fn start_auto_copied(app: &AppHandle, job: Job, level: Level) -> bool {
     let on = app
         .state::<AppState>()

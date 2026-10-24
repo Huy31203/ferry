@@ -82,3 +82,27 @@ export interface BatchOpen {
   id: string;
   action: 'compare' | 'preview';
 }
+
+/** Mirrors ferry_core::intake::Summary. */
+export interface Summary {
+  files: number;
+  folders: number;
+  images: number;
+  videos: number;
+  audio: number;
+  pdfs: number;
+  unsupported: number;
+  unsupported_ext: string | null;
+}
+
+export type ZoneState = 'hidden' | 'idle' | 'hover' | 'unsupported' | 'dropped';
+export type ZoneMode = 'zone' | 'tab';
+
+/** `drop:view`: what the zone page shows. */
+export interface ZoneView {
+  state: ZoneState;
+  mode: ZoneMode;
+  summary: Summary | null;
+  keep_original: boolean;
+  opens_batch: boolean;
+}

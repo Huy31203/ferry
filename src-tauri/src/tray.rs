@@ -158,6 +158,7 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
     )?;
 
     let batch = crate::drop_batch::batch::tray_item(app)?; // Stream D
+    let zone = crate::drop_batch::zone::tray_item(app)?; // Stream D
     // Copy the list so the lock is not held while items are built: off the main
     // thread each `with_id` waits for the main thread, which may want this lock.
     let recent_updates: Vec<_> = state.recent.lock().unwrap().iter().cloned().collect();
@@ -229,6 +230,7 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
             &optimise,
             &aggressive,
             &batch, // Stream D
+            &zone,  // Stream D
             &recent,
             &PredefinedMenuItem::separator(app)?,
             &backups,
@@ -302,6 +304,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             });
         }
         "drop:batch" => crate::drop_batch::batch::open(app), // Stream D
+        "drop:zone" => crate::drop_batch::zone::show_from_menu(app), // Stream D
         "settings" => windows::open_settings(app),
         "svc:update" => crate::updater::tray_clicked(app),
         "quit" => app.exit(0),
