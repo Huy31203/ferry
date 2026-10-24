@@ -42,5 +42,8 @@ pub use self::windows::{
 
 // Stream H: integrations
 #[cfg(target_os = "macos")]
+#[path = "macos_apps.rs"]
+pub mod apps;
+#[cfg(target_os = "macos")]
 #[path = "macos_services.rs"]
 pub mod services;
