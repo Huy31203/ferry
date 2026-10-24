@@ -8,6 +8,7 @@
   let {
     value,
     converted,
+    media,
     onchange,
     labelledby,
     disabled = false,
@@ -15,6 +16,8 @@
     value: OutputRule;
     /** The Converted rule (its example is a WebP) rather than Optimised. */
     converted: boolean;
+    /** The Videos row: its example is a clip rather than a screenshot. */
+    media?: 'video';
     onchange: (value: OutputRule) => void;
     labelledby: string;
     disabled?: boolean;
@@ -42,7 +45,7 @@
   $effect(() => {
     const rule = { ...value, template: draft };
     let current = true;
-    invoke<string>('output_preview', { rule, converted })
+    invoke<string>('output_preview', { rule, converted, media })
       .then((ok) => {
         if (!current) return;
         example = ok;
