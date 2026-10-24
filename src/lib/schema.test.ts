@@ -44,11 +44,30 @@ describe('the list of settings', () => {
     for (const s of all) expect(ids).toContain(s.pane);
   });
 
+  it('has a Videos pane with the encoder cards first', () => {
+    const videos = all.filter((s) => s.pane === 'videos');
+    expect(videos[0].control.kind).toBe('encoder');
+    expect(videos.map((s) => s.path)).toEqual([
+      'video.encoder',
+      'video.compression',
+      'video.convert_mov',
+      'video.audio_to_aac',
+      'video.remove_audio',
+      'video.fps_cap',
+      'video.speed_frames',
+      'video.preserve_dates',
+      'video.ignored_extensions',
+      'video.max_size_mb',
+    ]);
+  });
+
   it('has the File handling pane with both output rules, the hover toggle and crop sizes', () => {
     const at = (id: string) => all.find((s) => s.id === id);
     expect(all.filter((s) => s.pane === 'files').map((s) => s.path)).toEqual([
       'images.output.optimised',
       'images.output.converted',
+      'video.output.optimised',
+      'video.output.converted',
     ]);
     expect(at('hover_hotkeys')?.path).toBe('floating.hover_hotkeys');
     expect(at('crop_sizes')?.control.kind).toBe('sizes');

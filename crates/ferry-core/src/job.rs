@@ -88,6 +88,27 @@ pub struct JobUpdate {
     /// Why the edit tools are off, for their tooltip; `None` when they are on
     /// or the job is busy.
     pub edit_hint: Option<String>,
+    // stream A: video
+    #[serde(default)]
+    pub video: Option<VideoMeta>,
+}
+
+// stream A: video
+/// What a video card shows besides what every card shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoMeta {
+    /// The current result's; the original's while the original is the result.
+    pub duration_ms: u64,
+    /// The current result's codec label, such as "HEVC".
+    pub codec: String,
+    pub fps: Option<f32>,
+    /// The current result has audio.
+    pub audio: bool,
+    /// The backup: compare's left side.
+    pub original: Option<PathBuf>,
+    pub original_duration_ms: u64,
+    /// The job's hardware has an HEVC encoder: the format bar and menu offer HEVC.
+    pub hevc_encoder: bool,
 }
 
 #[cfg(test)]
@@ -154,9 +175,55 @@ mod tests {
             note: Some("Couldn't reach 1 MB".into()),
             source_format: Some(Format::Png),
             edit_hint: None,
+            video: None,
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains(r#""source":"clipboard""#), "{json}");
         assert_eq!(serde_json::from_str::<JobUpdate>(&json).unwrap(), update);
+    }
+
+    // stream A: video
+    #[test]
+    fn a_video_update_round_trips_through_json() {
+        let meta = VideoMeta {
+            duration_ms: 5000,
+            codec: "HEVC".into(),
+            fps: Some(29.97),
+            audio: true,
+            original: Some(PathBuf::from("/b/a.mp4")),
+            original_duration_ms: 10_000,
+            hevc_encoder: true,
+        };
+        let update = JobUpdate {
+            id: JobId::generate(),
+            state: JobState::Done,
+            name: "clip".into(),
+            ext: "mp4".into(),
+            before: 2_000_000,
+            after: Some(310_000),
+            detail: String::new(),
+            thumb_path: None,
+            source: Source::File,
+            can_restore: true,
+            can_retry: false,
+            output: None,
+            dims_before: Some((1920, 1080)),
+            dims_after: None,
+            format: Some(Format::Hevc),
+            converted: false,
+            can_edit: true,
+            edits: Edits::default(),
+            note: None,
+            source_format: Some(Format::Hevc),
+            edit_hint: None,
+            video: Some(meta),
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        assert_eq!(serde_json::from_str::<JobUpdate>(&json).unwrap(), update);
+        // A card from before this field existed has no video.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("video");
+        let old: JobUpdate = serde_json::from_value(value).unwrap();
+        assert_eq!(old.video, None);
     }
 }

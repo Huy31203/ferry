@@ -29,10 +29,14 @@ export function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate
       compression: null,
       fit_under: null,
       level: 'normal',
+      encoder: null,
+      speed: null,
+      mute: false,
     },
     note: null,
     source_format: 'png',
     edit_hint: null,
+    video: null,
     ...extra,
   };
 }

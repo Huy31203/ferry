@@ -23,9 +23,33 @@ use crate::settings::{self as settings_model, Location, Settings, contract_home}
 use crate::sniff::{self, Format};
 use crate::template;
 use crate::trigger::{MB, Skip, is_ignored_extension, normalise_ext};
+// stream A: video
+use crate::video::{self, hardware::Hardware};
+use video_job::VideoState;
+
+mod video_job;
 
 /// Puts an image on the clipboard: format, bytes and the working file holding them.
 pub type Deliver<'a> = &'a mut dyn FnMut(Format, &[u8], &Path) -> Result<(), String>;
+
+/// A result or an original: bytes in memory, or a file (a video is never read
+/// into memory).
+#[derive(Clone, Copy)]
+enum Content<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
+}
+
+/// What a clipboard branch says when it is handed a file.
+fn in_memory<'a>(content: Content<'a>) -> Result<&'a [u8], (String, String)> {
+    match content {
+        Content::Bytes(bytes) => Ok(bytes),
+        Content::File(_) => Err((
+            t("error.unexpected"),
+            "a clipboard result must be in memory".into(),
+        )),
+    }
+}
 
 /// Settings a run reads, taken when the run starts.
 #[derive(Debug, Clone)]
@@ -42,6 +66,12 @@ pub struct RunOptions {
     /// Moves a file Ferry made, or a converted-away source, to the Trash.
     /// The app logs failures; here a failure only means the file stays.
     pub trash: fn(&Path) -> io::Result<()>,
+    // stream A: video
+    pub video: settings_model::Video,
+    /// `None`: `run_video` asks `video::hardware::probe_hardware`, which waits
+    /// for the start-up probe. Tests set `Some(Hardware::default())` for
+    /// deterministic software encodes.
+    pub hardware: Option<Hardware>,
 }
 
 impl RunOptions {
@@ -62,6 +92,9 @@ impl RunOptions {
             work_dir,
             home: std::env::home_dir().unwrap_or_default(),
             trash,
+            // stream A: video
+            video: settings.video.clone(),
+            hardware: None,
         }
     }
 }
@@ -119,6 +152,8 @@ pub struct Job {
     /// A "Convert and keep both" twin: the source belongs to the parent's
     /// card, so the twin never overwrites, trashes or restores it.
     twin: bool,
+    // stream A: video
+    video: Option<VideoState>,
 }
 
 /// A file job's result on disk (spec §4.4: one result per job).
@@ -258,12 +293,17 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            video: None,
         }
     }
 
     /// A copied file, to be optimised in place. `Err` is the card text for a
     /// file the settings exclude or that is not a supported image.
     pub fn file(path: &Path, settings: &Settings, has_gifsicle: bool) -> Result<Job, String> {
+        // stream A: video
+        if let Some((container, len)) = video_job::video_container(path) {
+            return Job::video_file(path, settings, container, len);
+        }
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -319,6 +359,7 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            video: None,
         })
     }
 
@@ -347,7 +388,11 @@ impl Job {
             ext: self.ext.clone(),
             before: self.before,
             after,
-            thumb_path: self.backup.clone(),
+            // stream A: video
+            thumb_path: match &self.video {
+                Some(video) => video.thumb.clone(),
+                None => self.backup.clone(),
+            },
             source: self.source,
             output: self.output.exists().then(|| self.output.clone()),
             dims_before: self.dims,
@@ -360,6 +405,8 @@ impl Job {
             source_format: Some(self.source_format),
             edit_hint,
             state,
+            // stream A: video
+            video: self.video_meta(),
         }
     }
 
@@ -412,7 +459,18 @@ impl Job {
     pub fn edit(&mut self, patch: EditsPatch) {
         self.prior = Some((self.edits.clone(), self.level));
         self.edits.merge(patch);
-        if matches!(self.edits.format, Some(f) if f == self.source_format || f == Format::Gif) {
+        // stream A: video (a video can become a GIF; only its own targets are kept)
+        let cleared = match self.video {
+            Some(_) => matches!(
+                self.edits.format,
+                Some(f) if f == self.source_format || !video::is_target(f)
+            ),
+            None => matches!(
+                self.edits.format,
+                Some(f) if f == self.source_format || f == Format::Gif
+            ),
+        };
+        if cleared {
             self.edits.format = None;
         }
         self.level = self.edits.level;
@@ -469,6 +527,7 @@ impl Job {
             times: self.times,
             changed: false,
             twin: true,
+            video: self.video.clone(),
         }
     }
 
@@ -522,6 +581,10 @@ impl Job {
         if o.cancel.is_cancelled() {
             return None;
         }
+        // stream A: video
+        if self.video.is_some() {
+            return self.run_video(o, backups, emit);
+        }
         let original = match self.original(backups) {
             Ok(bytes) => bytes,
             Err(e) => return Some(self.fail(tf("error.backup", &[("why", &describe(&e))]), e)),
@@ -534,6 +597,11 @@ impl Job {
             (true, Format::Jpeg) => "card.step.jpeg",
             (true, Format::WebP) => "card.step.webp",
             (true, Format::Gif) => "card.step.gif",
+            // stream A: video (never reached once videos are dispatched earlier)
+            (
+                true,
+                Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv,
+            ) => "video.step.reading",
         });
         emit(self.update(
             JobState::Optimising {
@@ -583,14 +651,21 @@ impl Job {
                     tf("card.note.fit_missed", &[("size", &target)])
                 });
                 let after = bytes.len() as u64;
-                self.put(&bytes, format, &original, o, deliver)
-                    .map(|()| Some(after))
+                self.put(
+                    Content::Bytes(&bytes),
+                    format,
+                    Content::Bytes(&original),
+                    o,
+                    deliver,
+                )
+                .map(|()| Some(after))
             }
             None => {
                 self.dims_after = None;
                 self.note = None;
                 let replace = self.changed;
-                self.put_back(&original, replace, o, deliver).map(|()| None)
+                self.put_back(Content::Bytes(&original), replace, o, deliver)
+                    .map(|()| None)
             }
         };
         Some(match written {
@@ -606,6 +681,10 @@ impl Job {
     /// (and the conversion to the Trash); in the working file and on the
     /// clipboard for a clipboard image.
     pub fn restore(&mut self, o: &RunOptions, deliver: Deliver) -> Finished {
+        // stream A: video
+        if self.video.is_some() {
+            return self.restore_video(o);
+        }
         let read = self
             .backup
             .as_ref()
@@ -615,7 +694,7 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return self.fail(t("error.backup_missing"), e),
         };
-        if let Err((reason, cause)) = self.put_back(&original, true, o, deliver) {
+        if let Err((reason, cause)) = self.put_back(Content::Bytes(&original), true, o, deliver) {
             return self.fail(reason, cause);
         }
         self.edits = Edits::default();
@@ -629,6 +708,11 @@ impl Job {
 
     /// The original bytes, backed up first on the first run.
     fn original(&mut self, backups: &Backups) -> io::Result<Vec<u8>> {
+        fs::read(self.backup_path(backups)?)
+    }
+
+    /// Where the original is stored, backing it up first on the first run.
+    fn backup_path(&mut self, backups: &Backups) -> io::Result<PathBuf> {
         if self.backup.is_none() {
             let stored = match self.source {
                 Source::Clipboard => {
@@ -649,7 +733,7 @@ impl Job {
             self.backup = Some(stored);
             self.pending = None;
         }
-        fs::read(self.backup.as_ref().expect("stored above"))
+        Ok(self.backup.clone().expect("stored above"))
     }
 
     /// Make `bytes`, in `format`, the job's one result. A file job's result
@@ -657,9 +741,9 @@ impl Job {
     /// back first (spec §4.4).
     fn put(
         &mut self,
-        bytes: &[u8],
+        result: Content,
         format: Format,
-        original: &[u8],
+        original: Content,
         o: &RunOptions,
         deliver: Deliver,
     ) -> Result<(), (String, String)> {
@@ -670,6 +754,7 @@ impl Job {
         };
         match self.source {
             Source::Clipboard => {
+                let bytes = in_memory(result)?;
                 let path = self.output.with_file_name(format!("{}.{ext}", self.name));
                 self.write_work_file(&path, bytes)?;
                 deliver(format, bytes, &self.output)
@@ -694,9 +779,15 @@ impl Job {
                     kind,
                     stem: self.stem.as_deref(),
                 };
+                // stream A: video
+                let rules = if self.video.is_some() {
+                    &o.video.output
+                } else {
+                    &o.output
+                };
                 let wanted = output::resolve(
                     &target,
-                    &o.output,
+                    rules,
                     &o.work_dir,
                     &o.home,
                     Local::now().date_naive(),
@@ -713,7 +804,7 @@ impl Job {
                     output::unique_except(&wanted, own.as_deref(), reserved)
                 };
                 let trash_source = kind == OutputKind::Converted
-                    && o.output.converted.location == Location::InPlace
+                    && rules.converted.location == Location::InPlace
                     && path != source
                     && !self.twin;
                 self.check_source(path == source || trash_source)?;
@@ -725,7 +816,7 @@ impl Job {
                         self.restore_source(original, o)?;
                     }
                 }
-                self.write_file(&path, bytes, &source, o)?;
+                self.write_file(&path, result, &source, o)?;
                 if trash_source && self.source_state != SourceState::Trashed {
                     // Only the original, which this job has not trashed yet.
                     let trashed = !source.exists() || (o.trash)(&source).is_ok();
@@ -754,13 +845,14 @@ impl Job {
     /// is taken back.
     fn put_back(
         &mut self,
-        original: &[u8],
+        original: Content,
         replace: bool,
         o: &RunOptions,
         deliver: Deliver,
     ) -> Result<(), (String, String)> {
         match self.source {
             Source::Clipboard => {
+                let original = in_memory(original)?;
                 let path = self
                     .output
                     .with_file_name(format!("{}.{}", self.name, self.source_ext));
@@ -834,7 +926,11 @@ impl Job {
     /// there, or, once it went to the Trash, at the same path if that is free.
     /// Something else may have taken the path; that file stays, and the
     /// original goes beside it (and the job follows it).
-    fn restore_source(&mut self, original: &[u8], o: &RunOptions) -> Result<(), (String, String)> {
+    fn restore_source(
+        &mut self,
+        original: Content,
+        o: &RunOptions,
+    ) -> Result<(), (String, String)> {
         let Some(mut source) = self.source_path.clone() else {
             return Ok(());
         };
@@ -855,19 +951,28 @@ impl Job {
     fn write_file(
         &self,
         path: &Path,
-        bytes: &[u8],
+        content: Content,
         source: &Path,
         o: &RunOptions,
     ) -> Result<(), (String, String)> {
         let folder = path.parent().unwrap_or(Path::new(""));
         fs::create_dir_all(folder)
-            .and_then(|()| fsutil::atomic_replace(path, bytes))
+            .and_then(|()| match content {
+                Content::Bytes(bytes) => fsutil::atomic_replace(path, bytes),
+                Content::File(from) => fsutil::atomic_replace_from(path, from),
+            })
             .map_err(|e| (tf("error.write", &[("dir", &shown(folder))]), e.to_string()))?;
         // Best effort: the content is safe; a lost tag or date is not worth an Error card.
         if let Some(backup) = &self.backup {
             let _ = fsutil::copy_xattrs(backup, path);
         }
-        if o.preserve_dates
+        // stream A: video
+        let preserve = if self.video.is_some() {
+            o.video.preserve_dates
+        } else {
+            o.preserve_dates
+        };
+        if preserve
             && path == source
             && let Some(times) = &self.times
         {
@@ -910,6 +1015,10 @@ impl Job {
     /// "2880×1800 · PNG" or "2880×1800 → 1440×900 · WebP", plus "aggressive"
     /// and "from bitmap" when they apply.
     fn detail(&self) -> String {
+        // stream A: video
+        if self.video.is_some() {
+            return self.video_detail();
+        }
         let mut parts = Vec::new();
         match (self.dims, self.dims_after) {
             (Some((w, h)), Some((aw, ah))) => parts.push(format!("{w}×{h} → {aw}×{ah}")),
@@ -951,6 +1060,8 @@ pub fn notice(reason: String) -> JobUpdate {
         note: None,
         source_format: None,
         edit_hint: None,
+        // stream A: video
+        video: None,
     }
 }
 

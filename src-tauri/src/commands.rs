@@ -6,7 +6,7 @@ use ferry_core::i18n::t;
 use ferry_core::job::{JobId, JobUpdate};
 use ferry_core::output::{self, OutputKind};
 use ferry_core::settings::{
-    CardSize, Corner, Images, OutputRule, Settings, TrayStyle, contract_home,
+    CardSize, Corner, Images, OutputRule, Settings, SpeedFrames, TrayStyle, contract_home,
 };
 use ferry_core::sniff::Format;
 use ferry_core::{color, glyph, template};
@@ -37,6 +37,9 @@ pub struct StackConfig {
     hover_hotkeys: bool,
     /// The rail's tool ids in order (svc.rail.tools).
     rail: Vec<String>,
+    // stream A: video
+    video_compression: u8,
+    speed_frames: SpeedFrames,
 }
 
 /// The stack page is listening: hand it its settings and any cards sent before.
@@ -54,6 +57,9 @@ pub fn stack_ready(app: AppHandle) -> (StackConfig, Vec<JobUpdate>) {
         crop_sizes: settings.images.crop_sizes,
         hover_hotkeys: settings.floating.hover_hotkeys,
         rail: settings.svc.rail.tools,
+        // stream A: video
+        video_compression: settings.video.compression,
+        speed_frames: settings.video.speed_frames,
     };
     (config, std::mem::take(&mut inbox.pending))
 }
@@ -238,6 +244,8 @@ pub fn output_preview(
     app: AppHandle,
     rule: OutputRule,
     converted: bool,
+    // stream A: video ("video" shows a clip instead of a screenshot)
+    media: Option<String>,
 ) -> Result<String, Vec<String>> {
     let kind = if converted {
         OutputKind::Converted
@@ -247,7 +255,12 @@ pub fn output_preview(
     let home = app.path().home_dir().unwrap_or_default();
     let work_dir = app.state::<AppState>().work_dir.clone();
     let today = chrono::Local::now().date_naive();
-    output::example(kind, &rule, &home, &work_dir, today)
+    let sample = if media.as_deref() == Some("video") {
+        &output::Sample::VIDEO
+    } else {
+        &output::Sample::IMAGE
+    };
+    output::example_for(kind, &rule, &home, &work_dir, today, sample)
 }
 
 /// Let the user pick the Specific folder; answered with `~` for the home

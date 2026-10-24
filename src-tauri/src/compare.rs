@@ -25,6 +25,8 @@ pub const COMPARE: &str = "compare";
 
 /// The bars above and below the image in compare.html, in logical pixels.
 const CHROME: (f64, f64) = (0.0, 84.0);
+/// The scrubber and buttons under a video, on top of `CHROME` (stream A: video).
+const VIDEO_BAR: f64 = 64.0;
 /// Room for the toolbar however small the image.
 const MIN_SIZE: (f64, f64) = (520.0, 360.0);
 /// The window takes at most this share of its screen each way.
@@ -44,6 +46,11 @@ pub struct Shot {
     pub format: &'static str,
     /// Changes when the file is rewritten, so the page never shows a cached older result.
     pub version: u64,
+    // stream A: video
+    /// "image" or "video".
+    pub kind: &'static str,
+    pub duration_ms: Option<u64>,
+    pub fps: Option<f32>,
 }
 
 /// Everything the page needs. `original` is `None` in single-image mode.
@@ -66,10 +73,23 @@ pub fn view(card: &JobUpdate, single: bool) -> Result<CompareView, String> {
     let original = if single {
         None
     } else {
-        let backup =
-            existing(card.thumb_path.as_deref()).ok_or_else(|| t("compare.original_gone"))?;
-        Some(shot(backup, card.dims_before))
+        // stream A: video (the card's thumb is a picture; the backup is the original itself)
+        let kept = match &card.video {
+            Some(video) => video.original.as_deref(),
+            None => card.thumb_path.as_deref(),
+        };
+        let backup = existing(kept).ok_or_else(|| t("compare.original_gone"))?;
+        let mut original = shot(backup, card.dims_before);
+        if let Some(video) = &card.video {
+            original.duration_ms = Some(video.original_duration_ms);
+        }
+        Some(original)
     };
+    let mut now = shot(output, card.dims_after.or(card.dims_before));
+    if let Some(video) = &card.video {
+        now.duration_ms = Some(video.duration_ms);
+        now.fps = video.fps;
+    }
     Ok(CompareView {
         id: card.id.clone(),
         name: if card.ext.is_empty() {
@@ -78,7 +98,7 @@ pub fn view(card: &JobUpdate, single: bool) -> Result<CompareView, String> {
             format!("{}.{}", card.name, card.ext)
         },
         original,
-        now: shot(output, card.dims_after.or(card.dims_before)),
+        now,
     })
 }
 
@@ -94,11 +114,19 @@ fn existing(path: Option<&Path>) -> Option<&Path> {
 
 fn shot(path: &Path, dims: Option<(u32, u32)>) -> Shot {
     let meta = std::fs::metadata(path).ok();
+    let format = head_format(path);
     Shot {
         path: path.to_owned(),
         bytes: meta.as_ref().map_or(0, |m| m.len()),
         dims,
-        format: head_format(path).map_or("", Format::label),
+        format: format.map_or("", Format::label),
+        kind: if format.is_some_and(Format::is_video) {
+            "video"
+        } else {
+            "image"
+        },
+        duration_ms: None,
+        fps: None,
         version: meta
             .and_then(|m| m.modified().ok())
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
@@ -109,10 +137,11 @@ fn shot(path: &Path, dims: Option<(u32, u32)>) -> Shot {
 /// A file's format from its first bytes: the card only knows the result's
 /// format, and the backup may differ after a conversion.
 fn head_format(path: &Path) -> Option<Format> {
-    let mut head = Vec::with_capacity(12);
+    // 64 bytes: a Matroska or WebM doc type sits after the EBML header.
+    let mut head = Vec::with_capacity(64);
     std::fs::File::open(path)
         .ok()?
-        .take(12)
+        .take(64)
         .read_to_end(&mut head)
         .ok()?;
     sniff::sniff(&head)
@@ -152,7 +181,16 @@ pub fn show(app: &AppHandle, id: &JobId, single: bool) -> Result<(), String> {
     for shot in view.original.iter().chain([&view.now]) {
         scope.allow_file(&shot.path).map_err(|e| e.to_string())?;
     }
-    let image = view.original.as_ref().unwrap_or(&view.now).dims;
+    let shown = view.original.as_ref().unwrap_or(&view.now);
+    let mut image = shown.dims;
+    // stream A: video (two players side by side, and a bar for the scrubber)
+    let mut chrome = CHROME;
+    if view.now.kind == "video" {
+        chrome.1 += VIDEO_BAR;
+        if view.original.is_some() {
+            image = image.map(|(w, h)| (2 * w + 1, h));
+        }
+    }
     let title = if single {
         view.name.clone()
     } else {
@@ -172,7 +210,7 @@ pub fn show(app: &AppHandle, id: &JobId, single: bool) -> Result<(), String> {
         None => build(app).map_err(|e| e.to_string())?,
     };
     let _ = window.set_title(&title);
-    place(app, &window, image.unwrap_or((0, 0)));
+    place(app, &window, image.unwrap_or((0, 0)), chrome);
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())
 }
@@ -219,7 +257,7 @@ fn build(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 }
 
 /// Size the window to `image` (pixels) and centre it on the cards' screen.
-fn place(app: &AppHandle, window: &WebviewWindow, image: (u32, u32)) {
+fn place(app: &AppHandle, window: &WebviewWindow, image: (u32, u32), chrome: (f64, f64)) {
     let monitor = app
         .get_webview_window(STACK)
         .and_then(|stack| stack.current_monitor().ok().flatten())
@@ -239,7 +277,7 @@ fn place(app: &AppHandle, window: &WebviewWindow, image: (u32, u32)) {
     let size = fit_image(
         area,
         image,
-        (px(CHROME.0), px(CHROME.1)),
+        (px(chrome.0), px(chrome.1)),
         SCREEN_SHARE,
         (px(MIN_SIZE.0), px(MIN_SIZE.1)),
     );
@@ -331,6 +369,72 @@ mod tests {
         assert_eq!(view.now.dims, Some((1440, 900)));
         assert_eq!(view.now.bytes, WEBP.len() as u64);
         assert!(view.now.version > 0);
+    }
+
+    // stream A: video
+    #[test]
+    fn a_video_card_compares_its_backup_not_its_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp4 = [&[0, 0, 0, 0x18][..], b"ftypisom", &[0; 12]].concat();
+        let backup = dir.path().join("backup.mp4");
+        let output = dir.path().join("out.mp4");
+        let thumb = dir.path().join("thumb.jpg");
+        fs::write(&backup, &mp4).unwrap();
+        fs::write(&output, &mp4).unwrap();
+        fs::write(&thumb, b"\xFF\xD8\xFF jpeg").unwrap();
+        let card = JobUpdate {
+            state: JobState::Done,
+            name: "clip".into(),
+            ext: "mp4".into(),
+            thumb_path: Some(thumb),
+            output: Some(output),
+            format: Some(Format::Mp4),
+            video: Some(ferry_core::job::VideoMeta {
+                duration_ms: 5000,
+                codec: "H.264".into(),
+                fps: Some(30.0),
+                audio: true,
+                original: Some(backup.clone()),
+                original_duration_ms: 10_000,
+                hevc_encoder: false,
+            }),
+            ..ferry_core::pipeline::notice(String::new())
+        };
+        let view = view(&card, false).unwrap();
+        let original = view.original.unwrap();
+        assert_eq!(original.path, backup);
+        assert_eq!(original.kind, "video");
+        assert_eq!(original.duration_ms, Some(10_000));
+        assert_eq!(view.now.duration_ms, Some(5000));
+        assert_eq!(view.now.fps, Some(30.0));
+        assert_eq!(view.now.format, "MP4");
+    }
+
+    #[test]
+    fn a_video_without_its_backup_cannot_be_compared() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp4 = [&[0, 0, 0, 0x18][..], b"ftypisom", &[0; 12]].concat();
+        let output = dir.path().join("out.mp4");
+        fs::write(&output, &mp4).unwrap();
+        let card = JobUpdate {
+            state: JobState::Done,
+            name: "clip".into(),
+            ext: "mp4".into(),
+            output: Some(output),
+            format: Some(Format::Mp4),
+            video: Some(ferry_core::job::VideoMeta {
+                duration_ms: 5000,
+                codec: "H.264".into(),
+                fps: None,
+                audio: false,
+                original: None,
+                original_duration_ms: 5000,
+                hevc_encoder: false,
+            }),
+            ..ferry_core::pipeline::notice(String::new())
+        };
+        assert_eq!(view(&card, false), Err("Original no longer kept".into()));
+        assert!(view(&card, true).is_ok());
     }
 
     #[test]

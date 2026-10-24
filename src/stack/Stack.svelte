@@ -8,9 +8,11 @@
   import type { Settings } from '../lib/settings';
   import type { UpdateView } from '../lib/svc';
   import { DEFAULT_RAIL_TOOLS } from '../lib/rail';
+  import { isVideo } from '../lib/video'; // stream A: video
   import Card from './Card.svelte';
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
+  import SpeedPopover from './SpeedPopover.svelte'; // stream A: video
   import DragAllBar from './DragAllBar.svelte';
   import UpdatePill from './UpdatePill.svelte';
 
@@ -23,6 +25,9 @@
     crop_sizes: [],
     hover_hotkeys: true,
     rail: [...DEFAULT_RAIL_TOOLS],
+    // stream A: video
+    video_compression: 80,
+    speed_frames: 'keep',
   });
   /** svc: the updater's state, for the "Update available" pill. */
   let update = $state<UpdateView | null>(null);
@@ -78,7 +83,7 @@
 
   // A click elsewhere in the stack closes a popover (spec §5.3 "click-away").
   function clickAway(event: PointerEvent) {
-    if (tool === null || (tool.kind !== 'crop' && tool.kind !== 'fit')) return;
+    if (tool === null || (tool.kind !== 'crop' && tool.kind !== 'fit' && tool.kind !== 'speed')) return;
     const target = event.target as Element;
     if (target.closest('[data-popover]') || target.closest(`[data-action="${tool.kind}"]`)) return;
     tool = null;
@@ -170,7 +175,7 @@
       listen('stack:pointer-leave', leave),
       listen<CardAction>('card:action', (event) => cardAction(event.payload)),
       listen<Settings>('settings:changed', (event) => {
-        const { floating, images } = event.payload;
+        const { floating, images, video } = event.payload;
         config = {
           corner: floating.corner,
           card_size: floating.card_size,
@@ -179,6 +184,9 @@
           crop_sizes: images.crop_sizes,
           hover_hotkeys: floating.hover_hotkeys,
           rail: event.payload.svc.rail.tools,
+          // stream A: video
+          video_compression: video.compression,
+          speed_frames: video.speed_frames,
         };
       }),
       // A restored keep-both copy is gone, and its card goes with it.
@@ -256,7 +264,7 @@
         compact={config.card_size === 'compact'}
         {railRight}
         autoHideSecs={config.auto_hide_secs}
-        compression={config.compression}
+        compression={isVideo(card.format) ? config.video_compression : config.compression}
         railTools={config.rail}
         tool={open}
         onclose={() => close(card.id)}
@@ -274,6 +282,14 @@
         />
       {:else if open === 'fit'}
         <FitPopover {card} onapply={(edits) => apply(card.id, edits)} onclose={() => setTool(card.id, null)} />
+      {:else if open === 'speed'}
+        <!-- stream A: video -->
+        <SpeedPopover
+          {card}
+          framesDefault={config.speed_frames}
+          onapply={(edits) => apply(card.id, edits)}
+          onclose={() => setTool(card.id, null)}
+        />
       {/if}
     </div>
   {/each}

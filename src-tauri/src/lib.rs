@@ -129,6 +129,8 @@ pub fn run() {
             // starting a second process, so single-instance never sees them.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => windows::open_settings(_app),
+            // stream A: video
+            tauri::RunEvent::Exit => ferry_core::ffmpeg::kill_all(),
             _ => {}
         });
 }
@@ -164,6 +166,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     if let LoadStatus::Recovered { .. } = status {
         jobs::notice(app, t("error.settings_reset"));
     }
+    video_startup(app);
     Ok(())
 }
 
@@ -199,4 +202,26 @@ fn gifsicle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let path = exe.with_file_name(format!("gifsicle{}", std::env::consts::EXE_SUFFIX));
     path.is_file().then_some(path)
+}
+
+// stream A: video
+/// Find ffmpeg and probe the hardware encoders off the main path (R§5). A video
+/// job waits for the probe, so a clip copied right after launch still finds HEVC.
+fn video_startup(_app: &AppHandle) {
+    let started = std::thread::Builder::new()
+        .name("ferry-video-probe".into())
+        .spawn(|| {
+            match ferry_core::ffmpeg::locate() {
+                Ok(path) => info!(path = %path.display(), "ffmpeg found"),
+                Err(e) => tracing::warn!("ffmpeg missing: {e}"),
+            }
+            let hardware = ferry_core::video::hardware::probe_hardware();
+            info!(?hardware, "video encoders");
+            if hardware.hevc.is_none() {
+                tracing::warn!("no hardware HEVC encoder: HEVC is not offered");
+            }
+        });
+    if let Err(e) = started {
+        tracing::warn!("could not start the video probe: {e}");
+    }
 }

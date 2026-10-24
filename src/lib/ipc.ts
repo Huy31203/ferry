@@ -8,7 +8,8 @@ export type JobState =
   | { kind: 'error'; reason: string }
   | { kind: 'restored' };
 
-export type Format = 'png' | 'jpeg' | 'gif' | 'webp';
+// stream A: video (the last six)
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv';
 
 /** Mirrors ferry_core::edit::Size (serde tag `kind`). */
 export type Size =
@@ -27,6 +28,17 @@ export interface Edits {
   compression: number | null;
   fit_under: number | null;
   level: 'normal' | 'aggressive';
+  // stream F: pipelines
+  encoder: 'fast' | 'small' | 'visually_lossless' | null;
+  // stream A: video
+  speed: Speed | null;
+  mute: boolean;
+}
+
+// stream A: video
+export interface Speed {
+  percent: number;
+  keep_frames: boolean;
 }
 
 /** What `card_edit` sends (ferry_core::edit::EditsPatch): an absent field is left alone, `null` clears it. */
@@ -54,12 +66,25 @@ export interface JobUpdate {
   note: string | null;
   source_format: Format | null;
   edit_hint: string | null;
+  // stream A: video
+  video: VideoMeta | null;
+}
+
+// stream A: video (mirrors ferry_core::job::VideoMeta)
+export interface VideoMeta {
+  duration_ms: number;
+  codec: string;
+  fps: number | null;
+  audio: boolean;
+  original: string | null;
+  original_duration_ms: number;
+  hevc_encoder: boolean;
 }
 
 /** Rust → stack: a menu item or hover key that ends in the page (`menu.rs`, `hover_keys.rs`). */
 export interface CardAction {
   id: string;
-  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close';
+  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close' | 'speed';
 }
 
 export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
@@ -75,6 +100,9 @@ export interface StackConfig {
   hover_hotkeys: boolean;
   /** The rail's tool ids in order (svc.rail.tools). */
   rail: string[];
+  // stream A: video
+  video_compression: number;
+  speed_frames: 'keep' | 'drop';
 }
 
 export const isMac = navigator.userAgent.includes('Mac');
