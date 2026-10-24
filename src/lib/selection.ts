@@ -1,3 +1,4 @@
+import { canDrag } from './cards';
 import { formatBytes, savingPercent } from './format';
 import { t } from './i18n';
 import type { JobUpdate } from './ipc';
@@ -50,4 +51,135 @@ export function headerText(totals: Totals, locale?: string): string {
     saved: formatBytes(totals.saved, locale),
     percent: savingPercent(totals.before, totals.after),
   });
+}
+
+/** The selected cards, the end the next Shift-move extends from, and the keyboard cursor. */
+export interface Sel {
+  ids: string[];
+  anchor: string | null;
+  cursor: string | null;
+}
+
+export const NO_SELECTION: Sel = { ids: [], anchor: null, cursor: null };
+
+/** Add or remove one card; it becomes the anchor and the cursor. */
+export function toggle(sel: Sel, id: string): Sel {
+  const ids = sel.ids.includes(id) ? sel.ids.filter((x) => x !== id) : [...sel.ids, id];
+  return { ids, anchor: id, cursor: id };
+}
+
+export function selectAll(sel: Sel, cards: JobUpdate[]): Sel {
+  return { ...sel, ids: cards.map((c) => c.id) };
+}
+
+/** Nothing selected; the cursor stays where it was. */
+export function clearSel(sel: Sel): Sel {
+  return { ids: [], anchor: null, cursor: sel.cursor };
+}
+
+/** Move the cursor one card; with `extend`, select the range from the anchor to it, in card order. */
+export function moveCursor(sel: Sel, cards: JobUpdate[], delta: 1 | -1, extend: boolean): Sel {
+  if (cards.length === 0) return sel;
+  const at = cards.findIndex((c) => c.id === sel.cursor);
+  const next = at === -1 ? (delta === 1 ? cards.length - 1 : 0) : Math.min(cards.length - 1, Math.max(0, at + delta));
+  const cursor = cards[next].id;
+  if (!extend) return { ...sel, anchor: cursor, cursor };
+  const anchor = sel.anchor ?? sel.cursor ?? cursor;
+  const from = cards.findIndex((c) => c.id === anchor);
+  const [lo, hi] = from === -1 ? [next, next] : [Math.min(from, next), Math.max(from, next)];
+  return { ids: cards.slice(lo, hi + 1).map((c) => c.id), anchor, cursor };
+}
+
+/** Shift-click: select the range from the anchor to `id`, in card order. */
+export function extendTo(sel: Sel, cards: JobUpdate[], id: string): Sel {
+  const anchor = sel.anchor ?? sel.cursor;
+  const from = cards.findIndex((c) => c.id === anchor);
+  const to = cards.findIndex((c) => c.id === id);
+  if (from === -1 || to === -1) return toggle(sel, id);
+  const [lo, hi] = [Math.min(from, to), Math.max(from, to)];
+  return { ids: cards.slice(lo, hi + 1).map((c) => c.id), anchor, cursor: id };
+}
+
+/** Forget cards that are gone. */
+export function prune(sel: Sel, cards: JobUpdate[]): Sel {
+  const have = new Set(cards.map((c) => c.id));
+  const ids = sel.ids.filter((id) => have.has(id));
+  const keep = (id: string | null) => (id !== null && have.has(id) ? id : null);
+  if (ids.length === sel.ids.length && keep(sel.anchor) === sel.anchor && keep(sel.cursor) === sel.cursor) {
+    return sel;
+  }
+  return { ids, anchor: keep(sel.anchor), cursor: keep(sel.cursor) };
+}
+
+export interface Targets {
+  /** Output files of the selected cards that can be dragged, copied or saved. */
+  files: string[];
+  fileIds: string[];
+  /** Selected cards the edit tools apply to. */
+  edit: string[];
+  cantEdit: number;
+}
+
+export function targets(cards: JobUpdate[], ids: string[]): Targets {
+  const chosen = cards.filter((c) => ids.includes(c.id));
+  const files = chosen.filter(canDrag);
+  const edit = chosen.filter((c) => c.can_edit);
+  return {
+    files: files.map((c) => c.output as string),
+    fileIds: files.map((c) => c.id),
+    edit: edit.map((c) => c.id),
+    cantEdit: chosen.length - edit.length,
+  };
+}
+
+/** The parts of a KeyboardEvent the list reads. */
+export interface KeyPress {
+  key: string;
+  shiftKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+}
+
+export type ListKey =
+  | { kind: 'select_all' }
+  | { kind: 'escape' }
+  | { kind: 'move'; delta: 1 | -1; extend: boolean }
+  | { kind: 'preview' }
+  | { kind: 'compare' }
+  | { kind: 'step_down' }
+  | { kind: 'scale'; percent: number };
+
+/** The list's keys, with the platform's command key (Cmd on macOS, Ctrl elsewhere). Any other key is left alone. */
+export function listKey(e: KeyPress, mac: boolean): ListKey | null {
+  const command = mac ? e.metaKey : e.ctrlKey;
+  const other = mac ? e.ctrlKey : e.metaKey;
+  if (e.altKey || other) return null;
+  if (command) {
+    if (e.shiftKey) return null;
+    const key = e.key.toLowerCase();
+    if (key === 'a') return { kind: 'select_all' };
+    if (key === 'd') return { kind: 'compare' };
+    return null;
+  }
+  if (e.key === 'Escape') return { kind: 'escape' };
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    return { kind: 'move', delta: e.key === 'ArrowDown' ? 1 : -1, extend: e.shiftKey };
+  }
+  if (e.shiftKey) return null;
+  if (e.key === ' ') return { kind: 'preview' };
+  if (e.key === '-') return { kind: 'step_down' };
+  if (/^[1-9]$/.test(e.key)) return { kind: 'scale', percent: Number(e.key) * 10 };
+  return null;
+}
+
+/** Esc clears a selection; with none, it hands the keyboard back. */
+export function escapeSel(sel: Sel): { sel: Sel; release: boolean } {
+  return sel.ids.length > 0 ? { sel: clearSel(sel), release: false } : { sel, release: true };
+}
+
+/** The scale `-` steps to: 10 points below the current one, `null` when already there (as `hover_keys::step_down`). */
+export function stepDown(scale: number | null): number | null {
+  const next = Math.max(10, (scale ?? 100) - 10);
+  return next === scale ? null : next;
 }

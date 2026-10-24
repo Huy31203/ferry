@@ -64,6 +64,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     spawn_thread("ferry-batch-flush", move || batch::flush_loop(&flusher));
     app.on_menu_event(|app, event| {
         batch::on_menu(app, event.id().as_ref());
+        list::on_menu(app, event.id().as_ref());
     });
     zone::create(app)?;
     watch::start(app);
