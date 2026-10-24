@@ -21,6 +21,7 @@ pub const LOCAL: &[&str] = &[
     "general.show_dock_icon",
     "svc.sync",
     "svc.updates.skipped_version",
+    "watch.folders", // stream C: machine-specific folder paths
 ];
 /// Path prefixes that sync only between computers with the same OS.
 pub const PER_OS: &[&str] = &["hotkeys", "svc.shortcuts", "clipboard.ignored_apps"];
