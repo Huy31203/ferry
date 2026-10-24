@@ -6,6 +6,7 @@
   import type { CropFrame } from '../lib/edits';
   import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
+  import { DEFAULT_RAIL_TOOLS } from '../lib/rail';
   import Card from './Card.svelte';
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
@@ -19,6 +20,7 @@
     compression: 80,
     crop_sizes: [],
     hover_hotkeys: true,
+    rail: [...DEFAULT_RAIL_TOOLS],
   });
   let hovered = $state<string | null>(null);
   /** The button the pointer is on: its card (null for the Drag all bar) and its `data-action`. */
@@ -172,6 +174,7 @@
           compression: images.compression,
           crop_sizes: images.crop_sizes,
           hover_hotkeys: floating.hover_hotkeys,
+          rail: event.payload.svc.rail.tools,
         };
       }),
       // A restored keep-both copy is gone, and its card goes with it.
@@ -241,6 +244,7 @@
         {railRight}
         autoHideSecs={config.auto_hide_secs}
         compression={config.compression}
+        railTools={config.rail}
         tool={open}
         onclose={() => close(card.id)}
         ondrag={dragState}

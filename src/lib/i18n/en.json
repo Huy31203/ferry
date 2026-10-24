@@ -40,6 +40,8 @@
   "svc.rail.tool.rename": "Rename",
   "svc.rail.tool.preview": "Preview",
   "svc.rail.tool.fit": "Fit under size",
+  "svc.rail.add": "Add a tool",
+  "svc.rail.customise": "Customise rail…",
   "tray.tooltip": "Ferry",
   "tray.settings": "Settings…",
   "tray.about": "About Ferry",

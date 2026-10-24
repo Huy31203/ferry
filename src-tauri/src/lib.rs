@@ -14,6 +14,7 @@ mod tray;
 mod windows;
 
 // svc (stream G)
+mod rail_menu;
 mod svc_commands;
 
 use std::path::PathBuf;
@@ -94,6 +95,7 @@ pub fn run() {
             svc_commands::svc_hotkey_reset,
             svc_commands::svc_hotkeys_suspend,
             svc_commands::svc_settings_pane,
+            svc_commands::svc_rail_menu,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")

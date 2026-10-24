@@ -73,6 +73,8 @@ export interface StackConfig {
   compression: number;
   crop_sizes: [number, number][];
   hover_hotkeys: boolean;
+  /** The rail's tool ids in order (svc.rail.tools). */
+  rail: string[];
 }
 
 export const isMac = navigator.userAgent.includes('Mac');
