@@ -51,7 +51,7 @@
 | Software encoders | libx264 (H.264), libsvtav1 (AV1), libvpx (VP9 for WebM). **No libx265**: never fetch, build, link or `--enable-libx265` it | R§2.3/§4.3 format bar: MP4, HEVC, AV1, WebM, GIF. x265 dropped by the user's decision (patents: the HEVC pools are the more aggressive) |
 | HEVC output | **Hardware encoders only**: `hevc_videotoolbox` (macOS), `hevc_nvenc` / `hevc_qsv` / `hevc_amf` (Windows). Every encoder mode (Fast, Small, Visually lossless) uses the hardware HEVC encoder for HEVC. **Where no hardware HEVC encoder works, HEVC is not offered** (no HEVC chip, no "Convert to ▸ HEVC"), and anything that still needs HEVC **falls back to H.264** (libx264, or the hardware H.264 encoder in Fast) with the card note `video.note.hevc_as_h264`. One exception: a **plain** optimise of an HEVC video is never turned into H.264; with no hardware HEVC encoder it leaves the file as it is (`AlreadyOptimal`). Linux (CI only) has no hardware encoders, so HEVC always takes the fallback there | VideoToolbox, NVENC, Quick Sync and AMF cover HEVC on most current machines, and the OS or GPU vendor normally carries the HEVC patent licence. H.264 at the same quality is larger and 8-bit, so a plain optimise would only lose (size and HDR) |
 | Decoders | FFmpeg native, plus libdav1d (AV1) | Native AV1 decoding needs a hardware accelerator, and R§2.3 accepts AV1 input |
-| Audio | native `aac`, libopus (WebM/AV1 audio; B's Opus), libmp3lame (B's MP3); native FLAC/ALAC/PCM | Stream B consumes this build. No `libfdk_aac` (non-free) |
+| Audio | native `aac`, libopus (WebM/AV1 audio; B's Opus), libmp3lame (B's MP3); native FLAC/ALAC/PCM. macOS also `aac_at` (AudioToolbox AAC, `--enable-audiotoolbox`; system framework, wrapper LGPL-2.1+) | Stream B consumes this build and prefers `aac_at` for M4A on macOS (B's plan, "AAC encoder"). A's own video audio stays native `aac` on every OS. `--disable-autodetect` means AudioToolbox must be enabled by name. No `libfdk_aac` (non-free) |
 | GIF export | ffmpeg `palettegen`/`paletteuse`, then the bundled gifsicle `-O3 --lossy` | R§1 names gifski (AGPL-3.0 or commercial). This route needs no new AGPL sidecar and reuses gifsicle. Decided 2026-10-23: no gifski |
 | Programs | `ffmpeg` only (`--disable-ffprobe --disable-ffplay`); probing parses `ffmpeg -i` stderr | Stays under NFR-R3 (installer < 120 MB). A second fully linked binary would roughly double the size |
 | Linking | Static external libraries. macOS links only system libraries and frameworks. Windows `ffmpeg.exe` is built with MSYS2 MINGW64 `-static` and depends on no `libwinpthread`, `libstdc++` or `libgcc` DLL | One self-contained file per triple, like gifsicle |
@@ -119,14 +119,15 @@ encoder: 'fast' | 'small' | 'visually_lossless' | null;
 
 **A and F are built in parallel worktrees from `main`, so F's definition may not be on A's branch yet.** Check first: `grep -n "pub enum Encoder" crates/ferry-core/src/optimise/mod.rs` and `grep -n "pub encoder" crates/ferry-core/src/edit/mod.rs`.
 - **Present** (F merged first): use it as it is. Add nothing, rename nothing.
-- **Absent:** A adds it **verbatim as above**, in the same files, with the same names, derives and serde, and nothing else of F's (no `OptimiseOptions.encoder`/`adaptive`, no `strip_metadata`, no `from_recipe`, no image-encoder mapping; F's Task 1 owns those). Put the enum right after `pub enum Level` in `optimise/mod.rs`, and the `Edits`/`EditsPatch`/`merge` lines at the end of each, under a `// stream F: pipelines (encoder; added early by stream A, identical to F's Task 1)` comment line, where F's Task 1 puts them. The enum gets **no** `Default` derive (F's has none); `Video::default()` names `Encoder::Fast` itself.
+- **Absent:** A adds it **verbatim as above**, in the same files, with the same names, derives and serde, and nothing else of F's (no `OptimiseOptions.encoder`/`adaptive`, no `strip_metadata`, no `from_recipe`, no image-encoder mapping; F's Task 1 owns those). Put the enum right after `pub enum Level` in `optimise/mod.rs`, and the `Edits`/`EditsPatch`/`merge` lines at the end of each, under a `// stream F: pipelines` comment line (F's own marker, word for word, so F's later diff of these lines is empty), where F's Task 1 puts them. Credit the early copy in the commit message, not in a code comment. The enum gets **no** `Default` derive (F's has none); `Video::default()` names `Encoder::Fast` itself.
+- **`OptimiseOptions.encoder`** is F's too (F's Task 1 adds it, with `adaptive`, and gives it its image meaning). A neither adds nor reads it, present or absent: the video mode comes from `edits.encoder.unwrap_or(settings.video.encoder)` (Task 8 rule 4), and A builds `OptimiseOptions { level, compression, ..Default::default() }`, so the field stays `None` and F's "Visually lossless floors quality at 90" rule never touches video quality. The literal compiles the same with or without F's field.
 
 Whichever stream lands second then has nothing to change: the two copies are identical, so the integrator keeps one copy of each line and drops the other. Do not add a `VideoEncoder` type or any second encoder enum.
 
 ### Hooks for other streams
 
 - **B (audio)** may start once Task 1 is merged. It uses `ferry_core::ffmpeg::{run, run_expecting, capture, FerryError}`. `capture` returns the full stderr, which holds the `loudnorm` JSON. The binary from Task 2 contains `aac`, `libopus`, `libmp3lame`, `flac`, `alac`, `pcm_*`, `mjpeg`/`png` (cover art), the `loudnorm`/`atempo` filters and the `mp3`/`ipod`/`opus`/`flac`/`wav`/`image2` muxers. The `ftyp` brands `M4A `, `M4B `, `M4P ` are not claimed as video (Task 4), so B can sniff them.
-- **C (watchers)**, merge-time step after both land: in `src-tauri/src/watch/hooks.rs` set `pub const VIDEO: bool = true;`. Replace the body of `video_job` with `Some(Job::file(path, settings, app.state::<AppState>().gifsicle.is_some()))`, because `Job::file` accepts videos after Task 10.
+- **C (watchers)**, merge-time step after both land: in `src-tauri/src/watch/hooks.rs` set `pub const VIDEO: bool = true;`. Replace the body of `video_job` with `Some(Job::file(path, settings, app.state::<AppState>().gifsicle.is_some()))`, because `Job::file` accepts videos after Task 10. C's `VIDEO_EXTENSIONS` is `mp4 mov m4v mkv webm` (C dropped `.avi`, decided 2026-10-23); A accepts no AVI input, and nothing in this plan depends on C's list.
 - **D (drop zone, batch)** calls `Job::file`; videos need nothing extra. `ferry_core::video::is_video_file(path)` tells the caller whether a file is a video (from its first 64 bytes).
 - **F (pipelines)** later registers video step kinds in its `crates/ferry-core/src/pipeline_steps.rs` registry. Each one only builds an `EditsPatch` from this plan's fields: `changeSpeed(factor, frames)` → `speed: Some(Some(Speed { percent, keep_frames }))`, `removeAudio` → `mute: Some(true)`, `convert(to)` → `format: Some(Some(Format::Mp4 | Hevc | Av1 | WebM | Gif))`, `optimise(encoder)` → `encoder: Some(Some(optimise::Encoder::…))` (F's own enum and field, shared as above), and downscale/crop as for images. F's "Re-optimise with encoder ▸" menu item uses `encoder` too, so on a video card it re-runs with that mode. `convert(hevc)` on a machine without a hardware HEVC encoder writes H.264 with the `video.note.hevc_as_h264` note (Task 10). Merge note: if F's `EditsPatch::from_recipe` exists when A merges (or A's fields when F merges), it must also copy `speed` and `mute`. Apart from the shared `Encoder` lines above, nothing in this plan touches F's files.
 - **E (pdf-formats)** also adds `Format` variants. At merge, keep both blocks in the enum and in every `match`.
@@ -145,6 +146,7 @@ Whichever stream lands second then has nothing to change: the two copies are ide
 | nv-codec-headers | headers (Windows) | 12.1.14.0 | MIT | |
 | AMF headers | headers (Windows) | 1.5.2 | MIT | |
 | libvpl | static library (Windows) | 2.17.0 | MIT | |
+| VideoToolbox, AudioToolbox (macOS) | system frameworks, linked by `--enable-videotoolbox --enable-audiotoolbox` | OS | Apple, not shipped | gives `h264_videotoolbox`, `hevc_videotoolbox`, `aac_at` (stream B) |
 | `windows-sys` | crate, `ferry-core` `[target.'cfg(windows)'.dependencies]` | 0.61 (already in `Cargo.lock`), features `Win32_Foundation`, `Win32_System_JobObjects`, `Win32_System_Threading` | MIT OR Apache-2.0 | |
 | `actions/cache` | CI action | `v6` | MIT | |
 | `msys2/setup-msys2` | CI action | `v2` | MIT | |
@@ -500,6 +502,7 @@ Script layout (bash, `set -euo pipefail`, same style as `build-gifsicle.sh`):
 - FFmpeg `./configure`, always: `--prefix=$PREFIX --pkg-config-flags=--static --extra-cflags=-I$PREFIX/include --extra-ldflags=-L$PREFIX/lib --enable-gpl --enable-version3 --disable-autodetect --disable-shared --enable-static --disable-doc --disable-debug --enable-stripping --disable-ffplay --disable-ffprobe --disable-network --enable-zlib --enable-libx264 --enable-libvpx --enable-libsvtav1 --enable-libdav1d --enable-libopus --enable-libmp3lame`. macOS adds `--enable-videotoolbox --enable-audiotoolbox` and `-mmacosx-version-min=13.0` in both extra flags. Windows adds `--enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --extra-ldflags=-static`. Then `make` and `strip`.
 - **Self-checks the script runs and fails on:**
   - `ffmpeg -hide_banner -buildconf` (host-arch binaries only) contains `--enable-gpl` and `--enable-version3`, and contains neither `--enable-nonfree` nor `--enable-libx265`.
+  - macOS: `ffmpeg -hide_banner -encoders` (host-arch binaries only) lists `aac_at`, `h264_videotoolbox` and `hevc_videotoolbox`. `--disable-autodetect` turns AudioToolbox and VideoToolbox off unless they are enabled by name, so a missing `--enable-audiotoolbox` would silently drop stream B's `aac_at`.
   - macOS: every line of `otool -L` is under `/usr/lib/` or `/System/Library/`.
   - Windows: `objdump -p ffmpeg.exe | grep 'DLL Name'` names none of `libwinpthread-1.dll`, `libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `zlib1.dll`.
 - **Licences:** copy into `src-tauri/binaries/licenses/`: `ffmpeg/{COPYING.GPLv3,LICENSE.md}`, `x264/COPYING`, `libvpx/{LICENSE,PATENTS}`, `svt-av1/{LICENSE.md,PATENTS.md}`, `dav1d/COPYING`, `opus/COPYING`, `lame/COPYING`; on Windows also `libvpl/LICENSE`, `amf/LICENSE.txt`, and `nv-codec-headers/LICENSE`, made from the leading comment of `include/ffnvcodec/nvEncodeAPI.h` (`sed -n '1,/\*\//p'`). Then copy the repo's `THIRD-PARTY-NOTICES.md`.
@@ -511,8 +514,8 @@ Script layout (bash, `set -euo pipefail`, same style as `build-gifsicle.sh`):
 - [ ] **Step 2: Run `bash -n scripts/build-ffmpeg.sh` and `shellcheck scripts/build-ffmpeg.sh` (if installed).** Expected: no errors.
 - [ ] **Step 3: Manual check: local build on this Mac (Intel).** Install the tools first (`brew install nasm pkgconf meson ninja cmake`), then run `bash scripts/build-ffmpeg.sh`. Look at:
   1. The script ends with `built …/src-tauri/binaries/ffmpeg-x86_64-apple-darwin` and prints a size, expected 30–75 MB.
-  2. `"$FERRY_FFMPEG" -hide_banner -encoders | grep -E ' (libx264|libsvtav1|libvpx-vp9|libopus|libmp3lame|aac|h264_videotoolbox|hevc_videotoolbox|gif) '` lists all nine, and `"$FERRY_FFMPEG" -hide_banner -encoders | grep libx265` prints nothing.
-  3. `"$FERRY_FFMPEG" -hide_banner -f lavfi -i testsrc2=d=1 -c:v hevc_videotoolbox -f null -` exits 0, which shows the hardware HEVC encoder works on this Mac. Also try 10-bit: the same command with `-pix_fmt p010le -profile:v main10` before `-f null`; record whether it exits 0 (older Intel Macs have no 10-bit HEVC encode, and Ferry then falls back as the "HEVC output" decision says).
+  2. `"$FERRY_FFMPEG" -hide_banner -encoders | grep -E ' (libx264|libsvtav1|libvpx-vp9|libopus|libmp3lame|aac|h264_videotoolbox|hevc_videotoolbox|aac_at|gif) '` lists all ten (`aac_at` is AudioToolbox AAC, there only because macOS configures with `--enable-audiotoolbox`; stream B's M4A uses it), and `"$FERRY_FFMPEG" -hide_banner -encoders | grep libx265` prints nothing.
+  3. `"$FERRY_FFMPEG" -hide_banner -f lavfi -i anullsrc=r=48000:cl=stereo -t 0.1 -c:a aac_at -b:a 128k -f null -` exits 0 (the `aac_at` test encode stream B runs at start-up). `"$FERRY_FFMPEG" -hide_banner -f lavfi -i testsrc2=d=1 -c:v hevc_videotoolbox -f null -` exits 0, which shows the hardware HEVC encoder works on this Mac. Also try 10-bit: the same command with `-pix_fmt p010le -profile:v main10` before `-f null`; record whether it exits 0 (older Intel Macs have no 10-bit HEVC encode, and Ferry then falls back as the "HEVC output" decision says).
   4. `ls src-tauri/binaries/licenses` shows `ffmpeg x264 libvpx svt-av1 dav1d opus lame gifsicle THIRD-PARTY-NOTICES.md` (no `x265`) (run `pnpm sidecar` once for gifsicle).
   5. A second run reuses the checkouts and skips the fetches.
 
@@ -556,7 +559,7 @@ CI (`ci.yml`), in both the `core` and `bundle` jobs, before the existing gifsicl
     let out = Command::new(ffmpeg).args(["-hide_banner", "-encoders"]).output().unwrap(); // has(e): a stdout line whose second column is e
     for e in ["libx264", "libsvtav1", "libvpx-vp9", "libopus", "libmp3lame", "aac", "gif", "mjpeg", "png"] { assert!(has(e)); }
     assert!(!has("libx265"), "no software HEVC encoder may ship");
-    if cfg!(target_os = "macos") { for e in ["h264_videotoolbox", "hevc_videotoolbox"] { assert!(has(e)); } }
+    if cfg!(target_os = "macos") { for e in ["h264_videotoolbox", "hevc_videotoolbox", "aac_at"] { assert!(has(e), "{e}: macOS configure needs --enable-videotoolbox --enable-audiotoolbox"); } }
     if cfg!(windows) { for e in ["h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"] { assert!(has(e)); } }
 }
 #[test] fn a_real_encode_reports_progress_to_the_end() {
@@ -718,7 +721,7 @@ export interface VideoSettings {
 - [ ] **Step 0: Make sure F's encoder enum exists.** Run `grep -n "pub enum Encoder" crates/ferry-core/src/optimise/mod.rs`. If it prints a line, stream F's Task 1 is already on the branch: use that enum and skip to Step 1. If it prints nothing, add F's definition verbatim right after `pub enum Level { … }` (the file already imports `serde::{Deserialize, Serialize}`):
 
 ```rust
-// stream F: pipelines (encoder; added early by stream A, identical to F's Task 1)
+// stream F: pipelines
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Encoder {
@@ -926,7 +929,7 @@ pub mute: bool,
 #[serde(deserialize_with = "present")] pub speed: Option<Option<Speed>>,
 pub mute: Option<bool>,
 // F's encoder field, ONLY if `grep -n "pub encoder" crates/ferry-core/src/edit/mod.rs` prints nothing
-// (under // stream F: pipelines (encoder; added early by stream A, identical to F's Task 1)):
+// (under // stream F: pipelines, F's marker word for word):
 pub encoder: Option<Encoder>,                                                   // in Edits; None: the settings' encoder
 #[serde(deserialize_with = "present")] pub encoder: Option<Option<Encoder>>,    // in EditsPatch
 ```
@@ -1641,11 +1644,11 @@ expect(drifted(1, 1.05, 30)).toBe(true);
 
 ---
 
-## Open questions for the user
+## Decisions taken on the open questions (user, 2026-10-23: every recommendation accepted)
 
-1. **Patents (H.264, HEVC, AAC).** Shipping x264/x265 software encoders in a free download may need patent-pool licences (Via LA AVC/AAC, Access Advance/Via LA HEVC). Options: (a) ship as planned and get legal advice before 1.0; (b) drop x265 and leave HEVC to the hardware encoders only, with "Small" on HEVC falling back to H.264; (c) drop both and keep only hardware H.264/HEVC plus AV1/VP9 in software. The plan assumes (a).
-2. **GPL source offer.** The plan attaches the third-party sources to each GitHub Release. That also closes an existing gap for gifsicle, which shipped without its licence file or a source archive in 0.1.x/0.2.0. OK to add gifsicle's licence and source to the same archive (Task 2 and Task 3 do this)?
-3. **gifski.** R§1 names gifski (AGPL-3.0) for video to GIF. The plan uses ffmpeg's palette filters plus gifsicle instead (no new AGPL component, no new sidecar). Is that acceptable, or do you want gifski's quality?
-4. **FR-T3, automatic optimisation of copied video files.** No stream owns it. After this stream, video files are optimised from the hotkey (Finder copy + ⌃⇧C), from C's watchers and from D's drop zone, but not automatically on copy. Should A add a `clipboard.videos` switch, or should stream I?
-5. **CI time.** The first ffmpeg build per OS will likely take 30–60 min (universal macOS builds both arches; Windows builds every library in MSYS2). Later runs use the cache. Is that acceptable, or do you prefer pinned prebuilt binaries mirrored into a Ferry release (faster CI, but a third-party build to trust)?
-6. **AVI and other containers.** R§2.3 lists MP4, MOV, MKV, WebM. Stream C's watcher list includes `.avi`, which this plan does not accept (it would show an Error card). Drop AVI from C, or add AVI input (re-encoded to MP4)?
+1. **Patents (H.264, HEVC, AAC):** option (b). x265 is dropped: not fetched, built, linked or shipped. HEVC is written only by hardware encoders (VideoToolbox, NVENC, Quick Sync, AMF); with none, HEVC is not offered and an HEVC request is written as H.264 with a note (Decisions, "HEVC output"). x264 and native AAC stay; get legal advice before 1.0. Not legal advice.
+2. **GPL source offer:** yes. Each GitHub Release gets the third-party sources archive, which also carries gifsicle's licence and source (Tasks 2 and 3).
+3. **gifski:** no. Video to GIF uses ffmpeg's palette filters plus gifsicle.
+4. **FR-T3, automatic optimisation of copied video files:** not in this stream. One integration task on `feat/c3-all` after A and I merge.
+5. **CI time:** accepted. The first ffmpeg build per OS takes 30–60 min and is cached after; no third-party prebuilt binaries.
+6. **AVI:** dropped from stream C. A accepts MP4, MOV, MKV and WebM only (R§2.3); no AVI input.
