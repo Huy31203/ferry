@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::integrations::MediaKind;
 use crate::svc_settings::Svc;
 use crate::{edit, fsutil, optimise::Encoder, template};
 
@@ -25,6 +26,8 @@ pub struct Settings {
     pub floating: Floating,
     pub backups: Backups,
     pub hotkeys: Hotkeys,
+    // Stream H: integrations
+    pub share: Share,
     // ---- sI clipboard-fixes: [clip] ----
     pub clip: Clip,
     // stream A: video
@@ -237,6 +240,7 @@ impl Default for Settings {
             floating: Floating::default(),
             backups: Backups::default(),
             hotkeys: Hotkeys::default(),
+            share: Share::default(), // Stream H
             // ---- sI clipboard-fixes: [clip] ----
             clip: Clip::default(),
             // stream A: video
@@ -316,6 +320,100 @@ impl Default for Backups {
             retention_days: 7,
             extra: Map::new(),
         }
+    }
+}
+
+// Stream H: integrations
+/// An app the user chose or Ferry found. `id` is a macOS bundle id or `.app`
+/// path, or on Windows an `.exe` path or handler name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppRef {
+    pub id: String,
+    pub name: String,
+}
+
+impl AppRef {
+    fn tidy(mut self) -> Option<Self> {
+        self.id = self.id.trim().to_string();
+        self.name = self.name.trim().to_string();
+        if self.id.is_empty() {
+            return None;
+        }
+        if self.name.is_empty() {
+            self.name = Path::new(&self.id)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.id.clone());
+        }
+        Some(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditWith {
+    pub image: Option<AppRef>,
+    pub video: Option<AppRef>,
+    pub audio: Option<AppRef>,
+    pub pdf: Option<AppRef>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl EditWith {
+    pub fn get(&self, kind: MediaKind) -> Option<&AppRef> {
+        match kind {
+            MediaKind::Image => self.image.as_ref(),
+            MediaKind::Video => self.video.as_ref(),
+            MediaKind::Audio => self.audio.as_ref(),
+            MediaKind::Pdf => self.pdf.as_ref(),
+        }
+    }
+
+    pub fn set(&mut self, kind: MediaKind, app: Option<AppRef>) {
+        match kind {
+            MediaKind::Image => self.image = app,
+            MediaKind::Video => self.video = app,
+            MediaKind::Audio => self.audio = app,
+            MediaKind::Pdf => self.pdf = app,
+        }
+    }
+}
+
+/// Share, Open With, Edit with, Upload and the shelf apps (`[share]`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Share {
+    pub edit_with: EditWith,
+    pub uploader: Option<AppRef>,
+    pub shelf_apps: Vec<AppRef>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Share {
+    pub fn sanitise(&mut self) {
+        for slot in [
+            &mut self.edit_with.image,
+            &mut self.edit_with.video,
+            &mut self.edit_with.audio,
+            &mut self.edit_with.pdf,
+            &mut self.uploader,
+        ] {
+            *slot = slot.take().and_then(AppRef::tidy);
+        }
+        let mut seen: Vec<String> = Vec::new();
+        self.shelf_apps = std::mem::take(&mut self.shelf_apps)
+            .into_iter()
+            .filter_map(AppRef::tidy)
+            .filter(|app| {
+                let id = app.id.to_lowercase();
+                !seen.contains(&id) && {
+                    seen.push(id);
+                    true
+                }
+            })
+            .collect();
     }
 }
 
@@ -600,6 +698,7 @@ impl Settings {
         self.sanitise_drop();
         // stream B: audio
         self.audio.sanitise();
+        self.share.sanitise(); // Stream H
         self.version = self.version.max(VERSION);
         self
     }
@@ -1093,5 +1192,73 @@ mod tests {
             (big.drop_zone.batch_threshold, big.results_list.after_cards),
             (10_000, 1)
         );
+    }
+
+    // ---- Stream H: integrations ----
+    fn app_ref(id: &str, name: &str) -> AppRef {
+        AppRef {
+            id: id.into(),
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn share_defaults_are_empty_and_a_version_2_file_loads_them() {
+        let s = Settings::default();
+        assert_eq!(s.share, Share::default());
+        assert_eq!(s.share.edit_with.get(MediaKind::Image), None);
+        assert!(s.share.uploader.is_none() && s.share.shelf_apps.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"version": 2, "images": {"compression": 70}}"#).unwrap();
+        let (loaded, _) = Settings::load(&path);
+        assert_eq!(loaded.share, Share::default());
+        assert_eq!(loaded.version, 2);
+    }
+
+    #[test]
+    fn share_round_trips_and_keeps_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version": 2, "share": {"future": 1, "edit_with": {"image": {"id": "com.pixelmatorteam.pixelmator.x", "name": "Pixelmator Pro"}, "later": true}}}"#,
+        )
+        .unwrap();
+        let (loaded, _) = Settings::load(&path);
+        assert_eq!(
+            loaded.share.edit_with.get(MediaKind::Image),
+            Some(&app_ref(
+                "com.pixelmatorteam.pixelmator.x",
+                "Pixelmator Pro"
+            ))
+        );
+        loaded.save(&path).unwrap();
+        let json = read_json(&path);
+        assert_eq!(json["share"]["future"], json!(1));
+        assert_eq!(json["share"]["edit_with"]["later"], json!(true));
+        assert_eq!(json["share"]["uploader"], json!(null));
+    }
+
+    #[test]
+    fn sanitising_drops_blank_apps_and_twin_shelves() {
+        let mut s = Settings::default();
+        s.share.uploader = Some(app_ref("  ", "Nothing"));
+        s.share.edit_with.set(
+            MediaKind::Pdf,
+            Some(app_ref(" /Applications/PDF Expert.app ", "")),
+        );
+        s.share.shelf_apps = vec![
+            app_ref("com.x", "X"),
+            app_ref("COM.X", "X again"),
+            app_ref("", "Blank"),
+        ];
+        let s = s.sanitised();
+        assert_eq!(s.share.uploader, None);
+        assert_eq!(
+            s.share.edit_with.get(MediaKind::Pdf),
+            Some(&app_ref("/Applications/PDF Expert.app", "PDF Expert"))
+        );
+        assert_eq!(s.share.shelf_apps, [app_ref("com.x", "X")]);
     }
 }

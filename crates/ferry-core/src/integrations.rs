@@ -34,18 +34,54 @@ pub struct FileType {
 
 /// The types Ferry registers for Open With / Optimise with Ferry.
 pub const FILE_TYPES: [FileType; 12] = [
-    FileType { uti: "public.png", exts: &["png"] },
-    FileType { uti: "public.jpeg", exts: &["jpg", "jpeg"] },
-    FileType { uti: "com.compuserve.gif", exts: &["gif"] },
-    FileType { uti: "org.webmproject.webp", exts: &["webp"] },
-    FileType { uti: "public.heic", exts: &["heic"] },
-    FileType { uti: "public.heif", exts: &["heif"] },
-    FileType { uti: "public.tiff", exts: &["tif", "tiff"] },
-    FileType { uti: "public.avif", exts: &["avif"] },
-    FileType { uti: "public.mpeg-4", exts: &["mp4"] },
-    FileType { uti: "com.apple.quicktime-movie", exts: &["mov"] },
-    FileType { uti: "com.apple.m4v-video", exts: &["m4v"] },
-    FileType { uti: "com.adobe.pdf", exts: &["pdf"] },
+    FileType {
+        uti: "public.png",
+        exts: &["png"],
+    },
+    FileType {
+        uti: "public.jpeg",
+        exts: &["jpg", "jpeg"],
+    },
+    FileType {
+        uti: "com.compuserve.gif",
+        exts: &["gif"],
+    },
+    FileType {
+        uti: "org.webmproject.webp",
+        exts: &["webp"],
+    },
+    FileType {
+        uti: "public.heic",
+        exts: &["heic"],
+    },
+    FileType {
+        uti: "public.heif",
+        exts: &["heif"],
+    },
+    FileType {
+        uti: "public.tiff",
+        exts: &["tif", "tiff"],
+    },
+    FileType {
+        uti: "public.avif",
+        exts: &["avif"],
+    },
+    FileType {
+        uti: "public.mpeg-4",
+        exts: &["mp4"],
+    },
+    FileType {
+        uti: "com.apple.quicktime-movie",
+        exts: &["mov"],
+    },
+    FileType {
+        uti: "com.apple.m4v-video",
+        exts: &["m4v"],
+    },
+    FileType {
+        uti: "com.adobe.pdf",
+        exts: &["pdf"],
+    },
 ];
 
 /// The files a launch asks for: drops the program (`args[0]`) and every flag,
@@ -78,7 +114,10 @@ mod tests {
 
     #[test]
     fn every_registered_extension_has_a_kind_and_appears_once() {
-        let exts: Vec<&str> = FILE_TYPES.iter().flat_map(|t| t.exts.iter().copied()).collect();
+        let exts: Vec<&str> = FILE_TYPES
+            .iter()
+            .flat_map(|t| t.exts.iter().copied())
+            .collect();
         assert_eq!(exts.len(), 14);
         for ext in &exts {
             assert!(media_kind(ext).is_some(), "{ext}");
