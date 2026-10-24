@@ -188,6 +188,34 @@ pub fn jobs_with_outputs(
         .collect()
 }
 
+/// What a queued request does once a worker is free for it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Start {
+    Run,
+    /// Do not run. `forget_recipe` is false when a newer request replaced this
+    /// one: that request owns the recipe now.
+    Drop {
+        forget_recipe: bool,
+    },
+}
+
+impl Entry {
+    /// What the request that holds `token` should do now.
+    pub fn start_check(&self, token: &CancelToken) -> Start {
+        if !token.same(&self.cancel.lock().unwrap()) {
+            Start::Drop {
+                forget_recipe: false,
+            }
+        } else if token.is_cancelled() {
+            Start::Drop {
+                forget_recipe: true,
+            }
+        } else {
+            Start::Run
+        }
+    }
+}
+
 /// Clipboard changes Ferry made itself, and the results "accumulate results"
 /// has collected, by job, since launch or the last "Clear all".
 #[derive(Default)]
@@ -401,6 +429,28 @@ mod tests {
             None
         );
         assert_eq!(jobs_with_outputs(&jobs, &[]), None);
+    }
+
+    #[test]
+    fn a_replaced_request_neither_runs_nor_undoes_its_replacement() {
+        let e = entry("/w/a.png", JobState::Done);
+        let first = e.cancel.lock().unwrap().clone();
+        first.cancel();
+        assert_eq!(
+            e.start_check(&first),
+            Start::Drop {
+                forget_recipe: true
+            }
+        );
+        *e.cancel.lock().unwrap() = CancelToken::new();
+        assert_eq!(
+            e.start_check(&first),
+            Start::Drop {
+                forget_recipe: false
+            }
+        );
+        let second = e.cancel.lock().unwrap().clone();
+        assert_eq!(e.start_check(&second), Start::Run);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use ferry_core::sniff::Format;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
-use crate::state::{AppState, Entry, output_busy, relock};
+use crate::state::{AppState, Entry, Start, output_busy, relock};
 use crate::{platform, tray, windows::STACK};
 
 /// Show the job's Queued card now (NFR-P3) and run it when a worker is free.
@@ -318,15 +318,22 @@ pub fn show(app: &AppHandle, update: JobUpdate) {
 
 fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
     let app = app.clone();
+    // This request's own token, read now: a re-edit swaps in a new one while
+    // this request waits for a worker.
+    let cancel = entry.cancel.lock().unwrap().clone();
     tauri::async_runtime::spawn(async move {
         let permits = app.state::<AppState>().permits.clone();
         let Ok(_permit) = permits.acquire_owned().await else {
             return;
         };
-        let cancel = entry.cancel.lock().unwrap().clone();
-        if cancel.is_cancelled() {
-            relock(&entry.job).cancel_recipe();
-            return;
+        match entry.start_check(&cancel) {
+            Start::Run => {}
+            Start::Drop { forget_recipe } => {
+                if forget_recipe {
+                    relock(&entry.job).cancel_recipe();
+                }
+                return;
+            }
         }
         let (worker_app, worker_entry) = (app.clone(), entry.clone());
         let joined = tauri::async_runtime::spawn_blocking(move || {
