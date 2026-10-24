@@ -4,7 +4,10 @@
 //! (`selfwrite`) so Ferry never reacts to what it wrote itself.
 
 pub mod capture;
+pub mod engine;
+pub mod events;
 pub mod filter;
 pub mod media;
+pub mod plan;
 pub mod probe;
 pub mod settle;
