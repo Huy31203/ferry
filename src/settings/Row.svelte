@@ -9,6 +9,7 @@
   import ListEditor from './controls/ListEditor.svelte';
   import NumberField from './controls/NumberField.svelte';
   import OutputRule from './controls/OutputRule.svelte';
+  import RailEditor from './controls/RailEditor.svelte';
   import SizeList from './controls/SizeList.svelte';
   import Slider from './controls/Slider.svelte';
   import Switch from './controls/Switch.svelte';
@@ -150,6 +151,8 @@
         labelledby={labelId}
         label={t(setting.label)}
       />
+    {:else if control.kind === 'rail'}
+      <RailEditor value={value as string[]} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'action'}
       <button
         type="button"

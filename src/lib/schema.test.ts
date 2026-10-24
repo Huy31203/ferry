@@ -66,4 +66,13 @@ describe('the list of settings', () => {
     ]);
     expect(panes.map((p) => p.id).slice(-2)).toEqual(['hotkeys', 'about']);
   });
+
+  it('puts the rail editor and the update pill under Floating results', () => {
+    const at = (id: string) => all.find((s) => s.id === id);
+    expect([at('svc_rail')?.pane, at('svc_rail')?.path]).toEqual(['floating', 'svc.rail.tools']);
+    expect([at('svc_update_pill')?.pane, at('svc_update_pill')?.path]).toEqual([
+      'floating',
+      'svc.updates.pill',
+    ]);
+  });
 });
