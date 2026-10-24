@@ -5,6 +5,11 @@ use std::{fs::File, io::Read, path::Path};
 
 use crate::sniff::{self, Format};
 
+pub mod hardware;
+pub mod probe;
+
+use probe::Probe;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Codec {
     H264,
@@ -57,6 +62,30 @@ pub fn is_video_file(path: &Path) -> bool {
         && sniff::sniff(&head).is_some_and(Format::is_video)
 }
 
+/// A codec as people name it: h264 H.264, hevc HEVC, prores ProRes.
+pub fn codec_label(ffmpeg_name: &str) -> String {
+    match ffmpeg_name {
+        "h264" => "H.264".into(),
+        "hevc" => "HEVC".into(),
+        "av1" => "AV1".into(),
+        "vp9" => "VP9".into(),
+        "vp8" => "VP8".into(),
+        "prores" => "ProRes".into(),
+        "mpeg4" => "MPEG-4".into(),
+        other => other.to_uppercase(),
+    }
+}
+
+/// The container sniffed from the file, refined by what is inside: HEVC in MP4
+/// is `Hevc`, AV1 in MP4 or MKV is `Av1`.
+pub fn source_format(container: Format, probe: &Probe) -> Format {
+    match (container, probe.video.codec.as_str()) {
+        (Format::Mp4, "hevc") => Format::Hevc,
+        (Format::Mp4 | Format::Mkv, "av1") => Format::Av1,
+        _ => container,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +117,36 @@ mod tests {
         std::fs::write(&png, crate::testutil::png(4, 4)).unwrap();
         assert!(!is_video_file(&png));
         assert!(!is_video_file(&dir.path().join("missing.mp4")));
+    }
+
+    #[test]
+    fn the_source_format_follows_the_codec() {
+        let probe = |codec: &str| Probe {
+            duration: std::time::Duration::ZERO,
+            bitrate: None,
+            video: probe::VideoStream {
+                codec: codec.into(),
+                width: 2,
+                height: 2,
+                fps: None,
+                bitrate: None,
+                ten_bit: false,
+                hdr: false,
+            },
+            audio: vec![],
+            subtitles: 0,
+        };
+        assert_eq!(source_format(Format::Mp4, &probe("hevc")), Format::Hevc);
+        assert_eq!(source_format(Format::Mkv, &probe("av1")), Format::Av1);
+        assert_eq!(source_format(Format::Mov, &probe("hevc")), Format::Mov);
+        assert_eq!(source_format(Format::WebM, &probe("av1")), Format::WebM);
+        assert_eq!(source_format(Format::Mp4, &probe("h264")), Format::Mp4);
+    }
+
+    #[test]
+    fn codecs_get_their_usual_names() {
+        assert_eq!(codec_label("h264"), "H.264");
+        assert_eq!(codec_label("prores"), "ProRes");
+        assert_eq!(codec_label("dnxhd"), "DNXHD");
     }
 }
