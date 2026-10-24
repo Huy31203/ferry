@@ -6,6 +6,7 @@ pub mod bitmap;
 pub mod cancel;
 pub mod clip;
 pub mod color;
+pub mod drag;
 pub mod edit;
 pub mod fsutil;
 pub mod geometry;
