@@ -6,7 +6,7 @@ use ferry_core::i18n::t;
 use ferry_core::job::{JobId, JobUpdate};
 use ferry_core::output::{self, OutputKind};
 use ferry_core::settings::{
-    CardSize, Corner, Images, OutputRule, Settings, TrayStyle, contract_home,
+    CardSize, Corner, Images, OutputRule, Settings, SpeedFrames, TrayStyle, contract_home,
 };
 use ferry_core::sniff::Format;
 use ferry_core::{color, glyph, template};
@@ -35,6 +35,9 @@ pub struct StackConfig {
     compression: u8,
     crop_sizes: Vec<(u32, u32)>,
     hover_hotkeys: bool,
+    // stream A: video
+    video_compression: u8,
+    speed_frames: SpeedFrames,
 }
 
 /// The stack page is listening: hand it its settings and any cards sent before.
@@ -51,6 +54,9 @@ pub fn stack_ready(app: AppHandle) -> (StackConfig, Vec<JobUpdate>) {
         compression: settings.images.compression,
         crop_sizes: settings.images.crop_sizes,
         hover_hotkeys: settings.floating.hover_hotkeys,
+        // stream A: video
+        video_compression: settings.video.compression,
+        speed_frames: settings.video.speed_frames,
     };
     (config, std::mem::take(&mut inbox.pending))
 }
