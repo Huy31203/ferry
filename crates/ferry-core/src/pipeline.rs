@@ -461,7 +461,7 @@ impl Job {
             source_path: self.source_path.clone(),
             last: None,
             source_state: SourceState::Untouched(None),
-            stem: None,
+            stem: self.stem.clone(),
             dims_after: None,
             note: None,
             backup: self.backup.clone(),
@@ -1538,6 +1538,24 @@ mod tests {
         run(&mut job, Level::Normal, &o, &env);
         assert!(env.dir.path().join("shot.webp").exists());
         assert!(!optimised.exists() && !path.exists());
+    }
+
+    #[test]
+    fn a_twin_of_a_renamed_result_keeps_the_new_name() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.output.optimised.location = Location::SameFolder;
+        let o = options_with(&settings);
+        let path = env.file("shot.png", &testutil::png(300, 200));
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        job.edit(scale(50));
+        run(&mut job, Level::Normal, &o, &env);
+        job.rename("hero").unwrap();
+        let mut twin = job.fork();
+        twin.edit(convert(Format::WebP));
+        let update = run(&mut twin, Level::Normal, &o, &env).0.unwrap().update;
+        assert_eq!(update.output, Some(env.dir.path().join("hero.webp")));
+        assert_eq!(update.name, "hero");
     }
 
     #[test]
