@@ -25,6 +25,8 @@ pub struct Settings {
     pub floating: Floating,
     pub backups: Backups,
     pub hotkeys: Hotkeys,
+    /// Stream C: watchers.
+    pub watch: Watch,
     // ---- sI clipboard-fixes: [clip] ----
     pub clip: Clip,
     // stream A: video
@@ -226,6 +228,123 @@ impl Default for Hotkeys {
     }
 }
 
+// ---- Stream C: watchers ([watch]) ----
+
+/// Allowed `WatchedFolder.max_files_at_once`.
+pub const MAX_FILES_AT_ONCE: std::ops::RangeInclusive<u32> = 1..=1000;
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Watch {
+    pub captures: Captures,
+    pub folders: Vec<WatchedFolder>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Screenshot and screen-recording watching. Both are off until the user asks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Captures {
+    pub screenshots: bool,
+    pub recordings: bool,
+    pub show_results: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for Captures {
+    fn default() -> Self {
+        Self {
+            screenshots: false,
+            recordings: false,
+            show_results: true,
+            extra: Map::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WatchedFolder {
+    /// Stored with `~` (see `contract_home`).
+    pub path: String,
+    pub types: WatchTypes,
+    pub show_results: bool,
+    /// Globs on the file name: `*` and `?`, case-insensitive.
+    pub ignore: Vec<String>,
+    pub max_files_at_once: u32,
+    pub paused: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for WatchedFolder {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            types: WatchTypes::default(),
+            show_results: true,
+            ignore: Vec::new(),
+            max_files_at_once: 10,
+            paused: false,
+            extra: Map::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WatchTypes {
+    pub image: bool,
+    pub video: bool,
+    pub audio: bool,
+    pub pdf: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for WatchTypes {
+    fn default() -> Self {
+        Self {
+            image: true,
+            video: true,
+            audio: false,
+            pdf: false,
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Watch {
+    /// Trims paths and ignore rules, drops blank and repeated entries and
+    /// clamps the burst limit.
+    pub fn sanitised(mut self) -> Self {
+        let mut seen = Vec::new();
+        self.folders.retain_mut(|folder| {
+            folder.path = folder.path.trim().to_string();
+            if folder.path.is_empty() || seen.contains(&folder.path) {
+                return false;
+            }
+            seen.push(folder.path.clone());
+            true
+        });
+        for folder in &mut self.folders {
+            folder.max_files_at_once = folder
+                .max_files_at_once
+                .clamp(*MAX_FILES_AT_ONCE.start(), *MAX_FILES_AT_ONCE.end());
+            let mut rules: Vec<String> = Vec::new();
+            for rule in folder.ignore.iter().map(|rule| rule.trim()) {
+                if !rule.is_empty() && !rules.iter().any(|kept| kept == rule) {
+                    rules.push(rule.to_string());
+                }
+            }
+            folder.ignore = rules;
+        }
+        self
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -237,6 +356,7 @@ impl Default for Settings {
             floating: Floating::default(),
             backups: Backups::default(),
             hotkeys: Hotkeys::default(),
+            watch: Watch::default(),
             // ---- sI clipboard-fixes: [clip] ----
             clip: Clip::default(),
             // stream A: video
@@ -600,6 +720,7 @@ impl Settings {
         self.sanitise_drop();
         // stream B: audio
         self.audio.sanitise();
+        self.watch = self.watch.sanitised(); // stream C
         self.version = self.version.max(VERSION);
         self
     }
@@ -1093,5 +1214,84 @@ mod tests {
             (big.drop_zone.batch_threshold, big.results_list.after_cards),
             (10_000, 1)
         );
+    }
+
+    // ---- Stream C: watch ----
+
+    #[test]
+    fn watch_defaults_match_the_plan() {
+        let s = Settings::default();
+        assert_eq!(
+            serde_json::to_value(&s.watch).unwrap(),
+            json!({
+                "captures": { "screenshots": false, "recordings": false, "show_results": true },
+                "folders": []
+            })
+        );
+        assert_eq!(s.version, 2);
+    }
+
+    #[test]
+    fn an_upgraded_settings_file_leaves_capture_watching_off() {
+        // A 0.2.0 settings file has no [watch] section: Ferry must not start watching the Desktop.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"version": 2, "images": {"compression": 80}}"#).unwrap();
+        let (s, _) = Settings::load(&path);
+        assert!(!s.watch.captures.screenshots);
+        assert!(!s.watch.captures.recordings);
+        assert!(s.watch.captures.show_results);
+        assert!(s.watch.folders.is_empty());
+    }
+
+    #[test]
+    fn a_folder_with_only_a_path_takes_every_other_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"watch": {"folders": [{"path": "~/Downloads"}]}}"#).unwrap();
+        let (s, status) = Settings::load(&path);
+        assert_eq!(status, LoadStatus::Loaded);
+        let f = &s.watch.folders[0];
+        assert_eq!(f.path, "~/Downloads");
+        assert!(f.types.image && f.types.video && !f.types.audio && !f.types.pdf);
+        assert!(f.show_results && !f.paused && f.ignore.is_empty());
+        assert_eq!(f.max_files_at_once, 10);
+        assert_eq!(s.watch.captures, Captures::default());
+    }
+
+    #[test]
+    fn broken_watch_entries_are_repaired() {
+        let mut s = Settings::default();
+        let folder = |p: &str| WatchedFolder {
+            path: p.into(),
+            ..WatchedFolder::default()
+        };
+        s.watch.folders = vec![folder("  "), folder(" ~/A "), folder("~/A"), folder("~/B")];
+        s.watch.folders[1].max_files_at_once = 0;
+        s.watch.folders[3].max_files_at_once = 5000;
+        s.watch.folders[3].ignore = vec!["  ".into(), " *.tmp ".into(), "*.tmp".into()];
+        let s = s.sanitised();
+        let paths: Vec<_> = s.watch.folders.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["~/A", "~/B"]);
+        assert_eq!(s.watch.folders[0].max_files_at_once, 1);
+        assert_eq!(s.watch.folders[1].max_files_at_once, 1000);
+        assert_eq!(s.watch.folders[1].ignore, ["*.tmp"]);
+    }
+
+    #[test]
+    fn unknown_fields_in_a_watched_folder_survive() {
+        // Stream F will add `pipeline` here; nothing may drop it before then.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"watch": {"folders": [{"path": "~/In", "pipeline": "webp"}], "later": 1}}"#,
+        )
+        .unwrap();
+        let (s, _) = Settings::load(&path);
+        s.save(&path).unwrap();
+        let saved = read_json(&path);
+        assert_eq!(saved["watch"]["folders"][0]["pipeline"], json!("webp"));
+        assert_eq!(saved["watch"]["later"], json!(1));
     }
 }
