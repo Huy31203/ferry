@@ -9,6 +9,13 @@ pub enum Format {
     Jpeg,
     Gif,
     WebP,
+    // stream A: video
+    Mp4,
+    Hevc,
+    Av1,
+    WebM,
+    Mov,
+    Mkv,
 }
 
 impl Format {
@@ -19,6 +26,11 @@ impl Format {
             Format::Jpeg => "jpg",
             Format::Gif => "gif",
             Format::WebP => "webp",
+            // stream A: video
+            Format::Mp4 | Format::Hevc => "mp4",
+            Format::Av1 | Format::Mkv => "mkv",
+            Format::WebM => "webm",
+            Format::Mov => "mov",
         }
     }
 
@@ -29,7 +41,22 @@ impl Format {
             Format::Jpeg => "JPEG",
             Format::Gif => "GIF",
             Format::WebP => "WebP",
+            // stream A: video
+            Format::Mp4 => "MP4",
+            Format::Hevc => "HEVC",
+            Format::Av1 => "AV1",
+            Format::WebM => "WebM",
+            Format::Mov => "MOV",
+            Format::Mkv => "MKV",
         }
+    }
+
+    /// MP4, HEVC, AV1, WebM, MOV and MKV.
+    pub fn is_video(self) -> bool {
+        matches!(
+            self,
+            Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv
+        )
     }
 }
 
@@ -44,8 +71,50 @@ pub fn sniff(bytes: &[u8]) -> Option<Format> {
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some(Format::WebP)
     } else {
-        None
+        // stream A: video
+        sniff_video(bytes)
     }
+}
+
+/// ISO BMFF brands that are video (`qt  ` is MOV). Others, such as HEIC, AVIF
+/// and M4A, are left for the streams that own them.
+const MP4_BRANDS: [&[u8; 4]; 25] = [
+    b"isom", b"iso2", b"iso3", b"iso4", b"iso5", b"iso6", b"iso7", b"iso8", b"iso9", b"mp41",
+    b"mp42", b"mp71", b"avc1", b"M4V ", b"M4VH", b"M4VP", b"MSNV", b"dash", b"3gp4", b"3gp5",
+    b"3gp6", b"3g2a", b"mmp4", b"f4v ", b"XAVC",
+];
+
+// stream A: video
+fn sniff_video(bytes: &[u8]) -> Option<Format> {
+    if bytes.get(4..8) == Some(b"ftyp") {
+        let brand: &[u8] = bytes.get(8..12)?;
+        return if brand == b"qt  " {
+            Some(Format::Mov)
+        } else if MP4_BRANDS.iter().any(|b| b.as_slice() == brand) {
+            Some(Format::Mp4)
+        } else {
+            None
+        };
+    }
+    // Old QuickTime files start with an atom, not ftyp.
+    if matches!(
+        bytes.get(4..8),
+        Some(b"moov" | b"mdat" | b"wide" | b"free" | b"skip")
+    ) {
+        return Some(Format::Mov);
+    }
+    if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        // The DocType element: 42 82, a one-byte size, then the name.
+        let head = &bytes[..bytes.len().min(64)];
+        let at = head.windows(2).position(|w| w == [0x42, 0x82])?;
+        let size = usize::from(head.get(at + 2)? & 0x7F);
+        return match head.get(at + 3..at + 3 + size)? {
+            b"webm" => Some(Format::WebM),
+            b"matroska" => Some(Format::Mkv),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// True when the image has more than one frame: a GIF with several image
@@ -56,6 +125,10 @@ pub fn is_animated(bytes: &[u8], format: Format) -> bool {
         Format::Gif => gif_frame_count(bytes) > 1,
         Format::WebP => webp_has_animation(bytes),
         Format::Jpeg => false,
+        // stream A: video
+        Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
+            false
+        }
     }
 }
 
@@ -182,6 +255,8 @@ pub fn dimensions(bytes: &[u8], format: Format) -> Option<(u32, u32)> {
         Format::Gif => Some((le16(bytes, 6)?, le16(bytes, 8)?)),
         Format::Jpeg => jpeg_dimensions(bytes),
         Format::WebP => webp_dimensions(bytes),
+        // stream A: video
+        Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => None,
     }
 }
 
@@ -241,6 +316,62 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_containers_are_sniffed_by_content() {
+        let ftyp = |brand: &[u8; 4]| [&[0, 0, 0, 0x18][..], b"ftyp", brand, &[0; 12]].concat();
+        assert_eq!(sniff(&ftyp(b"isom")), Some(Format::Mp4));
+        assert_eq!(sniff(&ftyp(b"M4V ")), Some(Format::Mp4));
+        assert_eq!(sniff(&ftyp(b"qt  ")), Some(Format::Mov));
+        assert_eq!(
+            sniff(&[&[0, 0, 0, 8][..], b"wide", &[0; 8]].concat()),
+            Some(Format::Mov)
+        );
+        assert_eq!(sniff(&ftyp(b"heic")), None);
+        assert_eq!(sniff(&ftyp(b"avif")), None);
+        assert_eq!(sniff(&ftyp(b"M4A ")), None);
+        let ebml = |doc: &[u8]| {
+            [
+                &[
+                    0x1A,
+                    0x45,
+                    0xDF,
+                    0xA3,
+                    0x9F,
+                    0x42,
+                    0x86,
+                    0x81,
+                    0x01,
+                    0x42,
+                    0x82,
+                    0x80 | doc.len() as u8,
+                ][..],
+                doc,
+                &[0; 16],
+            ]
+            .concat()
+        };
+        assert_eq!(sniff(&ebml(b"webm")), Some(Format::WebM));
+        assert_eq!(sniff(&ebml(b"matroska")), Some(Format::Mkv));
+    }
+
+    #[test]
+    fn video_formats_have_names_extensions_and_serde_ids() {
+        assert_eq!(
+            (Format::Hevc.label(), Format::Hevc.extension()),
+            ("HEVC", "mp4")
+        );
+        assert_eq!(
+            (Format::Av1.label(), Format::Av1.extension()),
+            ("AV1", "mkv")
+        );
+        assert_eq!(serde_json::to_string(&Format::WebM).unwrap(), "\"webm\"");
+        assert_eq!(
+            serde_json::from_str::<Format>("\"mov\"").unwrap(),
+            Format::Mov
+        );
+        assert!(Format::Mkv.is_video() && !Format::Gif.is_video() && !Format::Png.is_video());
+    }
 
     #[test]
     fn dimensions_come_from_the_header_of_every_format() {

@@ -194,6 +194,10 @@ describe('format bar', () => {
     ]);
   });
 
+  it('keeps the image chips unchanged now that formats include video', () => {
+    expect(formatChoices(card({ kind: 'done' })).map((c) => c.label)).toEqual(['PNG', 'JPEG', 'WebP']);
+  });
+
   it('puts a GIF first and marks the others first frame only', () => {
     const gif = card({ kind: 'done' }, { format: 'gif', source_format: 'gif', ext: 'gif' });
     expect(pick(formatChoices(gif))).toEqual([

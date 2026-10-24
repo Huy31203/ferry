@@ -26,6 +26,7 @@ pub mod workdir;
 pub mod error;
 pub mod ffmpeg;
 pub use error::FerryError;
+pub mod video;
 
 #[cfg(test)]
 mod testutil;
