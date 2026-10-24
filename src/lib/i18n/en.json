@@ -288,6 +288,7 @@
   "drop.settings.list_after": "Switch to the compact list above",
   "drop.settings.list_after.help": "More cards than this show as a compact list.",
   "drop.unit.cards": "cards",
+  "drop.batch.reason.unsupported": "Not a supported file",
   "error.unexpected": "Unexpected error — see Details",
   "error.settings_reset": "Settings were reset; old file kept",
   "tray.status.running": "Ferry is running",
