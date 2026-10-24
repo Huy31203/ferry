@@ -1,4 +1,4 @@
-/** Mirrors of stream G's Rust serde shapes (hotkeys now; updates and sync are added with their tasks). */
+/** Mirrors of stream G's Rust serde shapes: hotkeys, updates and (later) sync. */
 
 export type HotkeyId =
   | 'optimise'
@@ -37,4 +37,24 @@ export interface HotkeyStatus {
 export interface PaneRequest {
   pane: string;
   row: string | null;
+}
+
+/** ferry `updater::UpdateState` (serde tag `kind`). */
+export type UpdateState =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'up_to_date' }
+  | { kind: 'available'; version: string; notes: string }
+  | { kind: 'downloading'; version: string; received: number; total: number | null }
+  | { kind: 'ready'; version: string; busy: number }
+  | { kind: 'installing'; version: string }
+  | { kind: 'failed'; phase: 'check' | 'download' | 'install'; reason: string };
+
+/** ferry `updater::UpdateView`. */
+export interface UpdateView {
+  current: string;
+  state: UpdateState;
+  skipped: boolean;
+  pill: boolean;
+  release_url: string | null;
 }
