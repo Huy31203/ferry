@@ -1,6 +1,6 @@
 //! Per-OS native glue. Each OS module exposes the same functions, and each
-//! `clipboard` module the same `read`, `write_image`, `write_files`, `write_text`
-//! and `watch`.
+//! `clipboard` module the same `read`, `write_image`, `write_files`,
+//! `write_paths`, `write_text` and `watch`.
 
 #[cfg(target_os = "macos")]
 #[path = "macos_clipboard.rs"]

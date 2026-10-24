@@ -165,13 +165,11 @@ pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let job = relock(&entry.job);
     let state = app.state::<AppState>();
-    let copy_paths = state.settings.read().unwrap().clipboard.copy_paths;
     let mut log = state.clipboard.lock().unwrap();
     let seq = match job.source {
         Source::Clipboard => {
             let bytes = std::fs::read(&job.output).map_err(|e| e.to_string())?;
-            let file = copy_paths.then_some(job.output.as_path());
-            platform::clipboard::write_image(job.format, &bytes, file)?
+            platform::clipboard::write_image(job.format, &bytes)?
         }
         Source::File => platform::clipboard::write_files(std::slice::from_ref(&job.output))?,
     };
@@ -318,7 +316,7 @@ fn deliver(
         }
         platform::clipboard::write_files(&log.accumulated)?
     } else {
-        platform::clipboard::write_image(format, bytes, settings.copy_paths.then_some(file))?
+        platform::clipboard::write_image(format, bytes)?
     };
     log.record(seq, source);
     Ok(())
