@@ -257,7 +257,7 @@ if [ "$WINDOWS" = 1 ]; then
   fresh libvpl
   cmake -G Ninja -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF \
     -DBUILD_TOOLS=OFF -DCMAKE_INSTALL_PREFIX="$PREFIX" >/dev/null
-  cmake --build build --target install >/dev/null
+  cmake --build build --target install
   FFMPEG_EXTRA=(--enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --extra-ldflags=-static)
 elif [ "$APPLE" = 1 ]; then
   FFMPEG_EXTRA=(--enable-videotoolbox --enable-audiotoolbox --cc="clang -arch $ARCH" --arch="$ARCH")
@@ -274,8 +274,8 @@ fresh ffmpeg
 make -j"$JOBS" >/dev/null
 BIN="$WORK/ffmpeg/ffmpeg$EXT"
 strip "$BIN"
-cp "$BIN" "$WORK/ffmpeg$EXT"
-BIN="$WORK/ffmpeg$EXT"
+cp "$BIN" "$WORK/ffmpeg-bin$EXT"
+BIN="$WORK/ffmpeg-bin$EXT"
 
 echo "== checks"
 CONF="$("$BIN" -hide_banner -buildconf)"
