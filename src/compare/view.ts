@@ -23,6 +23,15 @@ export type Mode = 'slider' | 'sides';
 export type Zoom = 'fit' | 1 | 2;
 export type Size = [number, number];
 
+/** Escape, Space, and ⌘D (macOS) or Ctrl+D (Windows) close the window, so a second press of the hotkey that opened it works from inside. */
+export function closesCompare(
+  event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey'>,
+  mac: boolean,
+): boolean {
+  if (event.key === 'Escape' || event.key === ' ') return true;
+  return event.key.toLowerCase() === 'd' && (mac ? event.metaKey : event.ctrlKey);
+}
+
 /** "2.4 MB · 2880×1800 · PNG"; the result adds its change: "380 KB · 1440×900 · WebP (−84%)". */
 export function shotLabel(shot: Shot, before?: number): string {
   const parts = [formatBytes(shot.bytes)];
