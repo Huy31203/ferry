@@ -4,6 +4,7 @@
 pub mod backup;
 pub mod bitmap;
 pub mod cancel;
+pub mod clip;
 pub mod color;
 pub mod edit;
 pub mod fsutil;
