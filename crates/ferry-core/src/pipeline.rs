@@ -534,6 +534,11 @@ impl Job {
             (true, Format::Jpeg) => "card.step.jpeg",
             (true, Format::WebP) => "card.step.webp",
             (true, Format::Gif) => "card.step.gif",
+            // stream A: video (never reached once videos are dispatched earlier)
+            (
+                true,
+                Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv,
+            ) => "video.step.reading",
         });
         emit(self.update(
             JobState::Optimising {

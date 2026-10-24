@@ -174,6 +174,10 @@ pub fn decode_rgba(bytes: &[u8], format: Format) -> Result<Rgba, String> {
             Ok((w, h, rgba))
         }
         Format::Gif => Err("GIF has no bitmap copy".into()),
+        // stream A: video
+        Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
+            Err("video is not an image".into())
+        }
     }
 }
 

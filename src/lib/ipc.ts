@@ -8,7 +8,8 @@ export type JobState =
   | { kind: 'error'; reason: string }
   | { kind: 'restored' };
 
-export type Format = 'png' | 'jpeg' | 'gif' | 'webp';
+// stream A: video (the last six)
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv';
 
 /** Mirrors ferry_core::edit::Size (serde tag `kind`). */
 export type Size =

@@ -133,7 +133,19 @@ export interface FormatChoice {
   firstFrame: boolean;
 }
 
-const FORMAT_LABELS: Record<Format, string> = { png: 'PNG', jpeg: 'JPEG', gif: 'GIF', webp: 'WebP' };
+const FORMAT_LABELS: Record<Format, string> = {
+  png: 'PNG',
+  jpeg: 'JPEG',
+  gif: 'GIF',
+  webp: 'WebP',
+  // stream A: video
+  mp4: 'MP4',
+  hevc: 'HEVC',
+  av1: 'AV1',
+  webm: 'WebM',
+  mov: 'MOV',
+  mkv: 'MKV',
+};
 
 /** PNG · JPEG · WebP, with GIF first on a card that started as a GIF. */
 export function formatChoices(card: JobUpdate): FormatChoice[] {
