@@ -5,8 +5,16 @@ use std::{fs::File, io::Read, path::Path};
 
 use crate::sniff::{self, Format};
 
+pub mod fit;
 pub mod hardware;
+pub mod plan;
 pub mod probe;
+
+/// A GIF made from a video: its frame rate, and the long edge it is capped at.
+pub const GIF_FPS: u32 = 15;
+pub const GIF_LONG_EDGE: u32 = 800;
+/// The card thumbnail's width.
+pub const THUMB_WIDTH: u32 = 600;
 
 use probe::Probe;
 
