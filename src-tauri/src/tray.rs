@@ -15,7 +15,7 @@ use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Result, Wry};
 use tracing::warn;
 
-use crate::hotkeys::{self, Registered};
+use crate::hotkeys;
 use crate::state::AppState;
 use crate::{jobs, windows};
 
@@ -122,10 +122,7 @@ fn status(run_state: RunState) -> String {
 fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
     let state = app.state::<AppState>();
     let run_state = *state.run_state.lock().unwrap();
-    let keys = app
-        .try_state::<Registered>()
-        .map(|r| r.inner().clone())
-        .unwrap_or_default();
+    let keys = hotkeys::current();
     let screenshots = state.settings.read().unwrap().general.show_in_screenshots;
 
     let header = MenuItem::with_id(
@@ -217,6 +214,7 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
         true,
         Some("CmdOrCtrl+,"),
     )?;
+    let update = crate::updater::tray_item(app)?; // svc
     let about = PredefinedMenuItem::about(app, Some(&t("tray.about")), None)?;
     let quit = MenuItem::with_id(app, "quit", t("tray.quit"), true, None::<&str>)?;
     Menu::with_items(
@@ -238,6 +236,7 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
             &show,
             &PredefinedMenuItem::separator(app)?,
             &settings,
+            &update,
             &about,
             &quit,
         ],
@@ -301,6 +300,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             });
         }
         "settings" => windows::open_settings(app),
+        "svc:update" => crate::updater::tray_clicked(app),
         "quit" => app.exit(0),
         other => {
             if let Some(id) = other.strip_prefix("recent:") {

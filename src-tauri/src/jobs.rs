@@ -476,7 +476,7 @@ fn run_options(app: &AppHandle, cancel: CancelToken) -> RunOptions {
 
 /// Move a file to the Trash / Recycle Bin. A failure leaves it where it is
 /// and is logged (spec §6).
-fn move_to_trash(path: &Path) -> std::io::Result<()> {
+pub(crate) fn move_to_trash(path: &Path) -> std::io::Result<()> {
     trash_context().delete(path).map_err(|e| {
         warn!(path = %path.display(), "could not move to the Trash: {e}");
         std::io::Error::other(e.to_string())

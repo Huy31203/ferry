@@ -1,14 +1,8 @@
 import type { JobState, JobUpdate } from './ipc';
+import { DEFAULT_RAIL_TOOLS, MAX_COMPACT_TOOLS, MAX_TOOLS, RAIL_TOOLS } from './rail';
 
-/** Rail A (spec §5.1). Show in folder, Aggressive, Rename, Preview and Fit live in the ⋯ menu. */
-export type RailAction =
-  | 'downscale'
-  | 'compression'
-  | 'crop'
-  | 'restore'
-  | 'compare'
-  | 'copy'
-  | 'more';
+/** A catalog tool id (`rail.ts`) or `'more'`. Rail A is the default set (spec §5.1). */
+export type RailAction = string;
 
 /** Waiting for or running its encoder: no rail, and the close button cancels. */
 export function isBusy(state: JobState): boolean {
@@ -20,21 +14,28 @@ export function autoHides(state: JobState): boolean {
   return ['done', 'already_optimal', 'larger', 'restored'].includes(state.kind);
 }
 
-/** The rail's buttons for a finished card, in order; compact cards leave out Compression and Compare. */
-export function railActions(card: JobUpdate, compact = false): RailAction[] {
+/** The rail's buttons for a finished card, in the user's order, then the ⋯ menu. Unknown ids are skipped; a compact card shows fewer. */
+export function railActions(
+  card: JobUpdate,
+  compact = false,
+  tools: string[] = DEFAULT_RAIL_TOOLS,
+): RailAction[] {
   if (!autoHides(card.state) || card.output === null) return [];
-  const actions: RailAction[] = ['downscale'];
-  if (!compact) actions.push('compression');
-  actions.push('crop');
-  if (card.state.kind === 'done' && card.can_restore) actions.push('restore');
-  if (!compact) actions.push('compare');
-  actions.push('copy', 'more');
+  const limit = compact ? MAX_COMPACT_TOOLS : MAX_TOOLS;
+  const actions: RailAction[] = [];
+  for (const id of tools) {
+    const tool = RAIL_TOOLS.find((candidate) => candidate.id === id);
+    if (!tool || (compact && !tool.compact) || (tool.applies && !tool.applies(card))) continue;
+    if (actions.length === limit) break;
+    actions.push(id);
+  }
+  actions.push('more');
   return actions;
 }
 
 /** Rail buttons that work on the original, so `can_edit` turns them off. */
 export function needsOriginal(action: RailAction): boolean {
-  return ['downscale', 'compression', 'crop', 'compare'].includes(action);
+  return RAIL_TOOLS.find((tool) => tool.id === action)?.needsOriginal ?? false;
 }
 
 /** Whether the card's file can be dragged out. */

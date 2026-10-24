@@ -20,6 +20,12 @@ pub struct Effects {
     pub dock: bool,
     /// Rebuild the tray menu and icon.
     pub tray: bool,
+    /// Register the hotkeys again (svc, stream G).
+    pub hotkeys: bool,
+    /// Tell the updater its settings changed (svc).
+    pub updates: bool,
+    /// Tell the sync worker to start, stop or move (svc).
+    pub sync: bool,
 }
 
 impl Effects {
@@ -33,6 +39,11 @@ impl Effects {
             dock: a.show_dock_icon != b.show_dock_icon,
             // The menu's "Show app UI in screenshots" tick follows the setting.
             tray: screenshots || style(old) != style(new),
+            hotkeys: old.hotkeys != new.hotkeys
+                || old.svc.shortcuts != new.svc.shortcuts
+                || old.floating.hover_hotkeys != new.floating.hover_hotkeys,
+            updates: old.svc.updates != new.svc.updates,
+            sync: old.svc.sync != new.svc.sync,
         }
     }
 }
@@ -54,6 +65,7 @@ pub fn update(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Set
     };
     apply(app, &old, &new);
     let _ = app.emit("settings:changed", &new);
+    crate::sync_worker::local_changed(app); // svc
     Ok(new)
 }
 
@@ -70,6 +82,19 @@ fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
     }
     if effects.tray {
         tray::rebuild(app);
+    }
+    if effects.hotkeys {
+        // Global shortcuts are registered on the main thread only.
+        let app = app.clone();
+        let _ = app
+            .clone()
+            .run_on_main_thread(move || crate::hotkeys::reregister(&app));
+    }
+    if effects.updates {
+        crate::updater::settings_changed(app);
+    }
+    if effects.sync {
+        crate::sync_worker::reconfigure(app);
     }
 }
 
@@ -178,6 +203,59 @@ mod tests {
             Effects::between(&base, &s),
             Effects {
                 tray: true,
+                ..Effects::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_hotkey_change_reregisters() {
+        let base = Settings::default();
+        let only_hotkeys = Effects {
+            hotkeys: true,
+            ..Effects::default()
+        };
+
+        let mut s = base.clone();
+        s.hotkeys.optimise = "Ctrl+Alt+O".into();
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+
+        let mut s = base.clone();
+        s.svc.shortcuts.preview = "P".into();
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+
+        let mut s = base.clone();
+        s.svc.shortcuts.disabled.push("compare".into());
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+
+        let mut s = base.clone();
+        s.floating.hover_hotkeys = !s.floating.hover_hotkeys;
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+    }
+
+    #[test]
+    fn an_update_setting_change_reaches_the_updater() {
+        let base = Settings::default();
+        let mut s = base.clone();
+        s.svc.updates.pill = !s.svc.updates.pill;
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                updates: true,
+                ..Effects::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_sync_setting_change_reconfigures_the_worker() {
+        let base = Settings::default();
+        let mut s = base.clone();
+        s.svc.sync.folder = "~/Sync".into();
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                sync: true,
                 ..Effects::default()
             }
         );
