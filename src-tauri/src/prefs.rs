@@ -22,6 +22,8 @@ pub struct Effects {
     pub tray: bool,
     /// Register the hotkeys again (svc, stream G).
     pub hotkeys: bool,
+    /// Tell the updater its settings changed (svc).
+    pub updates: bool,
 }
 
 impl Effects {
@@ -38,6 +40,7 @@ impl Effects {
             hotkeys: old.hotkeys != new.hotkeys
                 || old.svc.shortcuts != new.svc.shortcuts
                 || old.floating.hover_hotkeys != new.floating.hover_hotkeys,
+            updates: old.svc.updates != new.svc.updates,
         }
     }
 }
@@ -82,6 +85,9 @@ fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
         let _ = app
             .clone()
             .run_on_main_thread(move || crate::hotkeys::reregister(&app));
+    }
+    if effects.updates {
+        crate::updater::settings_changed(app);
     }
 }
 
@@ -218,6 +224,20 @@ mod tests {
         let mut s = base.clone();
         s.floating.hover_hotkeys = !s.floating.hover_hotkeys;
         assert_eq!(Effects::between(&base, &s), only_hotkeys);
+    }
+
+    #[test]
+    fn an_update_setting_change_reaches_the_updater() {
+        let base = Settings::default();
+        let mut s = base.clone();
+        s.svc.updates.pill = !s.svc.updates.pill;
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                updates: true,
+                ..Effects::default()
+            }
+        );
     }
 
     #[test]

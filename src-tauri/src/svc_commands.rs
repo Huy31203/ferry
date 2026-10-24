@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::hotkeys::{self, Verdict};
 use crate::state::AppState;
-use crate::{prefs, rail_menu, windows};
+use crate::{prefs, rail_menu, updater, windows};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -123,7 +123,48 @@ pub fn svc_rail_menu(
     rail_menu::popup(&app, &window, x, y, &items)
 }
 
+#[tauri::command]
+pub fn svc_update_state(app: AppHandle) -> updater::UpdateView {
+    updater::view(&app)
+}
+
+/// A manual check: the page learns of a failure from `svc:update` and from this `Err`.
+#[tauri::command]
+pub async fn svc_update_check(app: AppHandle) -> Result<(), String> {
+    updater::check(app, true).await
+}
+
+#[tauri::command]
+pub async fn svc_update_install(app: AppHandle) -> Result<(), String> {
+    updater::install(app).await
+}
+
+#[tauri::command]
+pub fn svc_update_later(app: AppHandle) {
+    updater::later(&app);
+}
+
+#[tauri::command(async)]
+pub fn svc_update_skip(app: AppHandle) -> Result<(), String> {
+    updater::skip(&app)
+}
+
+#[tauri::command]
+pub fn svc_open_release(app: AppHandle) -> Result<(), String> {
+    let url = updater::view(&app)
+        .release_url
+        .ok_or("no update is on offer")?;
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Main thread (a plain command): the stack's pill opens About and updates.
+#[tauri::command]
+pub fn svc_open_about(app: AppHandle) {
+    open_settings_at(&app, "about", None);
+}
+
 /// Grows in later tasks.
 pub fn setup(app: &AppHandle) {
     rail_menu::init(app);
+    updater::init(app);
 }

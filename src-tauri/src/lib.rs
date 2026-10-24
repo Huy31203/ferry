@@ -16,6 +16,7 @@ mod windows;
 // svc (stream G)
 mod rail_menu;
 mod svc_commands;
+mod updater;
 
 use std::path::PathBuf;
 
@@ -43,6 +44,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build()) // svc
         // svc: closing Settings mid-recording gives the hotkeys back
         .on_window_event(|window, event| {
             if window.label() == windows::SETTINGS && matches!(event, tauri::WindowEvent::Destroyed)
@@ -96,6 +98,13 @@ pub fn run() {
             svc_commands::svc_hotkeys_suspend,
             svc_commands::svc_settings_pane,
             svc_commands::svc_rail_menu,
+            svc_commands::svc_update_state,
+            svc_commands::svc_update_check,
+            svc_commands::svc_update_install,
+            svc_commands::svc_update_later,
+            svc_commands::svc_update_skip,
+            svc_commands::svc_open_release,
+            svc_commands::svc_open_about,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
