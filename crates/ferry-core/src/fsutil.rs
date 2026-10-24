@@ -143,7 +143,6 @@ pub fn copy_xattrs(_from: &Path, _to: &Path) -> io::Result<()> {
 
 /// Run `work` on its own thread and stop waiting after `limit`. A blocked
 /// system call cannot be cancelled, so the thread is left to finish by itself.
-#[allow(dead_code)] // used by the watcher probe from the next commit
 pub(crate) fn with_timeout<T: Send + 'static>(
     limit: Duration,
     work: impl FnOnce() -> io::Result<T> + Send + 'static,
