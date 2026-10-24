@@ -379,3 +379,165 @@ pub fn get_xattr(path: &std::path::Path, name: &std::ffi::CStr) -> Vec<u8> {
     buf.truncate(len as usize);
     buf
 }
+
+// ---- stream B: audio fixtures ----
+use crate::audio::tool::{AudioTool, ToolError};
+use std::{
+    collections::VecDeque,
+    ffi::OsString,
+    sync::{Arc, Mutex},
+};
+
+/// A canonical 16-bit PCM WAV: runs of a 440 Hz sine, each `(seconds, amplitude 0..1)`.
+pub fn wav_tone(segments: &[(f32, f32)], rate: u32, channels: u16) -> Vec<u8> {
+    let mut samples = Vec::new();
+    let mut n = 0_u64;
+    for &(secs, amp) in segments {
+        for _ in 0..(secs * rate as f32).round() as u64 {
+            let t = n as f32 / rate as f32;
+            let v = (amp * (std::f32::consts::TAU * 440.0 * t).sin() * f32::from(i16::MAX)) as i16;
+            for _ in 0..channels {
+                samples.extend_from_slice(&v.to_le_bytes());
+            }
+            n += 1;
+        }
+    }
+    let block = u32::from(channels) * 2;
+    let mut out = Vec::with_capacity(44 + samples.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16_u32.to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * block).to_le_bytes());
+    out.extend_from_slice(&(block as u16).to_le_bytes());
+    out.extend_from_slice(&16_u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+    out.extend_from_slice(&samples);
+    out
+}
+
+/// What a `FakeTool` call does.
+pub enum FakeStep {
+    Log(String),
+    /// Write `bytes` to the call's last argument.
+    Write {
+        log: String,
+        bytes: Vec<u8>,
+    },
+    Fail(String),
+}
+
+/// An `AudioTool` that records its arguments and plays a script.
+#[derive(Debug, Default)]
+pub struct FakeTool {
+    pub calls: Mutex<Vec<Vec<OsString>>>,
+    pub script: Mutex<VecDeque<FakeStep>>,
+    /// Cancel the token during the call with this index.
+    pub cancel_on_call: Mutex<Option<usize>>,
+}
+
+impl std::fmt::Debug for FakeStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FakeStep")
+    }
+}
+
+impl FakeTool {
+    pub fn new(steps: Vec<FakeStep>) -> Arc<FakeTool> {
+        Arc::new(FakeTool {
+            script: Mutex::new(steps.into()),
+            ..FakeTool::default()
+        })
+    }
+
+    pub fn calls(&self) -> Vec<Vec<String>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|args| {
+                args.iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+impl AudioTool for FakeTool {
+    fn run(
+        &self,
+        args: &[OsString],
+        cancel: &crate::cancel::CancelToken,
+        on_progress: &mut dyn FnMut(f32),
+    ) -> Result<String, ToolError> {
+        let index = {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(args.to_vec());
+            calls.len() - 1
+        };
+        if *self.cancel_on_call.lock().unwrap() == Some(index) {
+            cancel.cancel();
+            return Err(ToolError::Cancelled);
+        }
+        on_progress(0.5);
+        on_progress(1.0);
+        match self.script.lock().unwrap().pop_front() {
+            None => Ok(String::new()),
+            Some(FakeStep::Log(log)) => Ok(log),
+            Some(FakeStep::Fail(why)) => Err(ToolError::Failed(why)),
+            Some(FakeStep::Write { log, bytes }) => {
+                if let Some(path) = args.last().filter(|a| *a != "-") {
+                    std::fs::write(path, bytes).map_err(|e| ToolError::Failed(e.to_string()))?;
+                }
+                Ok(log)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod audio_fixture_tests {
+    use super::*;
+    use crate::cancel::CancelToken;
+
+    #[test]
+    fn wav_tone_is_a_valid_pcm_wav() {
+        let w = wav_tone(&[(1.0, 0.5), (0.5, 0.1)], 8000, 2);
+        assert_eq!(
+            (&w[0..4], &w[8..12], &w[36..40]),
+            (&b"RIFF"[..], &b"WAVE"[..], &b"data"[..])
+        );
+        assert_eq!(w.len(), 44 + 12_000 * 2 * 2);
+    }
+
+    #[test]
+    fn the_fake_records_reports_progress_and_writes_the_last_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.mp3");
+        let fake = FakeTool::new(vec![FakeStep::Write {
+            log: "done".into(),
+            bytes: b"xyz".to_vec(),
+        }]);
+        let mut seen = Vec::new();
+        let log = fake
+            .run(
+                &[OsString::from("-i"), out.clone().into()],
+                &CancelToken::new(),
+                &mut |p| seen.push(p),
+            )
+            .unwrap();
+        assert_eq!(
+            (log.as_str(), seen, std::fs::read(&out).unwrap()),
+            ("done", vec![0.5, 1.0], b"xyz".to_vec())
+        );
+        assert_eq!(
+            fake.calls(),
+            vec![vec!["-i".to_string(), out.display().to_string()]]
+        );
+    }
+}
