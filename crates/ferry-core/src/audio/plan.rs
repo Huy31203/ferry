@@ -272,6 +272,7 @@ pub fn resolve_with(i: &Inputs, aac: AacEncoder) -> AudioPlan {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum CoverInput<'a> {
     None,
     /// The picture in the source file.
