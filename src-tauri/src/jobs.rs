@@ -159,7 +159,7 @@ fn requeue(app: &AppHandle, entry: Arc<Entry>, level: Level) {
 /// Put the original back (§5.5).
 pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
-    let options = run_options(app, CancelToken::new());
+    let options = crate::drop_batch::with_keep(app, id, run_options(app, CancelToken::new()));
     let (finished, twin) = {
         let mut job = relock(&entry.job);
         let finished = job.restore(&options, &mut |format, bytes, file| {
@@ -316,6 +316,10 @@ pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, 
 
 /// Send a card to the stack, or hold it until the stack page is listening.
 pub fn show(app: &AppHandle, update: JobUpdate) {
+    // Stream D: a batch row's update goes to the batch window, not the stack.
+    if crate::drop_batch::batch::claim(app, &update) {
+        return;
+    }
     let state = app.state::<AppState>();
     if !state.settings.read().unwrap().floating.enabled {
         return;
@@ -381,6 +385,9 @@ fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
 
 fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     let options = run_options(app, cancel.clone());
+    // Stream D: a job dropped with the keep modifier writes beside its original.
+    let id = entry.last.lock().unwrap().id.clone();
+    let options = crate::drop_batch::with_keep(app, &id, options);
     let started = Instant::now();
     let mut job = relock(&entry.job);
     info!(
@@ -452,9 +459,17 @@ fn finish(
     }
     *entry.last.lock().unwrap() = update.clone();
     let state = app.state::<AppState>();
-    state.remember(&update);
+    // Stream D: a batch row stays out of Recent results and the tray's rebuild.
+    let batch = crate::drop_batch::batch::owns(app, &update.id);
+    if !batch {
+        state.remember(&update);
+    }
     show(app, update);
-    tray::rebuild(app);
+    if batch {
+        tray::refresh(app);
+    } else {
+        tray::rebuild(app);
+    }
 }
 
 fn idle_entry(app: &AppHandle, id: &JobId) -> Result<Arc<Entry>, String> {
@@ -597,7 +612,6 @@ fn follow_rename(app: &AppHandle, id: &JobId, old: &Path, new: &Path) {
 /// Like `start`, for a job that comes from a drop or a watched folder: when
 /// "Copy results of drops and watched folders" is on, its first result also goes
 /// on the clipboard, unless the user has copied something since it was queued.
-#[allow(dead_code, reason = "called by streams C and D")]
 pub fn start_auto_copied(app: &AppHandle, job: Job, level: Level) -> bool {
     let on = app
         .state::<AppState>()

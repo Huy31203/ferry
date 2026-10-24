@@ -1,6 +1,7 @@
 mod clipboard;
 mod commands;
 mod compare;
+mod drop_batch;
 mod hotkeys;
 mod hover_keys;
 mod jobs;
@@ -97,6 +98,25 @@ pub fn run() {
             commands::card_hover,
             commands::output_preview,
             commands::pick_folder,
+            // Stream D: drop-batch
+            drop_batch::batch::batch_ready,
+            drop_batch::batch::batch_pick_files,
+            drop_batch::batch::batch_pick_folder,
+            drop_batch::batch::batch_pause,
+            drop_batch::batch::batch_resume,
+            drop_batch::batch::batch_cancel_all,
+            drop_batch::batch::batch_set_adjust,
+            drop_batch::batch::batch_rerun,
+            drop_batch::batch::batch_rollback,
+            drop_batch::batch::batch_reveal,
+            drop_batch::batch::batch_close,
+            drop_batch::batch::batch_row_menu,
+            drop_batch::zone::zone_ready,
+            drop_batch::list::list_config,
+            drop_batch::list::list_menu,
+            drop_batch::list::list_edit,
+            drop_batch::list::list_copy,
+            drop_batch::list::list_save_to,
             svc_commands::svc_hotkeys_status,
             svc_commands::svc_hotkey_check,
             svc_commands::svc_hotkey_set,
@@ -160,6 +180,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     hotkeys::reregister(app);
     tray::build(app)?;
     menu::init(app);
+    drop_batch::init(app)?;
     clipboard::start(app);
     housekeeping(app);
     svc_commands::setup(app);

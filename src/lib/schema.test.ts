@@ -109,6 +109,22 @@ describe('the list of settings', () => {
     ]);
   });
 
+  it('has the Drop zone pane and the list threshold under Floating results', () => {
+    expect(panes.map((p) => p.id)).toContain('drop');
+    expect(all.filter((s) => s.pane === 'drop').map((s) => s.path)).toEqual([
+      'drop_zone.enabled',
+      'drop_zone.show_on',
+      'drop_zone.position',
+      'drop_zone.modifier',
+      'drop_zone.keep_original_modifier',
+      'drop_zone.batch_threshold',
+      'drop_zone.ignored_apps',
+    ]);
+    const list = all.find((s) => s.path === 'results_list.after_cards');
+    expect(list?.pane).toBe('floating');
+    expect(list?.control).toEqual({ kind: 'number', min: 1, max: 50, unit: 'drop.unit.cards' });
+  });
+
   it('ends the General pane with the sync row under its own heading', () => {
     const general = all.filter((s) => s.pane === 'general');
     const last = general[general.length - 1];

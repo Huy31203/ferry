@@ -2,15 +2,18 @@
 //! module is unit-tested on macOS, Windows and Linux.
 
 pub mod backup;
+pub mod batch;
 pub mod bitmap;
 pub mod cancel;
 pub mod clip;
 pub mod color;
+pub mod drag;
 pub mod edit;
 pub mod fsutil;
 pub mod geometry;
 pub mod glyph;
 pub mod i18n;
+pub mod intake;
 pub mod job;
 pub mod optimise;
 pub mod output;

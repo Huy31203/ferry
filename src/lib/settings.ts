@@ -56,6 +56,17 @@ export interface Settings {
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
   clip: { auto_copy: boolean };
   video: VideoSettings;
+  // Stream D
+  drop_zone: {
+    enabled: boolean;
+    show_on: 'any_drag' | 'modifier';
+    position: 'near_results' | 'under_cursor';
+    modifier: 'alt' | 'shift';
+    keep_original_modifier: 'alt' | 'shift';
+    batch_threshold: number;
+    ignored_apps: string[];
+  };
+  results_list: { after_cards: number };
 }
 
 // stream A: video
