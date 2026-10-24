@@ -25,6 +25,7 @@
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
+  import { extLabel, formatDuration, isVideo, ringDash } from '../lib/video'; // stream A: video
   import FormatBar from './FormatBar.svelte';
   import Slider from './Slider.svelte';
 
@@ -385,17 +386,35 @@
   <div class="thumb" aria-hidden="true">
     {#if card.thumb_path}
       <img bind:this={thumb} src={convertFileSrc(card.thumb_path)} alt="" crossorigin="anonymous" />
+    {:else if isVideo(card.source_format ?? card.format)}
+      <!-- stream A: video -->
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 3v18" /><path d="M3 7.5h4" /><path d="M3 12h18" /><path d="M3 16.5h4" /><path d="M17 3v18" /><path d="M17 7.5h4" /><path d="M17 16.5h4" /></svg>
     {:else}
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></svg>
     {/if}
   </div>
+  {#if card.video}
+    <!-- stream A: video -->
+    <span class="duration" aria-label={t('video.card.duration', { time: formatDuration(card.video.duration_ms) })}>{formatDuration(card.video.duration_ms)}</span>
+  {/if}
   {#if busy || card.state.kind === 'error'}
     <div class="dim" aria-hidden="true"></div>
   {/if}
   {#if busy}
-    <svg class="ring" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+    <svg class="ring" class:fixed={card.state.kind === 'optimising' && card.state.progress > 0} width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
       <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="4" />
-      <circle cx="28" cy="28" r="24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-dasharray="40 151" />
+      <!-- stream A: video (a video fills the ring with its progress and does not spin) -->
+      <circle
+        cx="28"
+        cy="28"
+        r="24"
+        fill="none"
+        stroke="#fff"
+        stroke-width="4"
+        stroke-linecap="round"
+        stroke-dasharray={card.state.kind === 'optimising' && card.state.progress > 0 ? ringDash(card.state.progress) : '40 151'}
+        transform={card.state.kind === 'optimising' && card.state.progress > 0 ? 'rotate(-90 28 28)' : undefined}
+      />
     </svg>
   {/if}
   <div class="scrim" aria-hidden="true"></div>
@@ -523,7 +542,7 @@
         {:else}
           <span class="name">{card.name}</span>
         {/if}
-        {#if card.ext}<span class="ext">{card.ext}</span>{/if}
+        {#if card.ext}<span class="ext">{extLabel(card)}</span>{/if}
         {#if card.converted}<span class="converted">{t('card.converted')}</span>{/if}
       </div>
       {#if renameError}
@@ -640,6 +659,25 @@
     left: calc(50% - 28px);
     top: calc(50% - 46px);
     animation: spin 1s linear infinite;
+  }
+  /* stream A: video. The length sits top-left; the rail takes that corner while the card is hovered. */
+  .duration {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    transition: opacity 120ms;
+  }
+  .card:not(.rail-right):hover .duration,
+  .card:not(.rail-right).hovered .duration,
+  .card:not(.rail-right):focus-within .duration {
+    opacity: 0;
   }
   .scrim {
     position: absolute;
@@ -906,6 +944,10 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  /* stream A: video */
+  .ring.fixed {
+    animation: none;
   }
   @media (prefers-reduced-motion: reduce) {
     .card,
