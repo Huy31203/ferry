@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{debug, warn};
 
+use crate::hotkeys::{self, Group};
 use crate::state::AppState;
 use crate::{jobs, menu, platform};
 
@@ -27,20 +28,28 @@ enum Key {
     Scale(u8),
 }
 
-const KEYS: [(&str, Key); 12] = [
-    ("Space", Key::Preview),
-    ("CmdOrCtrl+D", Key::Compare),
-    ("-", Key::StepDown),
-    ("1", Key::Scale(10)),
-    ("2", Key::Scale(20)),
-    ("3", Key::Scale(30)),
-    ("4", Key::Scale(40)),
-    ("5", Key::Scale(50)),
-    ("6", Key::Scale(60)),
-    ("7", Key::Scale(70)),
-    ("8", Key::Scale(80)),
-    ("9", Key::Scale(90)),
-];
+/// The key a hover binding's accelerator stands for; `scale` is one digit.
+fn key_for(id: &str, accelerator: &str) -> Option<Key> {
+    match id {
+        "preview" => Some(Key::Preview),
+        "compare" => Some(Key::Compare),
+        "step_down" => Some(Key::StepDown),
+        "scale" => {
+            let digit: u8 = accelerator.parse().ok().filter(|n| (1..=9).contains(n))?;
+            Some(Key::Scale(digit * 10))
+        }
+        _ => None,
+    }
+}
+
+/// The accelerators to hold over a card, from the current settings.
+fn keys(app: &AppHandle) -> Vec<(String, Key)> {
+    let settings = app.state::<AppState>().settings.read().unwrap().clone();
+    hotkeys::wanted(&settings, Group::Hover, false, cfg!(target_os = "macos"))
+        .into_iter()
+        .filter_map(|(id, accelerator)| Some((accelerator.clone(), key_for(id, &accelerator)?)))
+        .collect()
+}
 
 struct Keys {
     /// The idle card under the pointer, as the page reports it.
@@ -48,9 +57,13 @@ struct Keys {
     /// The stack has the keyboard (a text field is open).
     keyed: bool,
     /// The accelerators this module registered, to unregister exactly those.
-    held: Vec<&'static str>,
+    held: Vec<String>,
     /// A registration failure was logged once already (spec §6).
     warned: bool,
+    /// The Settings window is recording a shortcut: hold nothing (svc).
+    suspended: bool,
+    /// Accelerators that failed to register the last time.
+    failed: Vec<String>,
 }
 
 static STATE: Mutex<Keys> = Mutex::new(Keys {
@@ -58,6 +71,8 @@ static STATE: Mutex<Keys> = Mutex::new(Keys {
     keyed: false,
     held: Vec::new(),
     warned: false,
+    suspended: false,
+    failed: Vec::new(),
 });
 
 /// Whether to register (`Some(true)`) or unregister (`Some(false)`) now, or
@@ -80,6 +95,29 @@ pub fn set(app: &AppHandle, card: Option<JobId>) {
     apply(app);
 }
 
+/// Unregister everything held, then hold what the settings want now.
+pub fn refresh(app: &AppHandle) {
+    let held = std::mem::take(&mut STATE.lock().unwrap().held);
+    let shortcuts = app.global_shortcut();
+    for accelerator in held {
+        if let Err(e) = shortcuts.unregister(accelerator.as_str()) {
+            debug!(accelerator, "hover hotkey not unregistered: {e}");
+        }
+    }
+    apply(app);
+}
+
+/// The Settings window started or stopped recording a shortcut.
+pub fn set_suspended(app: &AppHandle, on: bool) {
+    STATE.lock().unwrap().suspended = on;
+    apply(app);
+}
+
+/// The accelerators that did not register the last time.
+pub fn failed() -> Vec<String> {
+    STATE.lock().unwrap().failed.clone()
+}
+
 /// The stack took or gave back the keyboard: typing must reach the field.
 pub fn set_keyed(app: &AppHandle, keyed: bool) {
     STATE.lock().unwrap().keyed = keyed;
@@ -100,7 +138,7 @@ fn apply(app: &AppHandle) {
         let change = plan(
             !state.held.is_empty(),
             state.card.is_some(),
-            enabled,
+            enabled && !state.suspended,
             state.keyed,
         );
         (change, state.held.clone())
@@ -110,27 +148,32 @@ fn apply(app: &AppHandle) {
         Some(true) => {
             let mut now = Vec::new();
             let mut failed = Vec::new();
-            for (accelerator, key) in KEYS {
-                let result = shortcuts.on_shortcut(accelerator, move |app, _, event| {
+            let mut reasons = Vec::new();
+            for (accelerator, key) in keys(app) {
+                let result = shortcuts.on_shortcut(accelerator.as_str(), move |app, _, event| {
                     if event.state == ShortcutState::Pressed {
                         pressed(app, key);
                     }
                 });
                 match result {
                     Ok(()) => now.push(accelerator),
-                    Err(e) => failed.push(format!("{accelerator}: {e}")),
+                    Err(e) => {
+                        reasons.push(format!("{accelerator}: {e}"));
+                        failed.push(accelerator);
+                    }
                 }
             }
             let mut state = STATE.lock().unwrap();
-            if !failed.is_empty() && !state.warned {
+            if !reasons.is_empty() && !state.warned {
                 state.warned = true;
-                warn!(?failed, "hover hotkeys not registered");
+                warn!(?reasons, "hover hotkeys not registered");
             }
             state.held = now;
+            state.failed = failed;
         }
         Some(false) => {
             for accelerator in held {
-                if let Err(e) = shortcuts.unregister(accelerator) {
+                if let Err(e) = shortcuts.unregister(accelerator.as_str()) {
                     debug!(accelerator, "hover hotkey not unregistered: {e}");
                 }
             }
@@ -187,6 +230,7 @@ fn pressed(app: &AppHandle, key: Key) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferry_core::settings::Settings;
     use tauri_plugin_global_shortcut::Shortcut;
 
     #[test]
@@ -218,9 +262,22 @@ mod tests {
     }
 
     #[test]
-    fn every_accelerator_parses() {
-        for (accelerator, _) in KEYS {
-            assert!(accelerator.parse::<Shortcut>().is_ok(), "{accelerator}");
-        }
+    fn every_default_hover_key_parses() {
+        let wanted = hotkeys::wanted(
+            &Settings::default(),
+            Group::Hover,
+            false,
+            cfg!(target_os = "macos"),
+        );
+        let keys: Vec<Key> = wanted
+            .iter()
+            .map(|(id, accelerator)| {
+                assert!(accelerator.parse::<Shortcut>().is_ok(), "{accelerator}");
+                key_for(id, accelerator).unwrap()
+            })
+            .collect();
+        let mut expected = vec![Key::Preview, Key::Compare, Key::StepDown];
+        expected.extend((1..=9).map(|n| Key::Scale(n * 10)));
+        assert_eq!(keys, expected);
     }
 }

@@ -20,6 +20,8 @@ pub struct Effects {
     pub dock: bool,
     /// Rebuild the tray menu and icon.
     pub tray: bool,
+    /// Register the hotkeys again (svc, stream G).
+    pub hotkeys: bool,
 }
 
 impl Effects {
@@ -33,6 +35,9 @@ impl Effects {
             dock: a.show_dock_icon != b.show_dock_icon,
             // The menu's "Show app UI in screenshots" tick follows the setting.
             tray: screenshots || style(old) != style(new),
+            hotkeys: old.hotkeys != new.hotkeys
+                || old.svc.shortcuts != new.svc.shortcuts
+                || old.floating.hover_hotkeys != new.floating.hover_hotkeys,
         }
     }
 }
@@ -70,6 +75,13 @@ fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
     }
     if effects.tray {
         tray::rebuild(app);
+    }
+    if effects.hotkeys {
+        // Global shortcuts are registered on the main thread only.
+        let app = app.clone();
+        let _ = app
+            .clone()
+            .run_on_main_thread(move || crate::hotkeys::reregister(&app));
     }
 }
 
@@ -181,6 +193,31 @@ mod tests {
                 ..Effects::default()
             }
         );
+    }
+
+    #[test]
+    fn a_hotkey_change_reregisters() {
+        let base = Settings::default();
+        let only_hotkeys = Effects {
+            hotkeys: true,
+            ..Effects::default()
+        };
+
+        let mut s = base.clone();
+        s.hotkeys.optimise = "Ctrl+Alt+O".into();
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+
+        let mut s = base.clone();
+        s.svc.shortcuts.preview = "P".into();
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+
+        let mut s = base.clone();
+        s.svc.shortcuts.disabled.push("compare".into());
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
+
+        let mut s = base.clone();
+        s.floating.hover_hotkeys = !s.floating.hover_hotkeys;
+        assert_eq!(Effects::between(&base, &s), only_hotkeys);
     }
 
     #[test]
