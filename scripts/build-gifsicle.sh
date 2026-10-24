@@ -80,5 +80,8 @@ if [ "$TRIPLE" = universal-apple-darwin ]; then
   cp "$DEST" "$OUT_DIR/gifsicle-aarch64-apple-darwin"
   cp "$DEST" "$OUT_DIR/gifsicle-x86_64-apple-darwin"
 fi
+# GPL: the licence travels with the binary (the bundle ships src-tauri/binaries/licenses/).
+mkdir -p "$OUT_DIR/licenses/gifsicle"
+cp "$WORK/COPYING" "$OUT_DIR/licenses/gifsicle/COPYING"
 "$DEST" --version | head -1
 echo "built $DEST"
