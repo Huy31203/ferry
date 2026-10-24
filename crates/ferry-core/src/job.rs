@@ -91,6 +91,9 @@ pub struct JobUpdate {
     // stream A: video
     #[serde(default)]
     pub video: Option<VideoMeta>,
+    // stream B: audio
+    #[serde(default)]
+    pub audio: Option<crate::audio::AudioCard>,
 }
 
 // stream A: video
@@ -176,10 +179,24 @@ mod tests {
             source_format: Some(Format::Png),
             edit_hint: None,
             video: None,
+            audio: None,
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains(r#""source":"clipboard""#), "{json}");
         assert_eq!(serde_json::from_str::<JobUpdate>(&json).unwrap(), update);
+        // stream B: audio
+        let audio = JobUpdate {
+            audio: Some(crate::audio::AudioCard {
+                bitrate_before: Some(320),
+                bitrate_after: Some(192),
+                lossless: false,
+                has_cover: true,
+            }),
+            ..update
+        };
+        let json = serde_json::to_string(&audio).unwrap();
+        assert!(json.contains(r#""has_cover":true"#), "{json}");
+        assert_eq!(serde_json::from_str::<JobUpdate>(&json).unwrap(), audio);
     }
 
     // stream A: video
@@ -217,6 +234,7 @@ mod tests {
             source_format: Some(Format::Hevc),
             edit_hint: None,
             video: Some(meta),
+            audio: None,
         };
         let json = serde_json::to_string(&update).unwrap();
         assert_eq!(serde_json::from_str::<JobUpdate>(&json).unwrap(), update);

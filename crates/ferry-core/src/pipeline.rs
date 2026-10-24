@@ -407,6 +407,8 @@ impl Job {
             state,
             // stream A: video
             video: self.video_meta(),
+            // stream B: audio (Task 10 fills it)
+            audio: None,
         }
     }
 
@@ -1073,6 +1075,8 @@ pub fn notice(reason: String) -> JobUpdate {
         edit_hint: None,
         // stream A: video
         video: None,
+        // stream B: audio
+        audio: None,
     }
 }
 
