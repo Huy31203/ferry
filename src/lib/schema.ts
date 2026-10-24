@@ -1,6 +1,14 @@
 import type { StringKey } from './i18n';
+import type { HotkeyId } from './svc';
 
-export type PaneId = 'general' | 'clipboard' | 'images' | 'files' | 'floating';
+export type PaneId =
+  | 'general'
+  | 'clipboard'
+  | 'images'
+  | 'files'
+  | 'floating'
+  | 'hotkeys' // svc
+  | 'about'; // svc
 
 export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'general', label: 'pane.general' },
@@ -8,6 +16,8 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'images', label: 'pane.images' },
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
+  { id: 'hotkeys', label: 'svc.pane.hotkeys' }, // svc
+  { id: 'about', label: 'svc.pane.about' }, // svc
 ];
 
 export type Control =
@@ -21,7 +31,12 @@ export type Control =
   | { kind: 'tray_style' }
   | { kind: 'output'; converted: boolean }
   | { kind: 'sizes' }
-  | { kind: 'action'; action: 'open_backups' | 'open_work' | 'force_clean'; button: StringKey };
+  | { kind: 'action'; action: 'open_backups' | 'open_work' | 'force_clean'; button: StringKey }
+  // svc (stream G)
+  | { kind: 'hotkey'; action: HotkeyId }
+  | { kind: 'rail' }
+  | { kind: 'sync' }
+  | { kind: 'update' };
 
 export interface Setting {
   id: string;
@@ -36,6 +51,8 @@ export interface Setting {
   /** Path of the switch that must be on for this row to work. */
   depends_on?: string;
   mac_only?: boolean;
+  /** svc: the control sits under the text, full width. */
+  wide?: boolean;
 }
 
 const SIZE_UNIT: StringKey = 'unit.mb';
@@ -343,6 +360,72 @@ const all: Setting[] = [
     path: 'floating.hover_hotkeys',
     control: { kind: 'switch' },
     depends_on: 'floating.enabled',
+  },
+  {
+    id: 'svc_hk_optimise',
+    pane: 'hotkeys',
+    group: 'svc.group.global_hotkeys',
+    label: 'tray.optimise',
+    help: 'svc.hotkey.global.help',
+    path: 'hotkeys.optimise',
+    control: { kind: 'hotkey', action: 'optimise' },
+  },
+  {
+    id: 'svc_hk_aggressive',
+    pane: 'hotkeys',
+    group: 'svc.group.global_hotkeys',
+    label: 'tray.aggressive',
+    help: 'svc.hotkey.global.help',
+    path: 'hotkeys.aggressive',
+    control: { kind: 'hotkey', action: 'aggressive' },
+  },
+  {
+    id: 'svc_hk_cycle_state',
+    pane: 'hotkeys',
+    group: 'svc.group.global_hotkeys',
+    label: 'svc.hotkey.cycle_state',
+    help: 'svc.hotkey.global.help',
+    path: 'hotkeys.cycle_state',
+    control: { kind: 'hotkey', action: 'cycle_state' },
+  },
+  {
+    id: 'svc_hk_preview',
+    pane: 'hotkeys',
+    group: 'svc.group.hover_hotkeys',
+    label: 'svc.hotkey.preview',
+    help: 'svc.hotkey.hover.help',
+    path: 'svc.shortcuts.preview',
+    control: { kind: 'hotkey', action: 'preview' },
+    depends_on: 'floating.hover_hotkeys',
+  },
+  {
+    id: 'svc_hk_compare',
+    pane: 'hotkeys',
+    group: 'svc.group.hover_hotkeys',
+    label: 'svc.hotkey.compare',
+    help: 'svc.hotkey.hover.help',
+    path: 'svc.shortcuts.compare',
+    control: { kind: 'hotkey', action: 'compare' },
+    depends_on: 'floating.hover_hotkeys',
+  },
+  {
+    id: 'svc_hk_step_down',
+    pane: 'hotkeys',
+    group: 'svc.group.hover_hotkeys',
+    label: 'svc.hotkey.step_down',
+    help: 'svc.hotkey.hover.help',
+    path: 'svc.shortcuts.step_down',
+    control: { kind: 'hotkey', action: 'step_down' },
+    depends_on: 'floating.hover_hotkeys',
+  },
+  {
+    id: 'svc_hk_scale',
+    pane: 'hotkeys',
+    group: 'svc.group.hover_hotkeys',
+    label: 'svc.hotkey.scale',
+    help: 'svc.hotkey.hover.help',
+    control: { kind: 'hotkey', action: 'scale' },
+    depends_on: 'floating.hover_hotkeys',
   },
 ];
 

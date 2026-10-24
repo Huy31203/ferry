@@ -1,12 +1,15 @@
 //! Commands and set-up for stream G's app services: the hotkey editor now, and
 //! the rail, updater and sync commands in later tasks.
 
+use std::sync::Mutex;
+
 use ferry_core::settings::Settings;
-use tauri::{AppHandle, Manager};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::hotkeys::{self, Verdict};
-use crate::prefs;
 use crate::state::AppState;
+use crate::{prefs, windows};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -78,6 +81,33 @@ pub fn svc_hotkey_reset(app: AppHandle, id: String) -> Result<Verdict, String> {
 #[tauri::command]
 pub fn svc_hotkeys_suspend(app: AppHandle, on: bool) {
     hotkeys::suspend(&app, on);
+}
+
+/// Where Settings should open: a pane, and a row to highlight.
+#[derive(Debug, Clone, Serialize)]
+pub struct PaneRequest {
+    pub pane: String,
+    pub row: Option<String>,
+}
+
+static PANE: Mutex<Option<PaneRequest>> = Mutex::new(None);
+
+/// Open Settings at `pane`, highlighting `row` (a setting id). Main thread, as
+/// `windows::open_settings` is. The page asks for the request when it loads, or
+/// on `svc:open-pane` when it is already open.
+pub fn open_settings_at(app: &AppHandle, pane: &str, row: Option<&str>) {
+    *PANE.lock().unwrap() = Some(PaneRequest {
+        pane: pane.to_string(),
+        row: row.map(String::from),
+    });
+    windows::open_settings(app);
+    let _ = app.emit_to(windows::SETTINGS, "svc:open-pane", ());
+}
+
+/// Takes (and clears) the stored request.
+#[tauri::command]
+pub fn svc_settings_pane() -> Option<PaneRequest> {
+    PANE.lock().unwrap().take()
 }
 
 /// Grows in later tasks.
