@@ -3,6 +3,7 @@
 
 pub mod batch;
 pub mod intake;
+pub mod list;
 pub mod watch;
 pub mod zone;
 

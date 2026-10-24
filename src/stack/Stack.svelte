@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { draggable, hoverTarget, isBusy, openTool, remove, upsert, type OpenTool, type Tool } from '../lib/cards';
@@ -9,7 +9,10 @@
   import type { UpdateView } from '../lib/svc';
   import { DEFAULT_RAIL_TOOLS } from '../lib/rail';
   import { isVideo } from '../lib/video'; // stream A: video
+  import { nextListMode } from '../lib/selection'; // Stream D
+  import type { ListConfig } from '../lib/drop-ipc'; // Stream D
   import Card from './Card.svelte';
+  import CompactList from './CompactList.svelte'; // Stream D
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
   import SpeedPopover from './SpeedPopover.svelte'; // stream A: video
@@ -74,6 +77,16 @@
 
   /** The crop popover's live frame, drawn on its card's thumbnail. */
   let frame = $state<CropFrame | null>(null);
+
+  // Stream D: above `listAfter` cards the stack becomes a compact list, but the
+  // layout never flips under the pointer, a selection, an open tool or a drag.
+  let listAfter = $state(5);
+  let listMode = $state(false);
+  let overList = $state(false);
+  $effect(() => {
+    const hold = held || overList || tool !== null;
+    listMode = nextListMode(cards.length, listAfter, untrack(() => listMode), hold);
+  });
 
   // Crop or Fit: close the popover (handing the keyboard back), then run the edit.
   function apply(id: string, edits: EditsPatch) {
@@ -143,6 +156,7 @@
   function track(el: Element | null) {
     hovered = el?.closest<HTMLElement>('[data-card-id]')?.dataset.cardId ?? null;
     overBar = el?.closest('[data-bar]') != null;
+    overList = el?.closest('[data-list]') != null; // Stream D
     const button = el?.closest<HTMLElement>('[data-action]');
     hot = button
       ? { card: button.closest<HTMLElement>('[data-card-id]')?.dataset.cardId ?? null, action: button.dataset.action as string }
@@ -156,6 +170,7 @@
   function leave() {
     hovered = null;
     overBar = false;
+    overList = false; // Stream D
     hot = null;
   }
 
@@ -176,6 +191,7 @@
       listen<CardAction>('card:action', (event) => cardAction(event.payload)),
       listen<Settings>('settings:changed', (event) => {
         const { floating, images, video } = event.payload;
+        listAfter = event.payload.results_list.after_cards; // Stream D
         config = {
           corner: floating.corner,
           card_size: floating.card_size,
@@ -205,6 +221,9 @@
       for (const card of pending) cards = upsert(cards, card);
       return stops;
     });
+    invoke<ListConfig>('list_config') // Stream D
+      .then((list) => (listAfter = list.after_cards))
+      .catch((e) => console.warn('list_config', e));
     invoke<UpdateView>('svc_update_state')
       .then((view) => (update = view))
       .catch((e) => console.warn('svc_update_state', e));
@@ -243,7 +262,7 @@
   {#if cards.length > 0 && top && update?.pill}
     <UpdatePill view={update} hotAction={hot && hot.card === null ? hot.action : null} />
   {/if}
-  {#if cards.length > 1 && top}
+  {#if cards.length > 1 && top && !listMode}
     <DragAllBar
       cards={draggable(cards)}
       hotAction={hot && hot.card === null ? hot.action : null}
@@ -252,6 +271,44 @@
       ondrag={dragState}
     />
   {/if}
+  {#if listMode}
+    <!-- Stream D: the same cards as a list; its popovers open beside it like a card's. -->
+    {@const owner = tool ? cards.find((c) => c.id === tool?.id) : undefined}
+    <div class="row">
+      <CompactList
+        {cards}
+        {hovered}
+        {held}
+        {overList}
+        hotAction={hot}
+        barAction={hot && hot.card === null ? hot.action : null}
+        {tool}
+        autoHideSecs={config.auto_hide_secs}
+        onclose={close}
+        onclear={clearAll}
+        ondrag={dragState}
+        ontool={setTool}
+      />
+      {#if owner && tool?.kind === 'crop'}
+        <CropPopover
+          card={owner}
+          sizes={config.crop_sizes}
+          onapply={(edits) => apply(owner.id, edits)}
+          onclose={() => setTool(owner.id, null)}
+          onframe={(next) => (frame = next)}
+        />
+      {:else if owner && tool?.kind === 'fit'}
+        <FitPopover card={owner} onapply={(edits) => apply(owner.id, edits)} onclose={() => setTool(owner.id, null)} />
+      {:else if owner && tool?.kind === 'speed'}
+        <SpeedPopover
+          card={owner}
+          framesDefault={config.speed_frames}
+          onapply={(edits) => apply(owner.id, edits)}
+          onclose={() => setTool(owner.id, null)}
+        />
+      {/if}
+    </div>
+  {:else}
   {#each cards as card (card.id)}
     {@const open = tool?.id === card.id ? tool.kind : null}
     <!-- A popover opens beside its card, toward the screen centre; the window grows to fit (spec §5.3). -->
@@ -293,7 +350,8 @@
       {/if}
     </div>
   {/each}
-  {#if cards.length > 1 && !top}
+  {/if}
+  {#if cards.length > 1 && !top && !listMode}
     <DragAllBar
       cards={draggable(cards)}
       hotAction={hot && hot.card === null ? hot.action : null}

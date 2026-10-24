@@ -112,6 +112,7 @@ pub fn run() {
             drop_batch::batch::batch_close,
             drop_batch::batch::batch_row_menu,
             drop_batch::zone::zone_ready,
+            drop_batch::list::list_config,
             svc_commands::svc_hotkeys_status,
             svc_commands::svc_hotkey_check,
             svc_commands::svc_hotkey_set,
