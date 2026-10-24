@@ -102,6 +102,7 @@ pub fn run() {
             commands::pick_folder,
             // Stream H: integrations
             integrations::commands::card_share,
+            integrations::commands::share_pick_app,
             // Stream D: drop-batch
             drop_batch::batch::batch_ready,
             drop_batch::batch::batch_pick_files,

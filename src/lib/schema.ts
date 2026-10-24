@@ -1,5 +1,6 @@
 import type { StringKey } from './i18n';
 import type { HotkeyId } from './svc';
+import { shareSettings } from './schema.share'; // stream H
 
 export type PaneId =
   | 'general'
@@ -10,6 +11,7 @@ export type PaneId =
   | 'files'
   | 'floating'
   | 'drop' // stream D
+  | 'sharing' // stream H
   | 'hotkeys' // svc
   | 'about'; // svc
 
@@ -22,6 +24,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
   { id: 'drop', label: 'drop.pane' }, // stream D
+  { id: 'sharing', label: 'share.pane' }, // stream H
   { id: 'hotkeys', label: 'svc.pane.hotkeys' }, // svc
   { id: 'about', label: 'svc.pane.about' }, // svc
 ];
@@ -43,7 +46,10 @@ export type Control =
   | { kind: 'hotkey'; action: HotkeyId }
   | { kind: 'rail' }
   | { kind: 'sync' }
-  | { kind: 'update' };
+  | { kind: 'update' }
+  // stream H
+  | { kind: 'app' }
+  | { kind: 'app_list' };
 
 export interface Setting {
   id: string;
@@ -837,6 +843,7 @@ const all: Setting[] = [
     control: { kind: 'number', min: 1, max: 50, unit: 'drop.unit.cards' },
     depends_on: 'floating.enabled',
   },
+  ...shareSettings, // stream H
 ];
 
 /** The settings to show on this OS. */
