@@ -53,3 +53,6 @@ pub mod services;
 #[cfg(target_os = "macos")]
 #[path = "macos_share.rs"]
 pub mod share;
+#[cfg(windows)]
+#[path = "windows_share.rs"]
+pub mod share;
