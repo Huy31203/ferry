@@ -36,6 +36,7 @@ export function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate
     note: null,
     source_format: 'png',
     edit_hint: null,
+    video: null,
     ...extra,
   };
 }

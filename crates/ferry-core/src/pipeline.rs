@@ -23,6 +23,11 @@ use crate::settings::{self as settings_model, Location, Settings, contract_home}
 use crate::sniff::{self, Format};
 use crate::template;
 use crate::trigger::{MB, Skip, is_ignored_extension, normalise_ext};
+// stream A: video
+use crate::video::{self, hardware::Hardware};
+use video_job::VideoState;
+
+mod video_job;
 
 /// Puts an image on the clipboard: format, bytes and the working file holding them.
 pub type Deliver<'a> = &'a mut dyn FnMut(Format, &[u8], &Path) -> Result<(), String>;
@@ -30,7 +35,6 @@ pub type Deliver<'a> = &'a mut dyn FnMut(Format, &[u8], &Path) -> Result<(), Str
 /// A result or an original: bytes in memory, or a file (a video is never read
 /// into memory).
 #[derive(Clone, Copy)]
-#[allow(dead_code)] // `File` is built by video jobs (Task 10)
 enum Content<'a> {
     Bytes(&'a [u8]),
     File(&'a Path),
@@ -62,6 +66,12 @@ pub struct RunOptions {
     /// Moves a file Ferry made, or a converted-away source, to the Trash.
     /// The app logs failures; here a failure only means the file stays.
     pub trash: fn(&Path) -> io::Result<()>,
+    // stream A: video
+    pub video: settings_model::Video,
+    /// `None`: `run_video` asks `video::hardware::probe_hardware`, which waits
+    /// for the start-up probe. Tests set `Some(Hardware::default())` for
+    /// deterministic software encodes.
+    pub hardware: Option<Hardware>,
 }
 
 impl RunOptions {
@@ -82,6 +92,9 @@ impl RunOptions {
             work_dir,
             home: std::env::home_dir().unwrap_or_default(),
             trash,
+            // stream A: video
+            video: settings.video.clone(),
+            hardware: None,
         }
     }
 }
@@ -139,6 +152,8 @@ pub struct Job {
     /// A "Convert and keep both" twin: the source belongs to the parent's
     /// card, so the twin never overwrites, trashes or restores it.
     twin: bool,
+    // stream A: video
+    video: Option<VideoState>,
 }
 
 /// A file job's result on disk (spec §4.4: one result per job).
@@ -278,12 +293,17 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            video: None,
         }
     }
 
     /// A copied file, to be optimised in place. `Err` is the card text for a
     /// file the settings exclude or that is not a supported image.
     pub fn file(path: &Path, settings: &Settings, has_gifsicle: bool) -> Result<Job, String> {
+        // stream A: video
+        if let Some((container, len)) = video_job::video_container(path) {
+            return Job::video_file(path, settings, container, len);
+        }
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -339,6 +359,7 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            video: None,
         })
     }
 
@@ -367,7 +388,11 @@ impl Job {
             ext: self.ext.clone(),
             before: self.before,
             after,
-            thumb_path: self.backup.clone(),
+            // stream A: video
+            thumb_path: match &self.video {
+                Some(video) => video.thumb.clone(),
+                None => self.backup.clone(),
+            },
             source: self.source,
             output: self.output.exists().then(|| self.output.clone()),
             dims_before: self.dims,
@@ -380,6 +405,8 @@ impl Job {
             source_format: Some(self.source_format),
             edit_hint,
             state,
+            // stream A: video
+            video: self.video_meta(),
         }
     }
 
@@ -432,7 +459,18 @@ impl Job {
     pub fn edit(&mut self, patch: EditsPatch) {
         self.prior = Some((self.edits.clone(), self.level));
         self.edits.merge(patch);
-        if matches!(self.edits.format, Some(f) if f == self.source_format || f == Format::Gif) {
+        // stream A: video (a video can become a GIF; only its own targets are kept)
+        let cleared = match self.video {
+            Some(_) => matches!(
+                self.edits.format,
+                Some(f) if f == self.source_format || !video::is_target(f)
+            ),
+            None => matches!(
+                self.edits.format,
+                Some(f) if f == self.source_format || f == Format::Gif
+            ),
+        };
+        if cleared {
             self.edits.format = None;
         }
         self.level = self.edits.level;
@@ -489,6 +527,7 @@ impl Job {
             times: self.times,
             changed: false,
             twin: true,
+            video: self.video.clone(),
         }
     }
 
@@ -541,6 +580,10 @@ impl Job {
         self.edits.level = level;
         if o.cancel.is_cancelled() {
             return None;
+        }
+        // stream A: video
+        if self.video.is_some() {
+            return self.run_video(o, backups, emit);
         }
         let original = match self.original(backups) {
             Ok(bytes) => bytes,
@@ -638,6 +681,10 @@ impl Job {
     /// (and the conversion to the Trash); in the working file and on the
     /// clipboard for a clipboard image.
     pub fn restore(&mut self, o: &RunOptions, deliver: Deliver) -> Finished {
+        // stream A: video
+        if self.video.is_some() {
+            return self.restore_video(o);
+        }
         let read = self
             .backup
             .as_ref()
@@ -732,9 +779,15 @@ impl Job {
                     kind,
                     stem: self.stem.as_deref(),
                 };
+                // stream A: video
+                let rules = if self.video.is_some() {
+                    &o.video.output
+                } else {
+                    &o.output
+                };
                 let wanted = output::resolve(
                     &target,
-                    &o.output,
+                    rules,
                     &o.work_dir,
                     &o.home,
                     Local::now().date_naive(),
@@ -751,7 +804,7 @@ impl Job {
                     output::unique_except(&wanted, own.as_deref(), reserved)
                 };
                 let trash_source = kind == OutputKind::Converted
-                    && o.output.converted.location == Location::InPlace
+                    && rules.converted.location == Location::InPlace
                     && path != source
                     && !self.twin;
                 self.check_source(path == source || trash_source)?;
@@ -913,7 +966,13 @@ impl Job {
         if let Some(backup) = &self.backup {
             let _ = fsutil::copy_xattrs(backup, path);
         }
-        if o.preserve_dates
+        // stream A: video
+        let preserve = if self.video.is_some() {
+            o.video.preserve_dates
+        } else {
+            o.preserve_dates
+        };
+        if preserve
             && path == source
             && let Some(times) = &self.times
         {
@@ -956,6 +1015,10 @@ impl Job {
     /// "2880×1800 · PNG" or "2880×1800 → 1440×900 · WebP", plus "aggressive"
     /// and "from bitmap" when they apply.
     fn detail(&self) -> String {
+        // stream A: video
+        if self.video.is_some() {
+            return self.video_detail();
+        }
         let mut parts = Vec::new();
         match (self.dims, self.dims_after) {
             (Some((w, h)), Some((aw, ah))) => parts.push(format!("{w}×{h} → {aw}×{ah}")),
@@ -997,6 +1060,8 @@ pub fn notice(reason: String) -> JobUpdate {
         note: None,
         source_format: None,
         edit_hint: None,
+        // stream A: video
+        video: None,
     }
 }
 

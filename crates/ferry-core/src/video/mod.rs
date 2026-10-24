@@ -1,9 +1,12 @@
 //! Video: formats, codecs and (in the child modules) probing, hardware encoders
 //! and the encode plan. Pure logic; the ffmpeg runner is `crate::ffmpeg`.
 
-use std::{fs::File, io::Read, path::Path};
+use std::{fs::File, io::Read, path::Path, time::Duration};
 
-use crate::sniff::{self, Format};
+use crate::{
+    i18n::tf,
+    sniff::{self, Format},
+};
 
 pub mod fit;
 pub mod hardware;
@@ -68,6 +71,31 @@ pub fn is_video_file(path: &Path) -> bool {
         .and_then(|file| file.take(64).read_to_end(&mut head))
         .is_ok()
         && sniff::sniff(&head).is_some_and(Format::is_video)
+}
+
+/// The card's step line: the step, then its percent, then the time left.
+/// Nothing is guessed in the first seconds or the first 2 percent.
+pub fn step_text(step: &str, progress: f32, elapsed: Duration) -> String {
+    if progress < 0.01 {
+        return step.to_string();
+    }
+    let percent = ((progress * 100.0).round() as u32).to_string();
+    if elapsed < Duration::from_secs(5) || progress < 0.02 {
+        return tf(
+            "video.step.progress",
+            &[("step", step), ("percent", &percent)],
+        );
+    }
+    let secs = (elapsed.as_secs_f32() * (1.0 - progress) / progress).round() as u64;
+    let left = if secs >= 3600 {
+        format!("{}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60)
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    };
+    tf(
+        "video.step.eta",
+        &[("step", step), ("percent", &percent), ("left", &left)],
+    )
 }
 
 /// A codec as people name it: h264 H.264, hevc HEVC, prores ProRes.
@@ -156,5 +184,21 @@ mod tests {
         assert_eq!(codec_label("h264"), "H.264");
         assert_eq!(codec_label("prores"), "ProRes");
         assert_eq!(codec_label("dnxhd"), "DNXHD");
+    }
+
+    #[test]
+    fn step_text_adds_percent_then_time_left() {
+        assert_eq!(
+            step_text("Encoding HEVC", 0.0, Duration::ZERO),
+            "Encoding HEVC"
+        );
+        assert_eq!(
+            step_text("Encoding HEVC", 0.42, Duration::from_secs(3)),
+            "Encoding HEVC · 42 %"
+        );
+        assert_eq!(
+            step_text("Encoding HEVC", 0.25, Duration::from_secs(20)),
+            "Encoding HEVC · 25 % · 1:00 left"
+        );
     }
 }
