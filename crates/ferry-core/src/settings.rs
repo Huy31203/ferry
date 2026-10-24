@@ -23,6 +23,8 @@ pub struct Settings {
     pub floating: Floating,
     pub backups: Backups,
     pub hotkeys: Hotkeys,
+    // ---- sI clipboard-fixes: [clip] ----
+    pub clip: Clip,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -225,6 +227,8 @@ impl Default for Settings {
             floating: Floating::default(),
             backups: Backups::default(),
             hotkeys: Hotkeys::default(),
+            // ---- sI clipboard-fixes: [clip] ----
+            clip: Clip::default(),
             extra: Map::new(),
         }
     }
@@ -297,6 +301,17 @@ impl Default for Backups {
             extra: Map::new(),
         }
     }
+}
+
+// ---- sI clipboard-fixes: [clip] ----
+/// Clipboard output beyond the Clipboard section: copy the results of drops and
+/// watched folders.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Clip {
+    pub auto_copy: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// How `Settings::load` found the file.
@@ -672,5 +687,20 @@ mod tests {
         );
         assert_eq!(s.images.output.converted.folder, defaults.converted.folder);
         assert_eq!(s.images.crop_sizes, [(1200, 628)]);
+    }
+
+    #[test]
+    fn the_clip_section_defaults_off_and_keeps_unknown_fields() {
+        assert!(!Settings::default().clip.auto_copy);
+        assert_eq!(Settings::default().version, 2);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"clip": {"auto_copy": true, "later": 1}}"#).unwrap();
+        let (settings, _) = Settings::load(&path);
+        assert!(settings.clip.auto_copy);
+        settings.save(&path).unwrap();
+        assert_eq!(read_json(&path)["clip"]["later"], json!(1));
+        fs::write(&path, r#"{"images": {}}"#).unwrap();
+        assert_eq!(Settings::load(&path).0.clip, Clip::default());
     }
 }
