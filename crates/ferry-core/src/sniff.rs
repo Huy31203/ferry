@@ -165,8 +165,10 @@ fn sniff_audio(bytes: &[u8]) -> Option<Format> {
         let compatible = bytes
             .get(16..size)
             .unwrap_or_default()
-            .chunks_exact(4)
-            .any(|brand| AUDIO_BRANDS.iter().any(|b| b.as_slice() == brand));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|brand| AUDIO_BRANDS.contains(&brand));
         let audio_major = AUDIO_BRANDS.iter().any(|b| b.as_slice() == major);
         let video_major = VIDEO_MAJORS.iter().any(|b| b.as_slice() == major);
         return (audio_major || (compatible && !video_major)).then_some(Format::M4a);
