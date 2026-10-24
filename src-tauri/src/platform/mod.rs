@@ -44,6 +44,9 @@ pub use self::windows::{
 #[cfg(target_os = "macos")]
 #[path = "macos_apps.rs"]
 pub mod apps;
+#[cfg(windows)]
+#[path = "windows_apps.rs"]
+pub mod apps;
 #[cfg(target_os = "macos")]
 #[path = "macos_services.rs"]
 pub mod services;
