@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sniff::Format;
 
+pub mod probe;
 pub mod tool;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -42,7 +42,7 @@ pub struct AudioStream {
 }
 
 /// Split on `", "` outside parentheses and brackets.
-fn split_top_level(text: &str) -> Vec<&str> {
+pub(crate) fn split_top_level(text: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let (mut depth, mut start) = (0_i32, 0);
     let bytes = text.as_bytes();
@@ -61,7 +61,7 @@ fn split_top_level(text: &str) -> Vec<&str> {
     parts
 }
 
-fn first_word(item: &str) -> &str {
+pub(crate) fn first_word(item: &str) -> &str {
     item.split_whitespace().next().unwrap_or("")
 }
 
