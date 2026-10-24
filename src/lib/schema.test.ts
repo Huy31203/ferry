@@ -53,4 +53,17 @@ describe('the list of settings', () => {
     expect(at('hover_hotkeys')?.path).toBe('floating.hover_hotkeys');
     expect(at('crop_sizes')?.control.kind).toBe('sizes');
   });
+
+  it('has the Hotkeys pane with every binding in order', () => {
+    expect(all.filter((s) => s.pane === 'hotkeys').map((s) => s.path)).toEqual([
+      'hotkeys.optimise',
+      'hotkeys.aggressive',
+      'hotkeys.cycle_state',
+      'svc.shortcuts.preview',
+      'svc.shortcuts.compare',
+      'svc.shortcuts.step_down',
+      undefined,
+    ]);
+    expect(panes.map((p) => p.id).slice(-2)).toEqual(['hotkeys', 'about']);
+  });
 });
