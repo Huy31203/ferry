@@ -61,6 +61,28 @@ describe('the list of settings', () => {
     ]);
   });
 
+  // stream B: audio
+  it('has the Audio pane with every audio setting', () => {
+    expect(panes.map((p) => p.id)).toContain('audio');
+    expect(all.filter((s) => s.pane === 'audio').map((s) => s.path)).toEqual([
+      'audio.outputs.wav',
+      'audio.outputs.aiff',
+      'audio.outputs.flac',
+      'audio.outputs.mp3',
+      'audio.outputs.m4a',
+      'audio.outputs.ogg',
+      'audio.outputs.opus',
+      'audio.bitrate_kbps',
+      'audio.opus_bitrate_kbps',
+      'audio.loudness',
+      'audio.cover',
+      'audio.cover_size.shape',
+      'audio.cover_size.side',
+      'audio.ignored_extensions',
+      'audio.max_size_mb',
+    ]);
+  });
+
   it('has the File handling pane with both output rules, the hover toggle and crop sizes', () => {
     const at = (id: string) => all.find((s) => s.id === id);
     expect(all.filter((s) => s.pane === 'files').map((s) => s.path)).toEqual([
@@ -68,6 +90,8 @@ describe('the list of settings', () => {
       'images.output.converted',
       'video.output.optimised',
       'video.output.converted',
+      'audio.output.optimised',
+      'audio.output.converted',
     ]);
     expect(at('hover_hotkeys')?.path).toBe('floating.hover_hotkeys');
     expect(at('crop_sizes')?.control.kind).toBe('sizes');

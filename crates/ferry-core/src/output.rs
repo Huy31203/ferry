@@ -88,6 +88,8 @@ pub fn resolve(
 
 /// The file the File handling pane's example uses.
 pub struct Sample {
+    /// The folder under the home folder the example file sits in.
+    pub folder: &'static str,
     pub file: &'static str,
     pub converted_ext: &'static str,
     pub dims: (u32, u32),
@@ -95,15 +97,24 @@ pub struct Sample {
 
 impl Sample {
     pub const IMAGE: Sample = Sample {
+        folder: "Desktop",
         file: "shot.png",
         converted_ext: "webp",
         dims: (1920, 1080),
     };
     // stream A: video
     pub const VIDEO: Sample = Sample {
+        folder: "Desktop",
         file: "clip.mp4",
         converted_ext: "webm",
         dims: (1920, 1080),
+    };
+    // stream B: audio
+    pub const AUDIO: Sample = Sample {
+        folder: "Music",
+        file: "track.wav",
+        converted_ext: "mp3",
+        dims: (0, 0),
     };
 }
 
@@ -138,7 +149,7 @@ pub fn example_for(
         converted: rule.clone(),
         ..Output::default()
     };
-    let source = home.join("Desktop").join(sample.file);
+    let source = home.join(sample.folder).join(sample.file);
     let target = Target {
         source: &source,
         job: "example",
@@ -408,6 +419,38 @@ mod tests {
         assert_eq!(
             of(OutputKind::Converted, &rule(Location::InPlace, "%f.%e")).unwrap(),
             "~/Desktop/clip.webm"
+        );
+    }
+
+    // stream B: audio
+    #[test]
+    fn the_audio_example_is_a_track_in_music() {
+        let rule = |location, template: &str| OutputRule {
+            location,
+            template: template.into(),
+            ..OutputRule::default()
+        };
+        let of = |kind, rule: &OutputRule| {
+            example_for(
+                kind,
+                rule,
+                Path::new("/Users/me"),
+                Path::new("/w"),
+                today(),
+                &Sample::AUDIO,
+            )
+        };
+        assert_eq!(
+            of(
+                OutputKind::Optimised,
+                &rule(Location::SameFolder, "%f_optimised.%e")
+            )
+            .unwrap(),
+            "~/Music/track_optimised.wav"
+        );
+        assert_eq!(
+            of(OutputKind::Converted, &rule(Location::InPlace, "%f.%e")).unwrap(),
+            "~/Music/track.mp3"
         );
     }
 }
