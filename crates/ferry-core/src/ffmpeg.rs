@@ -269,7 +269,7 @@ fn tail_text(bytes: &[u8], keep: usize) -> String {
 }
 
 /// `Duration: 00:01:02.50, start: …` as printed for each input; `N/A` is None.
-fn parse_duration(line: &str) -> Option<Duration> {
+pub(crate) fn parse_duration(line: &str) -> Option<Duration> {
     let rest = line.trim_start().strip_prefix("Duration: ")?;
     let stamp = rest.split(',').next()?;
     let mut parts = stamp.split(':');

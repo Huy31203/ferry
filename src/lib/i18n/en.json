@@ -262,5 +262,7 @@
   "video.error.spawn": "ffmpeg could not start — reinstall Ferry",
   "video.error.encode": "Couldn't encode the video — see Details",
   "video.error.stalled": "ffmpeg stopped responding",
-  "video.error.disk_full": "Not enough disk space to encode"
+  "video.error.disk_full": "Not enough disk space to encode",
+  "video.error.read": "Couldn't read this video",
+  "video.error.no_video": "No video track in {name}"
 }

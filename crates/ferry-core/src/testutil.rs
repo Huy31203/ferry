@@ -275,6 +275,62 @@ pub fn ffmpeg() -> Option<std::path::PathBuf> {
         .filter(|path| path.exists())
 }
 
+/// What `video` makes.
+pub struct VideoSpec {
+    pub size: (u32, u32),
+    pub secs: u32,
+    pub fps: u32,
+    /// "libx264" or "libvpx-vp9" (the build has no libx265).
+    pub codec: &'static str,
+    pub audio_tracks: u32,
+}
+
+/// A synthetic clip in `dir` (lavfi testsrc2 plus one sine per audio track), or
+/// `None` without FERRY_FFMPEG.
+pub fn video(dir: &std::path::Path, file: &str, spec: &VideoSpec) -> Option<std::path::PathBuf> {
+    ffmpeg()?;
+    let path = dir.join(file);
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    let mut add = |items: &[&str]| args.extend(items.iter().map(std::ffi::OsString::from));
+    let (w, h) = spec.size;
+    add(&["-f", "lavfi", "-i"]);
+    add(&[&format!(
+        "testsrc2=size={w}x{h}:rate={}:duration={}",
+        spec.fps, spec.secs
+    )]);
+    for k in 1..=spec.audio_tracks {
+        add(&["-f", "lavfi", "-i"]);
+        add(&[&format!(
+            "sine=frequency={}:duration={}",
+            440 * k,
+            spec.secs
+        )]);
+    }
+    add(&["-map", "0:v"]);
+    for k in 1..=spec.audio_tracks {
+        add(&["-map", &format!("{k}:a")]);
+    }
+    if spec.codec == "libvpx-vp9" {
+        add(&[
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+        ]);
+        add(&["-crf", "10", "-b:v", "0"]);
+    } else {
+        add(&["-c:v", spec.codec, "-preset", "ultrafast", "-crf", "10"]);
+    }
+    add(&["-pix_fmt", "yuv420p"]);
+    let webm = path.extension().is_some_and(|e| e == "webm");
+    add(&["-c:a", if webm { "libopus" } else { "aac" }, "-shortest"]);
+    args.push(path.clone().into());
+    crate::ffmpeg::run(&args, &crate::cancel::CancelToken::new(), &mut |_| {}).ok()?;
+    Some(path)
+}
+
 /// Insert a comment extension right after the global colour table.
 pub fn with_gif_comment(gif: &[u8], text: &str) -> Vec<u8> {
     let at = 13 + 768; // header + screen descriptor + 256-colour table
