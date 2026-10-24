@@ -14,8 +14,8 @@ pub mod fsutil;
 pub mod geometry;
 pub mod glyph;
 pub mod i18n;
-pub mod integrations; // stream H
 pub mod intake;
+pub mod integrations; // stream H
 pub mod job;
 pub mod optimise;
 pub mod output;
