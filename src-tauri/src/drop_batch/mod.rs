@@ -3,6 +3,7 @@
 
 pub mod batch;
 pub mod intake;
+pub mod watch;
 pub mod zone;
 
 use std::collections::HashSet;
@@ -64,6 +65,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         batch::on_menu(app, event.id().as_ref());
     });
     zone::create(app)?;
+    watch::start(app);
     Ok(())
 }
 
