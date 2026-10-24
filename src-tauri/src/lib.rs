@@ -16,6 +16,7 @@ mod windows;
 // svc (stream G)
 mod rail_menu;
 mod svc_commands;
+mod sync_worker;
 mod updater;
 
 use std::path::PathBuf;
@@ -105,6 +106,11 @@ pub fn run() {
             svc_commands::svc_update_skip,
             svc_commands::svc_open_release,
             svc_commands::svc_open_about,
+            svc_commands::svc_sync_status,
+            svc_commands::svc_sync_inspect,
+            svc_commands::svc_sync_enable,
+            svc_commands::svc_sync_disable,
+            svc_commands::svc_sync_now,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")

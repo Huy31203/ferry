@@ -3,13 +3,14 @@
 
 use std::sync::Mutex;
 
-use ferry_core::settings::Settings;
+use ferry_core::settings::{self, Settings};
+use ferry_core::settings_sync::{FolderInfo, JoinMode};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::hotkeys::{self, Verdict};
 use crate::state::AppState;
-use crate::{prefs, rail_menu, updater, windows};
+use crate::{prefs, rail_menu, sync_worker, updater, windows};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -163,8 +164,50 @@ pub fn svc_open_about(app: AppHandle) {
     open_settings_at(&app, "about", None);
 }
 
+#[tauri::command]
+pub fn svc_sync_status(app: AppHandle) -> sync_worker::SyncStatus {
+    sync_worker::status(&app)
+}
+
+/// What the chosen folder already holds, read off the main thread.
+#[tauri::command]
+pub async fn svc_sync_inspect(app: AppHandle, folder: String) -> Result<FolderInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = app.path().home_dir().map_err(|e| e.to_string())?;
+        let chosen = settings::expand_home(&folder, &home);
+        Ok(sync_worker::inspect(
+            &chosen,
+            sync_worker::own_device(&app).as_deref(),
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Join the folder (`join` picks whose values win), then turn sync on.
+#[tauri::command(async)]
+pub fn svc_sync_enable(app: AppHandle, folder: String, join: JoinMode) -> Result<(), String> {
+    sync_worker::prepare_join(&app, join)?;
+    prefs::update(&app, |s| {
+        s.svc.sync.enabled = true;
+        s.svc.sync.folder = folder;
+    })
+    .map(|_| ())
+}
+
+#[tauri::command(async)]
+pub fn svc_sync_disable(app: AppHandle) -> Result<(), String> {
+    prefs::update(&app, |s| s.svc.sync.enabled = false).map(|_| ())
+}
+
+#[tauri::command]
+pub fn svc_sync_now(app: AppHandle) {
+    sync_worker::sync_now(&app);
+}
+
 /// Grows in later tasks.
 pub fn setup(app: &AppHandle) {
     rail_menu::init(app);
     updater::init(app);
+    sync_worker::start(app);
 }

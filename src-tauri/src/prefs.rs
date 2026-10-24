@@ -24,6 +24,8 @@ pub struct Effects {
     pub hotkeys: bool,
     /// Tell the updater its settings changed (svc).
     pub updates: bool,
+    /// Tell the sync worker to start, stop or move (svc).
+    pub sync: bool,
 }
 
 impl Effects {
@@ -41,6 +43,7 @@ impl Effects {
                 || old.svc.shortcuts != new.svc.shortcuts
                 || old.floating.hover_hotkeys != new.floating.hover_hotkeys,
             updates: old.svc.updates != new.svc.updates,
+            sync: old.svc.sync != new.svc.sync,
         }
     }
 }
@@ -62,6 +65,7 @@ pub fn update(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Set
     };
     apply(app, &old, &new);
     let _ = app.emit("settings:changed", &new);
+    crate::sync_worker::local_changed(app); // svc
     Ok(new)
 }
 
@@ -88,6 +92,9 @@ fn apply(app: &AppHandle, old: &Settings, new: &Settings) {
     }
     if effects.updates {
         crate::updater::settings_changed(app);
+    }
+    if effects.sync {
+        crate::sync_worker::reconfigure(app);
     }
 }
 
@@ -235,6 +242,20 @@ mod tests {
             Effects::between(&base, &s),
             Effects {
                 updates: true,
+                ..Effects::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_sync_setting_change_reconfigures_the_worker() {
+        let base = Settings::default();
+        let mut s = base.clone();
+        s.svc.sync.folder = "~/Sync".into();
+        assert_eq!(
+            Effects::between(&base, &s),
+            Effects {
+                sync: true,
                 ..Effects::default()
             }
         );

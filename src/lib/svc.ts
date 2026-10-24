@@ -58,3 +58,30 @@ export interface UpdateView {
   pill: boolean;
   release_url: string | null;
 }
+
+/** ferry `sync_worker::SyncStatus` (serde tag `kind`). */
+export type SyncStatus =
+  | { kind: 'off' }
+  | { kind: 'starting' }
+  | { kind: 'synced'; at: number; devices: number }
+  | { kind: 'folder_missing' }
+  | { kind: 'newer_format'; device: string }
+  | { kind: 'failed'; reason: string };
+
+/** ferry `settings_sync::DeviceSummary`; `written_at` is ms since the epoch. */
+export interface DeviceSummary {
+  device: string;
+  name: string;
+  os: string;
+  written_at: number;
+}
+
+/** ferry `settings_sync::FolderInfo`. */
+export interface FolderInfo {
+  exists: boolean;
+  devices: DeviceSummary[];
+  newer_format: boolean;
+}
+
+/** ferry `settings_sync::JoinMode`: whose values win when joining a folder that already holds settings. */
+export type JoinMode = 'use_folder' | 'use_this';
