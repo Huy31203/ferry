@@ -234,6 +234,7 @@
   "clipboard.pick_app": "Choose an app to ignore",
   "clip.auto_copy": "Copy results of drops and watched folders",
   "clip.auto_copy.help": "Put each result on the clipboard when it is ready, unless you have copied something since.",
+  "clip.error.cmyk": "CMYK JPEGs aren't supported yet — save as RGB first",
   "images.compression": "Compression quality",
   "images.compression.help": "Higher keeps more quality and saves less.",
   "images.adaptive": "Adaptive PNG/JPEG switching",
