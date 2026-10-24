@@ -15,9 +15,22 @@ export interface RailTool {
 
 /** In built-in order: the DOM order of the buttons in Card.svelte. */
 export const RAIL_TOOLS: RailTool[] = [
-  { id: 'downscale', label: 'svc.rail.tool.downscale', needsOriginal: true, compact: true },
-  { id: 'compression', label: 'svc.rail.tool.compression', needsOriginal: true, compact: false },
-  { id: 'crop', label: 'svc.rail.tool.crop', needsOriginal: true, compact: true },
+  // stream B: audio (downscale resizes the cover, compression is the bitrate; no crop or compare)
+  {
+    id: 'downscale',
+    label: 'svc.rail.tool.downscale',
+    needsOriginal: true,
+    compact: true,
+    applies: (card) => !card.audio || (card.audio.has_cover && card.dims_before !== null),
+  },
+  {
+    id: 'compression',
+    label: 'svc.rail.tool.compression',
+    needsOriginal: true,
+    compact: false,
+    applies: (card) => !card.audio || !card.audio.lossless,
+  },
+  { id: 'crop', label: 'svc.rail.tool.crop', needsOriginal: true, compact: true, applies: (card) => !card.audio },
   {
     id: 'restore',
     label: 'svc.rail.tool.restore',
@@ -25,7 +38,7 @@ export const RAIL_TOOLS: RailTool[] = [
     compact: true,
     applies: (card) => card.state.kind === 'done' && card.can_restore,
   },
-  { id: 'compare', label: 'svc.rail.tool.compare', needsOriginal: true, compact: false },
+  { id: 'compare', label: 'svc.rail.tool.compare', needsOriginal: true, compact: false, applies: (card) => !card.audio },
   { id: 'copy', label: 'svc.rail.tool.copy', needsOriginal: false, compact: true },
   {
     id: 'reveal',

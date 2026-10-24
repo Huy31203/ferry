@@ -145,3 +145,17 @@ describe('the hover hotkeys target', () => {
     expect(hoverTarget('a', [card({ kind: 'done' }, { output: null })], null, true)).toBeNull();
   });
 });
+
+// stream B: audio
+describe('audio cards', () => {
+  it('give cover downscale, bitrate, restore, copy and more', () => {
+    const a = card({ kind: 'done' }, {
+      can_restore: true,
+      format: 'mp3',
+      audio: { bitrate_before: 320, bitrate_after: 192, lossless: false, has_cover: true },
+    });
+    expect(railActions(a)).toEqual(['downscale', 'compression', 'restore', 'copy', 'more']);
+    expect(railActions({ ...a, audio: { ...a.audio!, has_cover: false, lossless: true } })).toEqual(['restore', 'copy', 'more']);
+    expect(railActions(a, true)).toEqual(['downscale', 'restore', 'copy', 'more']);
+  });
+});
