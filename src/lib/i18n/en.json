@@ -276,5 +276,8 @@
   "video.detail.speed": "{n}×",
   "video.detail.no_audio": "no audio",
   "video.note.hdr": "HDR colours flattened to SDR",
-  "video.note.hevc_as_h264": "Saved as H.264 — this computer has no HEVC encoder"
+  "video.note.hevc_as_h264": "Saved as H.264 — this computer has no HEVC encoder",
+  "video.menu.speed": "Change speed…",
+  "video.menu.mute": "Remove audio",
+  "video.menu.unmute": "Keep audio"
 }

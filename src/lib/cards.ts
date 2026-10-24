@@ -65,7 +65,7 @@ export function dragAllFiles(cards: JobUpdate[]): string[] {
 }
 
 /** A card tool that needs the keyboard (or, for the slider, Esc). */
-export type Tool = 'rename' | 'crop' | 'fit' | 'slider';
+export type Tool = 'rename' | 'crop' | 'fit' | 'slider' | 'speed'; // 'speed': stream A: video
 
 /** The one tool open in the stack, and the card it belongs to. */
 export interface OpenTool {

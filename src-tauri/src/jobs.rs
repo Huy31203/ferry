@@ -97,6 +97,21 @@ pub fn convert(app: &AppHandle, id: &JobId, format: Format, keep_both: bool) -> 
     }
 }
 
+// stream A: video
+/// "Remove audio" / "Keep audio" on a video card: flip the recipe's `mute`.
+pub fn toggle_mute(app: &AppHandle, id: &JobId) -> Result<(), String> {
+    let entry = idle_entry(app, id)?;
+    let mute = relock(&entry.job).edits.mute;
+    edit(
+        app,
+        id,
+        EditsPatch {
+            mute: Some(!mute),
+            ..EditsPatch::default()
+        },
+    )
+}
+
 /// Rename the card's file in its folder; the card keeps its state and sizes.
 /// `Err` is the inline message ("Name taken", …).
 pub fn rename(app: &AppHandle, id: &JobId, stem: &str) -> Result<(), String> {
@@ -327,6 +342,14 @@ fn deliver(
 fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // stream A: video (one video at a time, before taking a CPU permit)
+        let is_video = relock(&entry.job).is_video();
+        let _video_permit = if is_video {
+            let video_permits = app.state::<AppState>().video_permits.clone();
+            video_permits.acquire_owned().await.ok()
+        } else {
+            None
+        };
         let permits = app.state::<AppState>().permits.clone();
         let Ok(_permit) = permits.acquire_owned().await else {
             return;

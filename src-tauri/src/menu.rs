@@ -6,6 +6,7 @@
 use ferry_core::i18n::{t, tf};
 use ferry_core::job::{JobId, JobState, JobUpdate};
 use ferry_core::sniff::Format;
+use ferry_core::video;
 use serde::Serialize;
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewWindow, Wry};
@@ -37,12 +38,27 @@ pub enum Action {
     KeepBoth(Format),
     Restore,
     Close,
+    // stream A: video
+    Speed,
+    Mute,
 }
 
-const FORMATS: [Format; 4] = [Format::Png, Format::Jpeg, Format::Gif, Format::WebP];
+const FORMATS: [Format; 10] = [
+    Format::Png,
+    Format::Jpeg,
+    Format::Gif,
+    Format::WebP,
+    // stream A: video
+    Format::Mp4,
+    Format::Hevc,
+    Format::Av1,
+    Format::WebM,
+    Format::Mov,
+    Format::Mkv,
+];
 
 /// The actions without a value, by their id part.
-const NAMED: [(&str, Action); 13] = [
+const NAMED: [(&str, Action); 15] = [
     ("open", Action::Open),
     ("reveal", Action::Reveal),
     ("copy", Action::Copy),
@@ -56,6 +72,9 @@ const NAMED: [(&str, Action); 13] = [
     ("crop", Action::Crop),
     ("restore", Action::Restore),
     ("close", Action::Close),
+    // stream A: video
+    ("speed", Action::Speed),
+    ("mute", Action::Mute),
 ];
 
 impl Action {
@@ -63,8 +82,8 @@ impl Action {
     fn key(self) -> String {
         match self {
             Action::Scale(percent) => format!("scale-{percent}"),
-            Action::Convert(format) => format!("convert-{}", format.extension()),
-            Action::KeepBoth(format) => format!("keep_both-{}", format.extension()),
+            Action::Convert(format) => format!("convert-{}", format_key(format)),
+            Action::KeepBoth(format) => format!("keep_both-{}", format_key(format)),
             named => NAMED
                 .iter()
                 .find(|(_, a)| *a == named)
@@ -74,7 +93,7 @@ impl Action {
     }
 
     fn parse(key: &str) -> Option<Self> {
-        let format = |ext: &str| FORMATS.into_iter().find(|f| f.extension() == ext);
+        let format = |key: &str| FORMATS.into_iter().find(|f| format_key(*f) == key);
         match key.split_once('-') {
             Some(("scale", value)) => value.parse().ok().map(Action::Scale),
             Some(("convert", value)) => format(value).map(Action::Convert),
@@ -93,8 +112,21 @@ impl Action {
             Action::Compare => "compare",
             Action::Preview => "preview",
             Action::Close => "close",
+            // stream A: video
+            Action::Speed => "speed",
             _ => return None,
         })
+    }
+}
+
+// stream A: video
+/// A format's part of an item id: the serde name for video (`mp4` and `hevc`
+/// share an extension), the extension for images.
+fn format_key(f: Format) -> &'static str {
+    if f.is_video() {
+        video::format_id(f)
+    } else {
+        f.extension()
     }
 }
 
@@ -137,12 +169,28 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         | Action::Fit
         | Action::Crop
         | Action::KeepBoth(_) => card.can_edit,
+        // stream A: video
+        Action::Speed | Action::Mute => card.can_edit && card.video.is_some(),
     }
 }
 
 /// "Convert to ▸": PNG, JPEG, WebP, and GIF first on a card that started as a
 /// GIF (like the format bar).
 pub fn convert_formats(card: &JobUpdate) -> Vec<Format> {
+    // stream A: video (HEVC is hardware only: offered where an encoder exists)
+    if card.source_format.is_some_and(Format::is_video) {
+        let hevc = card.video.as_ref().is_some_and(|v| v.hevc_encoder);
+        return [
+            Format::Mp4,
+            Format::Hevc,
+            Format::Av1,
+            Format::WebM,
+            Format::Gif,
+        ]
+        .into_iter()
+        .filter(|&f| f != Format::Hevc || hevc)
+        .collect();
+    }
     let gif = (card.source_format == Some(Format::Gif)).then_some(Format::Gif);
     gif.into_iter()
         .chain([Format::Png, Format::Jpeg, Format::WebP])
@@ -210,7 +258,7 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
         .map(|&f| item(Action::KeepBoth(f), f.label().into(), None))
         .collect::<tauri::Result<Vec<_>>>()?;
 
-    Menu::with_items(
+    let menu = Menu::with_items(
         app,
         &[
             &item(Action::Open, t("menu.open"), None)?,
@@ -236,7 +284,19 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &item(Action::Close, t("card.close"), None)?,
         ],
-    )
+    )?;
+    // stream A: video (right after Crop)
+    if card.video.is_some() {
+        let mute = if card.edits.mute {
+            "video.menu.unmute"
+        } else {
+            "video.menu.mute"
+        };
+        let speed = item(Action::Speed, t("video.menu.speed"), None)?;
+        let mute = item(Action::Mute, t(mute), None)?;
+        menu.insert_items(&[&speed, &mute], 16)?;
+    }
+    Ok(menu)
 }
 
 /// Route card menu items. Other menus' items (the tray's) are not ours.
@@ -293,6 +353,8 @@ fn run(app: &AppHandle, id: JobId, action: Action) {
             Action::Convert(format) => jobs::convert(&app, &id, format, false),
             Action::KeepBoth(format) => jobs::convert(&app, &id, format, true),
             Action::Restore => jobs::restore(&app, &id),
+            // stream A: video
+            Action::Mute => jobs::toggle_mute(&app, &id),
             _ => Ok(()),
         };
         if let Err(e) = done {
@@ -319,7 +381,7 @@ mod tests {
         card
     }
 
-    const ALL: [Action; 16] = [
+    const ALL: [Action; 18] = [
         Action::Open,
         Action::Reveal,
         Action::Copy,
@@ -336,6 +398,8 @@ mod tests {
         Action::KeepBoth(Format::Jpeg),
         Action::Restore,
         Action::Close,
+        Action::Speed,
+        Action::Mute,
     ];
 
     #[test]
@@ -356,7 +420,9 @@ mod tests {
     fn a_finished_card_offers_everything_but_its_own_format_and_scale() {
         let card = done();
         for action in ALL {
-            assert!(enabled(&card, action), "{action:?}");
+            // Speed and Mute are for video cards only.
+            let video_only = matches!(action, Action::Speed | Action::Mute);
+            assert_eq!(enabled(&card, action), !video_only, "{action:?}");
         }
         assert!(!enabled(&card, Action::Convert(Format::Png)));
         assert!(enabled(&card, Action::KeepBoth(Format::Png)));
@@ -390,6 +456,83 @@ mod tests {
         card.can_edit = false;
         let on: Vec<Action> = ALL.into_iter().filter(|&a| enabled(&card, a)).collect();
         assert_eq!(on, [Action::Close]);
+    }
+
+    // stream A: video
+    /// A finished MP4 result with its original backed up.
+    fn video_card() -> JobUpdate {
+        let mut card = done();
+        card.format = Some(Format::Mp4);
+        card.source_format = Some(Format::Mp4);
+        card.output = Some("/tmp/clip.mp4".into());
+        card.video = Some(ferry_core::job::VideoMeta {
+            duration_ms: 5000,
+            codec: "H.264".into(),
+            fps: Some(30.0),
+            audio: true,
+            original: Some("/b/clip.mp4".into()),
+            original_duration_ms: 5000,
+            hevc_encoder: true,
+        });
+        card
+    }
+
+    #[test]
+    fn video_formats_get_distinct_menu_ids() {
+        let card = video_card();
+        for action in [
+            Action::Convert(Format::Mp4),
+            Action::Convert(Format::Hevc),
+            Action::KeepBoth(Format::Av1),
+            Action::Convert(Format::Gif),
+            Action::Speed,
+            Action::Mute,
+        ] {
+            assert_eq!(
+                parse_id(&item_id(&card.id, action)),
+                Some((card.id.clone(), action))
+            );
+        }
+        assert_ne!(
+            item_id(&card.id, Action::Convert(Format::Mp4)),
+            item_id(&card.id, Action::Convert(Format::Hevc))
+        );
+    }
+
+    #[test]
+    fn a_video_card_converts_to_video_targets_and_gif() {
+        assert_eq!(
+            convert_formats(&video_card()),
+            [
+                Format::Mp4,
+                Format::Hevc,
+                Format::Av1,
+                Format::WebM,
+                Format::Gif
+            ]
+        );
+        assert!(!enabled(&video_card(), Action::Convert(Format::Mp4)));
+        assert!(enabled(&video_card(), Action::Convert(Format::Gif)));
+    }
+
+    #[test]
+    fn without_a_hevc_encoder_hevc_is_not_offered() {
+        let mut card = video_card();
+        card.video.as_mut().unwrap().hevc_encoder = false;
+        assert_eq!(
+            convert_formats(&card),
+            [Format::Mp4, Format::Av1, Format::WebM, Format::Gif]
+        );
+    }
+
+    #[test]
+    fn speed_and_mute_are_for_video_cards_with_their_original() {
+        assert!(enabled(&video_card(), Action::Speed) && enabled(&video_card(), Action::Mute));
+        assert!(!enabled(&done(), Action::Speed) && !enabled(&done(), Action::Mute));
+        let mut card = video_card();
+        card.can_edit = false;
+        assert!(!enabled(&card, Action::Speed));
+        assert_eq!(Action::Speed.page(), Some("speed"));
     }
 
     #[test]

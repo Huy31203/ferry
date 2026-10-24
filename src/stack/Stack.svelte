@@ -19,6 +19,9 @@
     compression: 80,
     crop_sizes: [],
     hover_hotkeys: true,
+    // stream A: video
+    video_compression: 80,
+    speed_frames: 'keep',
   });
   let hovered = $state<string | null>(null);
   /** The button the pointer is on: its card (null for the Drag all bar) and its `data-action`. */
@@ -164,7 +167,7 @@
       listen('stack:pointer-leave', leave),
       listen<CardAction>('card:action', (event) => cardAction(event.payload)),
       listen<Settings>('settings:changed', (event) => {
-        const { floating, images } = event.payload;
+        const { floating, images, video } = event.payload;
         config = {
           corner: floating.corner,
           card_size: floating.card_size,
@@ -172,6 +175,9 @@
           compression: images.compression,
           crop_sizes: images.crop_sizes,
           hover_hotkeys: floating.hover_hotkeys,
+          // stream A: video
+          video_compression: video.compression,
+          speed_frames: video.speed_frames,
         };
       }),
       // A restored keep-both copy is gone, and its card goes with it.

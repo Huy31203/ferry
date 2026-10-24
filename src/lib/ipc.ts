@@ -84,7 +84,7 @@ export interface VideoMeta {
 /** Rust → stack: a menu item or hover key that ends in the page (`menu.rs`, `hover_keys.rs`). */
 export interface CardAction {
   id: string;
-  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close';
+  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close' | 'speed';
 }
 
 export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
@@ -98,6 +98,9 @@ export interface StackConfig {
   compression: number;
   crop_sizes: [number, number][];
   hover_hotkeys: boolean;
+  // stream A: video
+  video_compression: number;
+  speed_frames: 'keep' | 'drop';
 }
 
 export const isMac = navigator.userAgent.includes('Mac');
