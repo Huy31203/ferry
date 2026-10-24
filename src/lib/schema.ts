@@ -1,11 +1,12 @@
 import type { StringKey } from './i18n';
 
-export type PaneId = 'general' | 'clipboard' | 'images' | 'files' | 'floating';
+export type PaneId = 'general' | 'clipboard' | 'images' | 'videos' | 'files' | 'floating'; // 'videos': stream A: video
 
 export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'general', label: 'pane.general' },
   { id: 'clipboard', label: 'pane.clipboard' },
   { id: 'images', label: 'pane.images' },
+  { id: 'videos', label: 'video.pane' }, // stream A: video
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
 ];
@@ -19,7 +20,8 @@ export type Control =
   | { kind: 'extensions' }
   | { kind: 'apps' }
   | { kind: 'tray_style' }
-  | { kind: 'output'; converted: boolean }
+  | { kind: 'output'; converted: boolean; media?: 'video' }
+  | { kind: 'encoder' } // stream A: video
   | { kind: 'sizes' }
   | { kind: 'action'; action: 'open_backups' | 'open_work' | 'force_clean'; button: StringKey };
 
@@ -258,6 +260,102 @@ const all: Setting[] = [
     control: { kind: 'sizes' },
   },
 
+  // stream A: video
+  {
+    id: 'video_encoder',
+    pane: 'videos',
+    label: 'video.encoder',
+    help: 'video.encoder.help',
+    path: 'video.encoder',
+    control: { kind: 'encoder' },
+  },
+  {
+    id: 'video_compression',
+    pane: 'videos',
+    label: 'video.compression',
+    help: 'video.compression.help',
+    path: 'video.compression',
+    control: { kind: 'slider', min: 5, max: 100 },
+  },
+  {
+    id: 'video_convert_mov',
+    pane: 'videos',
+    label: 'video.convert_mov',
+    help: 'video.convert_mov.help',
+    path: 'video.convert_mov',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'video_audio_to_aac',
+    pane: 'videos',
+    label: 'video.audio_to_aac',
+    help: 'video.audio_to_aac.help',
+    path: 'video.audio_to_aac',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'video_remove_audio',
+    pane: 'videos',
+    label: 'video.remove_audio',
+    help: 'video.remove_audio.help',
+    path: 'video.remove_audio',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'video_fps_cap',
+    pane: 'videos',
+    label: 'video.fps_cap',
+    help: 'video.fps_cap.help',
+    path: 'video.fps_cap',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'off', label: 'video.fps_cap.off' },
+        { value: '24', label: 'video.fps_cap.24' },
+        { value: '30', label: 'video.fps_cap.30' },
+        { value: '60', label: 'video.fps_cap.60' },
+      ],
+    },
+  },
+  {
+    id: 'video_speed_frames',
+    pane: 'videos',
+    label: 'video.speed_frames',
+    help: 'video.speed_frames.help',
+    path: 'video.speed_frames',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'keep', label: 'video.speed.keep_frames' },
+        { value: 'drop', label: 'video.speed.drop_frames' },
+      ],
+    },
+  },
+  {
+    id: 'video_preserve_dates',
+    pane: 'videos',
+    label: 'video.preserve_dates',
+    help: 'video.preserve_dates.help',
+    path: 'video.preserve_dates',
+    control: { kind: 'switch' },
+  },
+  {
+    id: 'video_ignored_extensions',
+    pane: 'videos',
+    label: 'video.ignored_extensions',
+    help: 'video.ignored_extensions.help',
+    path: 'video.ignored_extensions',
+    control: { kind: 'extensions' },
+  },
+  {
+    id: 'video_max_size',
+    pane: 'videos',
+    label: 'video.max_size',
+    help: 'video.max_size.help',
+    path: 'video.max_size_mb',
+    control: { kind: 'number', min: 1, max: 100000, unit: SIZE_UNIT },
+  },
+
   {
     id: 'output_optimised',
     pane: 'files',
@@ -275,6 +373,24 @@ const all: Setting[] = [
     help: 'output.converted.help',
     path: 'images.output.converted',
     control: { kind: 'output', converted: true },
+  },
+  {
+    id: 'video_output_optimised',
+    pane: 'files',
+    group: 'video.group',
+    label: 'output.optimised',
+    help: 'video.output.optimised.help',
+    path: 'video.output.optimised',
+    control: { kind: 'output', converted: false, media: 'video' },
+  },
+  {
+    id: 'video_output_converted',
+    pane: 'files',
+    group: 'video.group',
+    label: 'output.converted',
+    help: 'video.output.converted.help',
+    path: 'video.output.converted',
+    control: { kind: 'output', converted: true, media: 'video' },
   },
 
   {

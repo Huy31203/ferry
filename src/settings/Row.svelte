@@ -5,6 +5,7 @@
   import type { Setting } from '../lib/schema';
   import type { OutputRule as Rule } from '../lib/settings';
   import Choice from './controls/Choice.svelte';
+  import EncoderPicker from './controls/EncoderPicker.svelte'; // stream A: video
   import ListEditor from './controls/ListEditor.svelte';
   import NumberField from './controls/NumberField.svelte';
   import OutputRule from './controls/OutputRule.svelte';
@@ -133,10 +134,13 @@
       <OutputRule
         value={value as Rule}
         converted={control.converted}
+        media={control.media}
         {disabled}
         labelledby={labelId}
         {onchange}
       />
+    {:else if control.kind === 'encoder'}
+      <EncoderPicker value={value as string} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'sizes'}
       <SizeList sizes={value as [number, number][]} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'tray_style'}

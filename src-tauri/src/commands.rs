@@ -241,6 +241,8 @@ pub fn output_preview(
     app: AppHandle,
     rule: OutputRule,
     converted: bool,
+    // stream A: video ("video" shows a clip instead of a screenshot)
+    media: Option<String>,
 ) -> Result<String, Vec<String>> {
     let kind = if converted {
         OutputKind::Converted
@@ -250,7 +252,12 @@ pub fn output_preview(
     let home = app.path().home_dir().unwrap_or_default();
     let work_dir = app.state::<AppState>().work_dir.clone();
     let today = chrono::Local::now().date_naive();
-    output::example(kind, &rule, &home, &work_dir, today)
+    let sample = if media.as_deref() == Some("video") {
+        &output::Sample::VIDEO
+    } else {
+        &output::Sample::IMAGE
+    };
+    output::example_for(kind, &rule, &home, &work_dir, today, sample)
 }
 
 /// Let the user pick the Specific folder; answered with `~` for the home
