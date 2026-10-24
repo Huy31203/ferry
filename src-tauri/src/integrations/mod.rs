@@ -1,7 +1,9 @@
 //! Stream H: handing a card's file to other apps (share, Open With, Edit with,
 //! Upload, shelves) and taking files in from Finder / Explorer.
 
+pub mod actions;
 pub mod launch;
+pub mod menu;
 
 use ferry_core::integrations::launch_paths;
 use tauri::AppHandle;
