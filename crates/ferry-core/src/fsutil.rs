@@ -4,9 +4,7 @@
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-#[cfg(any(target_os = "macos", test))]
 use std::sync::mpsc;
-#[cfg(any(target_os = "macos", test))]
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -57,6 +55,9 @@ fn replace_with(target: &Path, fill: impl FnOnce(&Path) -> io::Result<()>) -> io
         .and_then(|()| fs::rename(&tmp, &target));
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
+    } else {
+        // Every Ferry write is remembered, so watchers never take it for new.
+        crate::selfwrite::record(&target); // stream C
     }
     result
 }
@@ -113,7 +114,9 @@ pub fn set_times(path: &Path, times: &Times) -> io::Result<()> {
     OpenOptions::new()
         .write(true)
         .open(path)?
-        .set_times(file_times)
+        .set_times(file_times)?;
+    crate::selfwrite::refresh(path); // stream C
+    Ok(())
 }
 
 /// Give `to` the modified, accessed and (macOS, Windows) created times of `from`.
@@ -140,9 +143,8 @@ pub fn copy_xattrs(_from: &Path, _to: &Path) -> io::Result<()> {
 
 /// Run `work` on its own thread and stop waiting after `limit`. A blocked
 /// system call cannot be cancelled, so the thread is left to finish by itself.
-/// Only the macOS `copy_xattrs` calls it; the tests run it on every OS.
-#[cfg(any(target_os = "macos", test))]
-fn with_timeout<T: Send + 'static>(
+#[allow(dead_code)] // used by the watcher probe from the next commit
+pub(crate) fn with_timeout<T: Send + 'static>(
     limit: Duration,
     work: impl FnOnce() -> io::Result<T> + Send + 'static,
 ) -> io::Result<T> {
@@ -152,6 +154,32 @@ fn with_timeout<T: Send + 'static>(
     });
     rx.recv_timeout(limit)
         .unwrap_or_else(|_| Err(io::Error::new(io::ErrorKind::TimedOut, "timed out")))
+}
+
+/// Does `path` carry the extended attribute `name`? `false` on error, on a
+/// timeout and on every OS but macOS.
+#[cfg(target_os = "macos")]
+pub fn has_xattr(path: &Path, name: &std::ffi::CStr) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let (Ok(path), name) = (
+        std::ffi::CString::new(path.as_os_str().as_bytes()),
+        name.to_owned(),
+    ) else {
+        return false;
+    };
+    with_timeout(XATTR_TIMEOUT, move || {
+        // SAFETY: both pointers are NUL-terminated and live for the call; a null
+        // buffer with size 0 asks only for the length.
+        let len =
+            unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0, 0, 0) };
+        Ok(len >= 0)
+    })
+    .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn has_xattr(_path: &Path, _name: &std::ffi::CStr) -> bool {
+    false
 }
 
 #[cfg(target_os = "macos")]
