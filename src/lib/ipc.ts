@@ -66,6 +66,19 @@ export interface JobUpdate {
   note: string | null;
   source_format: Format | null;
   edit_hint: string | null;
+  // stream A: video
+  video: VideoMeta | null;
+}
+
+// stream A: video (mirrors ferry_core::job::VideoMeta)
+export interface VideoMeta {
+  duration_ms: number;
+  codec: string;
+  fps: number | null;
+  audio: boolean;
+  original: string | null;
+  original_duration_ms: number;
+  hevc_encoder: boolean;
 }
 
 /** Rust → stack: a menu item or hover key that ends in the page (`menu.rs`, `hover_keys.rs`). */

@@ -264,5 +264,17 @@
   "video.error.stalled": "ffmpeg stopped responding",
   "video.error.disk_full": "Not enough disk space to encode",
   "video.error.read": "Couldn't read this video",
-  "video.error.no_video": "No video track in {name}"
+  "video.error.no_video": "No video track in {name}",
+  "video.step.backup": "Backing up",
+  "video.step.reading": "Reading video",
+  "video.step.encode": "Encoding {codec}",
+  "video.step.encode_software": "Encoding {codec} (software)",
+  "video.step.gif": "Making GIF",
+  "video.step.progress": "{step} · {percent} %",
+  "video.step.eta": "{step} · {percent} % · {left} left",
+  "video.detail.fps": "{n} fps",
+  "video.detail.speed": "{n}×",
+  "video.detail.no_audio": "no audio",
+  "video.note.hdr": "HDR colours flattened to SDR",
+  "video.note.hevc_as_h264": "Saved as H.264 — this computer has no HEVC encoder"
 }
