@@ -156,6 +156,14 @@ pub fn decode_rgba(bytes: &[u8], format: Format) -> Result<Rgba, String> {
             let rgba = rgb.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
             Ok((w as u32, h as u32, rgba))
         }
+        // stream B: audio never reaches the image engine
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => Err("not an image".into()),
         Format::WebP => {
             let image = webp::Decoder::new(bytes)
                 .decode()

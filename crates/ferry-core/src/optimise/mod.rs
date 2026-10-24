@@ -135,6 +135,18 @@ pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             return Err(OptimiseError::Unsupported("video is not an image".into()));
         }
+        // stream B: audio never reaches the image engine
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => {
+            return Err(OptimiseError::Unsupported(
+                "audio goes through ffmpeg".into(),
+            ));
+        }
     };
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
