@@ -39,3 +39,8 @@ pub use self::windows::set_stack_key;
 pub use self::windows::{
     accent_rgb, app_identifier, hide, make_non_activating, show_without_focus,
 };
+
+// Stream H: integrations
+#[cfg(target_os = "macos")]
+#[path = "macos_services.rs"]
+pub mod services;
