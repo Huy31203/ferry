@@ -257,5 +257,10 @@
   "floating.follow_cursor": "Follow the cursor across screens",
   "floating.follow_cursor.help": "Show the cards on the screen the pointer is on.",
   "tray.force_clean": "Force clean working directory",
-  "error.pick_app": "Couldn't read that app's identifier"
+  "error.pick_app": "Couldn't read that app's identifier",
+  "video.error.ffmpeg_missing": "ffmpeg missing — reinstall Ferry",
+  "video.error.spawn": "ffmpeg could not start — reinstall Ferry",
+  "video.error.encode": "Couldn't encode the video — see Details",
+  "video.error.stalled": "ffmpeg stopped responding",
+  "video.error.disk_full": "Not enough disk space to encode"
 }

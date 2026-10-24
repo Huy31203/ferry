@@ -1150,6 +1150,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "webp",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
