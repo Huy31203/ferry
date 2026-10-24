@@ -1,16 +1,18 @@
 //! The three global hotkeys (spec §3, §5.1, §5.3). A hotkey another app already
 //! owns is logged and left out of its tray item; the app keeps running (§6).
 
+use std::sync::Mutex;
+
 use ferry_core::optimise::Level;
 use ferry_core::settings::{Hotkeys, Settings};
 use ferry_core::svc_settings::ShortcutSettings;
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tracing::{info, warn};
 
 use crate::state::AppState;
-use crate::{clipboard, tray};
+use crate::{clipboard, hover_keys, tray};
 
 #[derive(Debug, Clone, Copy)]
 enum Action {
@@ -26,40 +28,218 @@ pub struct Registered {
     pub aggressive: Option<String>,
 }
 
-pub fn register(app: &AppHandle) -> Registered {
-    let hotkeys = app
-        .state::<AppState>()
-        .settings
-        .read()
-        .unwrap()
-        .hotkeys
-        .clone();
-    let mut registered = Registered::default();
-    for (accelerator, action) in [
-        (&hotkeys.optimise, Action::Optimise),
-        (&hotkeys.aggressive, Action::Aggressive),
-        (&hotkeys.cycle_state, Action::CycleState),
-    ] {
-        let result =
-            app.global_shortcut()
-                .on_shortcut(accelerator.as_str(), move |app, _, event| {
-                    if event.state == ShortcutState::Pressed {
-                        act(app, action);
-                    }
-                });
+/// What this module holds right now (svc, stream G).
+struct Runtime {
+    /// Global hotkeys that registered: (id, accelerator).
+    held: Vec<(&'static str, String)>,
+    /// Global hotkeys whose registration failed.
+    failed: Vec<&'static str>,
+    /// The Settings window is recording a shortcut: hold nothing.
+    suspended: bool,
+    /// The statuses at the last `reregister` while not suspended.
+    last: Vec<Status>,
+}
+
+static RUNTIME: Mutex<Runtime> = Mutex::new(Runtime {
+    held: Vec::new(),
+    failed: Vec::new(),
+    suspended: false,
+    last: Vec::new(),
+});
+
+fn action_for(id: &str) -> Option<Action> {
+    match id {
+        "optimise" => Some(Action::Optimise),
+        "aggressive" => Some(Action::Aggressive),
+        "cycle_state" => Some(Action::CycleState),
+        _ => None,
+    }
+}
+
+fn settings_of(app: &AppHandle) -> Settings {
+    app.state::<AppState>().settings.read().unwrap().clone()
+}
+
+/// Main thread: unregister what this module holds, register the global hotkeys
+/// the settings want, refresh the hover keys and the tray, and tell the page.
+pub fn reregister(app: &AppHandle) {
+    let settings = settings_of(app);
+    let mac = cfg!(target_os = "macos");
+    let shortcuts = app.global_shortcut();
+    // Not held across (un)registering: the tray reads `current` while it rebuilds.
+    let (held, suspended) = {
+        let mut runtime = RUNTIME.lock().unwrap();
+        (std::mem::take(&mut runtime.held), runtime.suspended)
+    };
+    for (id, accelerator) in held {
+        if let Err(e) = shortcuts.unregister(accelerator.as_str()) {
+            warn!(%accelerator, id, "hotkey not unregistered: {e}");
+        }
+    }
+    let mut now = Vec::new();
+    let mut failed = Vec::new();
+    for (id, accelerator) in wanted(&settings, Group::Global, suspended, mac) {
+        let Some(action) = action_for(id) else {
+            continue;
+        };
+        let result = shortcuts.on_shortcut(accelerator.as_str(), move |app, _, event| {
+            if event.state == ShortcutState::Pressed {
+                act(app, action);
+            }
+        });
         match result {
             Ok(()) => {
                 info!(%accelerator, ?action, "hotkey registered");
-                match action {
-                    Action::Optimise => registered.optimise = Some(accelerator.clone()),
-                    Action::Aggressive => registered.aggressive = Some(accelerator.clone()),
-                    Action::CycleState => {}
-                }
+                now.push((id, accelerator));
             }
-            Err(e) => warn!(%accelerator, ?action, "hotkey not registered: {e}"),
+            Err(e) => {
+                warn!(%accelerator, ?action, "hotkey not registered: {e}");
+                failed.push(id);
+            }
         }
     }
-    registered
+    {
+        let mut runtime = RUNTIME.lock().unwrap();
+        runtime.held = now;
+        runtime.failed = failed;
+    }
+    hover_keys::refresh(app);
+    if !suspended {
+        let statuses = statuses(&settings);
+        RUNTIME.lock().unwrap().last = statuses;
+    }
+    tray::rebuild(app);
+    let _ = app.emit("svc:hotkeys", ());
+}
+
+/// Main thread: while the Settings window records a shortcut, Ferry holds none
+/// of its own, so the chord reaches the field instead of triggering an action.
+pub fn suspend(app: &AppHandle, on: bool) {
+    {
+        let mut runtime = RUNTIME.lock().unwrap();
+        if runtime.suspended == on {
+            return;
+        }
+        runtime.suspended = on;
+    }
+    hover_keys::set_suspended(app, on);
+    reregister(app);
+}
+
+/// The registered global accelerators, for the tray's labels.
+pub fn current() -> Registered {
+    let runtime = RUNTIME.lock().unwrap();
+    let find = |id: &str| {
+        runtime
+            .held
+            .iter()
+            .find(|(held, _)| *held == id)
+            .map(|(_, accelerator)| accelerator.clone())
+    };
+    Registered {
+        optimise: find("optimise"),
+        aggressive: find("aggressive"),
+    }
+}
+
+/// The accelerator to show beside a card menu item; `None` when the key is
+/// off, blocked, or hover hotkeys are off.
+pub fn hover_accelerator(app: &AppHandle, id: &str) -> Option<String> {
+    let settings = settings_of(app);
+    if !settings.floating.hover_hotkeys || !is_enabled(&settings, id) {
+        return None;
+    }
+    let chord = accelerator(&settings, id)?;
+    check(&settings, id, &chord, cfg!(target_os = "macos"))
+        .problem
+        .is_none()
+        .then_some(chord)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyState {
+    Registered,
+    /// A valid hover key: held only while the pointer rests on a card.
+    Ready,
+    Off,
+    Failed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Status {
+    pub id: &'static str,
+    pub group: Group,
+    pub accelerator: Option<String>,
+    pub enabled: bool,
+    pub state: KeyState,
+    pub problem: Option<Problem>,
+}
+
+fn statuses(settings: &Settings) -> Vec<Status> {
+    let mac = cfg!(target_os = "macos");
+    let (held, failed) = {
+        let runtime = RUNTIME.lock().unwrap();
+        (runtime.held.clone(), runtime.failed.clone())
+    };
+    let hover_failed = hover_keys::failed();
+    BINDINGS
+        .iter()
+        .map(|&(id, group)| {
+            let chord = accelerator(settings, id);
+            let enabled = is_enabled(settings, id);
+            let problem = match &chord {
+                Some(chord) => check(settings, id, chord, mac).problem,
+                None => check(settings, id, "", mac).problem,
+            };
+            let state = if !enabled {
+                KeyState::Off
+            } else if problem.is_some() {
+                KeyState::Blocked
+            } else if group == Group::Global {
+                if failed.contains(&id) {
+                    KeyState::Failed
+                } else if held.iter().any(|(held, _)| *held == id) {
+                    KeyState::Registered
+                } else {
+                    KeyState::Ready
+                }
+            } else {
+                let mine = |accelerator: &String| match &chord {
+                    Some(chord) => accelerator == chord,
+                    None => DIGITS.contains(&accelerator.as_str()),
+                };
+                if hover_failed.iter().any(mine) {
+                    KeyState::Failed
+                } else {
+                    KeyState::Ready
+                }
+            };
+            Status {
+                id,
+                group,
+                accelerator: chord,
+                enabled,
+                state,
+                problem,
+            }
+        })
+        .collect()
+}
+
+/// Every binding's state for the Hotkeys pane. While suspended, the statuses
+/// from before recording started.
+pub fn status(app: &AppHandle) -> Vec<Status> {
+    let (suspended, last) = {
+        let runtime = RUNTIME.lock().unwrap();
+        (runtime.suspended, runtime.last.clone())
+    };
+    if suspended && !last.is_empty() {
+        last
+    } else {
+        statuses(&settings_of(app))
+    }
 }
 
 // svc (stream G): hotkey bindings and their conflict check.

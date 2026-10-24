@@ -13,6 +13,9 @@ mod state;
 mod tray;
 mod windows;
 
+// svc (stream G)
+mod svc_commands;
+
 use std::path::PathBuf;
 
 use ferry_core::i18n::t;
@@ -39,6 +42,13 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // svc: closing Settings mid-recording gives the hotkeys back
+        .on_window_event(|window, event| {
+            if window.label() == windows::SETTINGS && matches!(event, tauri::WindowEvent::Destroyed)
+            {
+                hotkeys::suspend(window.app_handle(), false);
+            }
+        })
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -77,6 +87,12 @@ pub fn run() {
             commands::card_hover,
             commands::output_preview,
             commands::pick_folder,
+            svc_commands::svc_hotkeys_status,
+            svc_commands::svc_hotkey_check,
+            svc_commands::svc_hotkey_set,
+            svc_commands::svc_hotkey_enable,
+            svc_commands::svc_hotkey_reset,
+            svc_commands::svc_hotkeys_suspend,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Ferry")
@@ -115,12 +131,12 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         gifsicle(),
     ));
     windows::create_stack(app)?;
-    let registered = hotkeys::register(app);
-    app.manage(registered);
+    hotkeys::reregister(app);
     tray::build(app)?;
     menu::init(app);
     clipboard::start(app);
     housekeeping(app);
+    svc_commands::setup(app);
     if let LoadStatus::Recovered { .. } = status {
         jobs::notice(app, t("error.settings_reset"));
     }
