@@ -144,7 +144,7 @@ if [ "$TRIPLE" = universal-apple-darwin ]; then
   arch -arm64 bash "$0" aarch64-apple-darwin
   arch -x86_64 bash "$0" x86_64-apple-darwin
   mkdir -p "$OUT_DIR"
-  lipo -create "$CACHE/x86_64-apple-darwin/ffmpeg" "$CACHE/aarch64-apple-darwin/ffmpeg" \
+  lipo -create "$CACHE/x86_64-apple-darwin/ffmpeg-bin" "$CACHE/aarch64-apple-darwin/ffmpeg-bin" \
     -output "$OUT_DIR/ffmpeg-universal-apple-darwin"
   if [ "$(lipo -archs "$OUT_DIR/ffmpeg-universal-apple-darwin")" != "x86_64 arm64" ]; then
     echo "the universal binary does not hold x86_64 and arm64" >&2
@@ -193,6 +193,7 @@ export PKG_CONFIG_PATH=""
 
 MINVER=""
 CMAKE_ARCH=()
+MESON_CROSS=()
 if [ "$APPLE" = 1 ]; then
   MINVER="-mmacosx-version-min=13.0"
   export CC="clang -arch $ARCH $MINVER"
@@ -201,6 +202,22 @@ if [ "$APPLE" = 1 ]; then
   export CXXFLAGS="-arch $ARCH $MINVER"
   export LDFLAGS="-arch $ARCH $MINVER"
   CMAKE_ARCH=(-DCMAKE_OSX_ARCHITECTURES="$ARCH" -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0)
+  # Homebrew's meson is arm64-only and runs natively even from the Rosetta shell, so it
+  # must be told the target CPU or it configures dav1d for arm64.
+  MESON_CPU=aarch64
+  [ "$ARCH" = x86_64 ] && MESON_CPU=x86_64
+  cat >"$WORK/meson-cross.ini" <<EOT
+[binaries]
+c = ['clang', '-arch', '$ARCH', '$MINVER']
+nasm = 'nasm'
+
+[host_machine]
+system = 'darwin'
+cpu_family = '$MESON_CPU'
+cpu = '$MESON_CPU'
+endian = 'little'
+EOT
+  MESON_CROSS=(--cross-file "$WORK/meson-cross.ini")
 fi
 
 fetch_common
@@ -228,8 +245,8 @@ cmake --build build --target install >/dev/null
 
 echo "== dav1d"
 fresh dav1d
-meson setup build --prefix="$PREFIX" --libdir=lib --default-library=static --buildtype=release \
-  -Denable_tools=false -Denable_tests=false >/dev/null
+meson setup build "${MESON_CROSS[@]}" --prefix="$PREFIX" --libdir=lib --default-library=static --buildtype=release \
+  -Denable_tools=false -Denable_tests=false
 ninja -C build install >/dev/null
 
 echo "== Opus"
