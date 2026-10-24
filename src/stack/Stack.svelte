@@ -83,8 +83,8 @@
     if (tool !== null && tool.kind !== 'slider') tool = null;
   }
 
-  // A menu item or hover key that ends here. M3c's open_compare and
-  // quick_preview reject until M3c is merged; the rejection is only logged.
+  // A menu item or hover key that ends here. open_compare and quick_preview
+  // reject when the card can't be shown (file gone, still running); that is only logged.
   function cardAction({ id, action }: CardAction) {
     const card = cards.find((c) => c.id === id);
     if (!card) return;

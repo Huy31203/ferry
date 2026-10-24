@@ -118,8 +118,8 @@ fn head_format(path: &Path) -> Option<Format> {
     sniff::sniff(&head)
 }
 
-/// The card's latest state. `Entry::last` follows a conversion or rename;
-/// `Entry::output` does not.
+/// The card's latest state (`Entry::last`): the window needs its sizes and
+/// backup as well as its current file.
 pub fn card(app: &AppHandle, id: &JobId) -> Result<JobUpdate, String> {
     let state = app.state::<AppState>();
     let entry = state
