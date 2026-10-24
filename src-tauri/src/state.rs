@@ -96,6 +96,9 @@ pub struct Entry {
     pub last: Mutex<JobUpdate>,
     /// The final card a re-run replaced, for when the re-run is cancelled.
     previous: Mutex<Option<JobUpdate>>,
+    /// The clipboard's sequence number when an auto-copied job was queued,
+    /// until its first run finishes.
+    auto_copy: Mutex<Option<u64>>,
 }
 
 impl Entry {
@@ -107,6 +110,7 @@ impl Entry {
             cancel: Mutex::new(CancelToken::new()),
             last: Mutex::new(last),
             previous: Mutex::new(None),
+            auto_copy: Mutex::new(None),
         }
     }
 
@@ -117,6 +121,15 @@ impl Entry {
     /// Call after anything that may move the job's file: a run, a restore, a rename.
     pub fn set_output(&self, path: PathBuf) {
         *self.output.lock().unwrap() = path;
+    }
+
+    pub fn set_auto_copy(&self, seq: u64) {
+        *self.auto_copy.lock().unwrap() = Some(seq);
+    }
+
+    /// `Some` once, then `None`: only a job's first run auto-copies.
+    pub fn take_auto_copy(&self) -> Option<u64> {
+        self.auto_copy.lock().unwrap().take()
     }
 
     pub fn is_busy(&self) -> bool {
@@ -388,6 +401,28 @@ mod tests {
             None
         );
         assert_eq!(jobs_with_outputs(&jobs, &[]), None);
+    }
+
+    #[test]
+    fn auto_copy_is_taken_once() {
+        let e = entry("/w/a.png", JobState::Queued);
+        assert_eq!(e.take_auto_copy(), None);
+        e.set_auto_copy(9);
+        assert_eq!(e.take_auto_copy(), Some(9));
+        assert_eq!(e.take_auto_copy(), None);
+    }
+
+    #[test]
+    fn an_auto_copy_never_replaces_a_later_copy() {
+        let mut log = ClipboardLog::default();
+        assert!(log.may_replace(4, 4));
+        log.wrote(
+            5,
+            Some(4),
+            ClipWrite::Files(vec![PathBuf::from("/w/a.png")]),
+        );
+        assert!(log.may_replace(4, 5), "same burst");
+        assert!(!log.may_replace(4, 6), "the user copied since");
     }
 
     #[test]

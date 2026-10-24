@@ -26,9 +26,22 @@ use crate::{platform, tray, windows::STACK};
 /// Returns false, starting nothing, when a queued or running job already
 /// writes the same file: two writers would share one temporary file.
 pub fn start(app: &AppHandle, job: Job, level: Level, source_seq: Option<u64>) -> bool {
+    start_entry(app, job, level, source_seq, None)
+}
+
+fn start_entry(
+    app: &AppHandle,
+    job: Job,
+    level: Level,
+    source_seq: Option<u64>,
+    auto_copy: Option<u64>,
+) -> bool {
     let state = app.state::<AppState>();
     let queued = job.update(JobState::Queued, None);
     let entry = Arc::new(Entry::new(job, source_seq, queued.clone()));
+    if let Some(seq) = auto_copy {
+        entry.set_auto_copy(seq);
+    }
     {
         let mut jobs = state.jobs.lock().unwrap();
         if output_busy(&jobs, &entry) {
@@ -352,6 +365,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     let id = job.id.clone();
     // Only the first run checks; a re-run is the user's explicit request.
     let source = entry.source_seq.lock().unwrap().take();
+    let auto = entry.take_auto_copy();
     let finished = job.run(
         level,
         &options,
@@ -369,7 +383,11 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     entry.set_output(job.output.clone());
     drop(job);
     match finished {
-        Some(f) => finish(app, entry, f.update, f.cause, Some(started)),
+        Some(f) => {
+            let result = f.update.state.clone();
+            finish(app, entry, f.update, f.cause, Some(started));
+            copy_after_run(app, entry, &result, source, auto);
+        }
         None => {
             info!(ms = started.elapsed().as_millis() as u64, "job cancelled");
             tray::refresh(app);
@@ -543,6 +561,55 @@ fn follow_rename(app: &AppHandle, id: &JobId, old: &Path, new: &Path) {
     match write_clipboard(&next, None) {
         Ok(seq) => log.rewrote(seq, next),
         Err(e) => warn!("could not update the clipboard after a rename: {e}"),
+    }
+}
+
+/// Like `start`, for a job that comes from a drop or a watched folder: when
+/// "Copy results of drops and watched folders" is on, its first result also goes
+/// on the clipboard, unless the user has copied something since it was queued.
+#[allow(dead_code, reason = "called by streams C and D")]
+pub fn start_auto_copied(app: &AppHandle, job: Job, level: Level) -> bool {
+    let on = app
+        .state::<AppState>()
+        .settings
+        .read()
+        .unwrap()
+        .clip
+        .auto_copy;
+    start_entry(app, job, level, None, on.then(platform::clipboard::seq))
+}
+
+/// A first run's result that the pipeline did not put on the clipboard, but
+/// should be there: auto-copy, or a clipboard result that joins the collection.
+fn copy_after_run(
+    app: &AppHandle,
+    entry: &Entry,
+    state: &JobState,
+    source: Option<u64>,
+    auto_copy: Option<u64>,
+) {
+    let accumulate = app
+        .state::<AppState>()
+        .settings
+        .read()
+        .unwrap()
+        .clipboard
+        .accumulate;
+    let (id, kind) = {
+        let job = relock(&entry.job);
+        (job.id.clone(), job.source)
+    };
+    if !clip::copy_after_run(
+        kind,
+        state,
+        source.is_some(),
+        accumulate,
+        auto_copy.is_some(),
+    ) {
+        return;
+    }
+    if let Err(e) = put_result(app, &id, None, &entry.output(), auto_copy.or(source)) {
+        warn!("could not copy the result: {e}");
     }
 }
 
