@@ -116,6 +116,19 @@ pub fn shelves(app: &AppHandle) -> Vec<AppRef> {
     merge_apps(found, &configured)
 }
 
+/// Send the card's file with AirDrop (macOS).
+#[cfg(target_os = "macos")]
+pub fn airdrop(app: &AppHandle, id: &JobId) -> Result<(), String> {
+    let path = output(app, id)?;
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Err(reason) = platform::share::airdrop(&[path]) {
+            jobs::notice(&handle, reason);
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// Ferry's own id in the Open With list, to leave it out.
 pub fn own_id(app: &AppHandle) -> String {
     if cfg!(target_os = "macos") {

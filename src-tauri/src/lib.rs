@@ -100,6 +100,8 @@ pub fn run() {
             commands::card_hover,
             commands::output_preview,
             commands::pick_folder,
+            // Stream H: integrations
+            integrations::commands::card_share,
             // Stream D: drop-batch
             drop_batch::batch::batch_ready,
             drop_batch::batch::batch_pick_files,

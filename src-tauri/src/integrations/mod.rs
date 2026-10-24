@@ -2,6 +2,7 @@
 //! Upload, shelves) and taking files in from Finder / Explorer.
 
 pub mod actions;
+pub mod commands;
 pub mod launch;
 pub mod menu;
 
