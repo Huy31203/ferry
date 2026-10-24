@@ -1,5 +1,6 @@
 import type { StringKey } from './i18n';
 import type { HotkeyId } from './svc';
+import { shareSettings } from './schema.share'; // stream H
 
 export type PaneId =
   | 'general'
@@ -11,6 +12,7 @@ export type PaneId =
   | 'floating'
   | 'drop' // stream D
   | 'watch' // stream C
+  | 'sharing' // stream H
   | 'hotkeys' // svc
   | 'about'; // svc
 
@@ -24,6 +26,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'floating', label: 'pane.floating' },
   { id: 'drop', label: 'drop.pane' }, // stream D
   { id: 'watch', label: 'watch.pane' }, // stream C
+  { id: 'sharing', label: 'share.pane' }, // stream H
   { id: 'hotkeys', label: 'svc.pane.hotkeys' }, // svc
   { id: 'about', label: 'svc.pane.about' }, // svc
 ];
@@ -48,7 +51,10 @@ export type Control =
   | { kind: 'update' }
   // stream C
   | { kind: 'capture_dirs' }
-  | { kind: 'watch_folders' };
+  | { kind: 'watch_folders' }
+  // stream H
+  | { kind: 'app' }
+  | { kind: 'app_list' };
 
 export interface Setting {
   id: string;
@@ -892,6 +898,7 @@ const all: Setting[] = [
     control: { kind: 'watch_folders' },
     wide: true,
   },
+  ...shareSettings, // stream H
 ];
 
 /** The settings to show on this OS. */

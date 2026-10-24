@@ -8,6 +8,12 @@ export interface OutputRule {
 }
 
 /** Mirrors ferry_core::settings::Settings (serde snake_case). Unknown fields from a newer file ride along untouched. */
+// Stream H: integrations
+export interface AppRef {
+  id: string;
+  name: string;
+}
+
 export interface Settings {
   version: number;
   general: {
@@ -56,6 +62,12 @@ export interface Settings {
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
   /** Stream C: mirrors ferry_core::settings::Watch. */
   watch: Watch;
+  // Stream H: integrations
+  share: {
+    edit_with: { image: AppRef | null; video: AppRef | null; audio: AppRef | null; pdf: AppRef | null };
+    uploader: AppRef | null;
+    shelf_apps: AppRef[];
+  };
   clip: { auto_copy: boolean };
   video: VideoSettings;
   // Stream D

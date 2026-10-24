@@ -32,14 +32,17 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSColor", "NSColorSpace", "NSEvent"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString", "NSURL", "NSBundle", "NSUserDefaults"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSColor", "NSColorSpace", "NSEvent", "NSApplication", "NSBitmapImageRep", "NSImage", "NSImageRep", "NSResponder", "NSSharingService", "NSView"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString", "NSURL", "NSBundle", "NSUserDefaults", "NSDictionary", "NSGeometry", "NSError"] }
 objc2-quick-look-ui = { version = "0.3.2", default-features = false, features = ["std", "QLPreviewPanel", "QLPreviewItem", "objc2-app-kit"] }
 tauri-nspanel = "2.1"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = { version = "5.4.1", features = ["monitor", "std"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Com"] }
+# Stream H: integrations (Open With list, share UI)
+windows = { version = "0.62.2", features = ["ApplicationModel_DataTransfer", "Foundation", "Foundation_Collections", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-collections = "0.3.2"
 
 [dev-dependencies]
 tempfile = "3"

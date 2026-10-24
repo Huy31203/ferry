@@ -56,6 +56,7 @@ export const sample: Settings = {
   backups: { retention_days: 7 },
   hotkeys: { optimise: 'Ctrl+Shift+C', aggressive: 'Ctrl+Shift+A', cycle_state: 'Ctrl+Shift+P' },
   watch: { captures: { screenshots: false, recordings: false, show_results: true }, folders: [] },
+  share: { edit_with: { image: null, video: null, audio: null, pdf: null }, uploader: null, shelf_apps: [] },
   clip: { auto_copy: false },
   video: {
     encoder: 'fast',
