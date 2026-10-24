@@ -1,5 +1,6 @@
 import { t } from './i18n';
 import type { Edits, EditsPatch, Format, JobUpdate, Size } from './ipc';
+import { isVideo } from './video'; // stream A: video
 
 /** A Compression stop: an encoder quality 5–100, or Extreme (aggressive at quality 5). */
 export type Quality = number | 'extreme';
@@ -141,11 +142,31 @@ export interface FormatChoice {
   firstFrame: boolean;
 }
 
-const FORMAT_LABELS: Record<Format, string> = { png: 'PNG', jpeg: 'JPEG', gif: 'GIF', webp: 'WebP' };
+const FORMAT_LABELS: Record<Format, string> = {
+  png: 'PNG',
+  jpeg: 'JPEG',
+  gif: 'GIF',
+  webp: 'WebP',
+  // stream A: video
+  mp4: 'MP4',
+  hevc: 'HEVC',
+  av1: 'AV1',
+  webm: 'WebM',
+  mov: 'MOV',
+  mkv: 'MKV',
+};
 
 /** PNG · JPEG · WebP, with GIF first on a card that started as a GIF. */
 export function formatChoices(card: JobUpdate): FormatChoice[] {
   const source = card.source_format ?? card.format;
+  // stream A: video (HEVC is hardware only: a chip where an encoder exists, or where the card already is HEVC)
+  if (isVideo(source)) {
+    const hevc = card.video?.hevc_encoder || card.format === 'hevc';
+    const targets: Format[] = ['mp4', 'hevc', 'av1', 'webm', 'gif'];
+    return targets
+      .filter((format) => format !== 'hevc' || hevc)
+      .map((format) => ({ format, label: FORMAT_LABELS[format], current: card.format === format, firstFrame: false }));
+  }
   const formats: Format[] = source === 'gif' ? ['gif', 'png', 'jpeg', 'webp'] : ['png', 'jpeg', 'webp'];
   return formats.map((format) => ({
     format,

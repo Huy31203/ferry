@@ -20,6 +20,15 @@ pub enum Level {
     Aggressive,
 }
 
+// stream F: pipelines
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Encoder {
+    Fast,
+    Small,
+    VisuallyLossless,
+}
+
 #[derive(Debug, Clone)]
 pub struct OptimiseOptions {
     pub level: Level,
@@ -122,6 +131,10 @@ pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u
         Format::Jpeg => jpeg::optimise(input, o)?,
         Format::WebP => webp::optimise(input, o)?,
         Format::Gif => gif::optimise(input, o)?,
+        // stream A: video
+        Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
+            return Err(OptimiseError::Unsupported("video is not an image".into()));
+        }
     };
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
@@ -140,6 +153,14 @@ mod tests {
             compression,
             ..OptimiseOptions::default()
         }
+    }
+
+    #[test]
+    fn video_formats_are_not_image_encoders() {
+        assert!(matches!(
+            encode(b"x", Format::Mp4, &OptimiseOptions::default()),
+            Err(OptimiseError::Unsupported(_))
+        ));
     }
 
     #[test]

@@ -86,6 +86,27 @@ pub fn resolve(
     }
 }
 
+/// The file the File handling pane's example uses.
+pub struct Sample {
+    pub file: &'static str,
+    pub converted_ext: &'static str,
+    pub dims: (u32, u32),
+}
+
+impl Sample {
+    pub const IMAGE: Sample = Sample {
+        file: "shot.png",
+        converted_ext: "webp",
+        dims: (1920, 1080),
+    };
+    // stream A: video
+    pub const VIDEO: Sample = Sample {
+        file: "clip.mp4",
+        converted_ext: "webm",
+        dims: (1920, 1080),
+    };
+}
+
 /// The File handling pane's live example: where `~/Desktop/shot.png`
 /// (1920×1080) goes under `rule`, as a WebP when `kind` is Converted, with
 /// `~` for the home folder. `Err` lists the template's unknown tokens, when
@@ -97,6 +118,18 @@ pub fn example(
     work_dir: &Path,
     today: NaiveDate,
 ) -> Result<String, Vec<String>> {
+    example_for(kind, rule, home, work_dir, today, &Sample::IMAGE)
+}
+
+/// `example` for another sample file (a video on the Videos row).
+pub fn example_for(
+    kind: OutputKind,
+    rule: &OutputRule,
+    home: &Path,
+    work_dir: &Path,
+    today: NaiveDate,
+    sample: &Sample,
+) -> Result<String, Vec<String>> {
     if matches!(rule.location, Location::SameFolder | Location::Folder) {
         template::validate(&rule.template)?;
     }
@@ -105,15 +138,15 @@ pub fn example(
         converted: rule.clone(),
         ..Output::default()
     };
-    let source = home.join("Desktop").join("shot.png");
+    let source = home.join("Desktop").join(sample.file);
     let target = Target {
         source: &source,
         job: "example",
         ext: match kind {
-            OutputKind::Optimised => "png",
-            OutputKind::Converted => "webp",
+            OutputKind::Optimised => source.extension().and_then(|e| e.to_str()).unwrap_or(""),
+            OutputKind::Converted => sample.converted_ext,
         },
-        dims: (1920, 1080),
+        dims: sample.dims,
         kind,
         stem: None,
     };
@@ -349,5 +382,32 @@ mod tests {
             Err(vec!["%q".to_string()])
         );
         assert!(example_of(OutputKind::Optimised, &rule(Location::InPlace, "%q")).is_ok());
+    }
+
+    // stream A: video
+    #[test]
+    fn the_video_example_uses_a_clip() {
+        let of = |kind, rule: &OutputRule| {
+            example_for(
+                kind,
+                rule,
+                Path::new("/h"),
+                Path::new("/w"),
+                today(),
+                &Sample::VIDEO,
+            )
+        };
+        assert_eq!(
+            of(
+                OutputKind::Optimised,
+                &rule(Location::SameFolder, "%f_optimised.%e")
+            )
+            .unwrap(),
+            "~/Desktop/clip_optimised.mp4"
+        );
+        assert_eq!(
+            of(OutputKind::Converted, &rule(Location::InPlace, "%f.%e")).unwrap(),
+            "~/Desktop/clip.webm"
+        );
     }
 }

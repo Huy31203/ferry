@@ -9,7 +9,7 @@ pub mod smart;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::i18n::tf;
-use crate::optimise::{self, Level, OptimiseError, OptimiseOptions, gif};
+use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, gif};
 use crate::sniff::{self, Format};
 use geometry::Rect;
 use raster::Raster;
@@ -91,15 +91,32 @@ pub struct Edits {
     /// Bytes.
     pub fit_under: Option<u64>,
     pub level: Level,
+    // stream F: pipelines
+    /// `None`: the settings' encoder.
+    pub encoder: Option<Encoder>,
+    // stream A: video
+    pub speed: Option<Speed>,
+    pub mute: bool,
+}
+
+// stream A: video
+/// Playback speed: `percent` is 50..=400; 100 means no change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Speed {
+    pub percent: u16,
+    pub keep_frames: bool,
 }
 
 impl Edits {
-    /// Nothing but a level: Cycle 1's optimise rules apply.
+    /// Nothing but a level: Cycle 1's optimise rules apply. An encoder choice
+    /// does not count: a plain run with an encoder still follows never-worse.
     pub fn is_plain(&self) -> bool {
         !self.reshapes()
             && self.format.is_none()
             && self.compression.is_none()
             && self.fit_under.is_none()
+            && self.speed.is_none()
+            && !self.mute
     }
 
     /// Whether the pixels change size: the raster path.
@@ -145,6 +162,22 @@ impl Edits {
         if let Some(level) = patch.level {
             self.level = level;
         }
+        // stream F: pipelines
+        if let Some(encoder) = patch.encoder {
+            self.encoder = encoder;
+        }
+        // stream A: video
+        if let Some(speed) = patch.speed {
+            self.speed = speed
+                .map(|s| Speed {
+                    percent: s.percent.clamp(50, 400),
+                    ..s
+                })
+                .filter(|s| s.percent != 100);
+        }
+        if let Some(mute) = patch.mute {
+            self.mute = mute;
+        }
     }
 }
 
@@ -167,6 +200,13 @@ pub struct EditsPatch {
     #[serde(deserialize_with = "present")]
     pub fit_under: Option<Option<u64>>,
     pub level: Option<Level>,
+    // stream F: pipelines
+    #[serde(deserialize_with = "present")]
+    pub encoder: Option<Option<Encoder>>,
+    // stream A: video
+    #[serde(deserialize_with = "present")]
+    pub speed: Option<Option<Speed>>,
+    pub mute: Option<bool>,
 }
 
 /// A field that is in the JSON: `null` is `Some(None)`. Absent fields never
@@ -490,7 +530,10 @@ mod tests {
                 "format": "webp",
                 "compression": null,
                 "fit_under": null,
-                "level": "normal"
+                "level": "normal",
+                "encoder": null,
+                "speed": null,
+                "mute": false
             })
         );
     }
@@ -611,5 +654,76 @@ mod tests {
             apply(&testutil::png(60, 40), Format::Png, &edits, &o),
             Err(OptimiseError::Cancelled)
         ));
+    }
+
+    // stream A: video
+    #[test]
+    fn speed_is_clamped_and_normal_speed_is_none() {
+        let mut e = Edits::default();
+        let speed = |percent, keep_frames| EditsPatch {
+            speed: Some(Some(Speed {
+                percent,
+                keep_frames,
+            })),
+            ..Default::default()
+        };
+        e.merge(speed(1000, true));
+        assert_eq!(
+            e.speed,
+            Some(Speed {
+                percent: 400,
+                keep_frames: true
+            })
+        );
+        e.merge(speed(100, false));
+        assert_eq!(e.speed, None);
+        e.merge(speed(10, false));
+        assert_eq!(e.speed.map(|s| s.percent), Some(50));
+    }
+
+    #[test]
+    fn speed_and_mute_are_explicit_edits_but_an_encoder_is_not() {
+        for patch in [
+            EditsPatch {
+                speed: Some(Some(Speed {
+                    percent: 200,
+                    keep_frames: true,
+                })),
+                ..Default::default()
+            },
+            EditsPatch {
+                mute: Some(true),
+                ..Default::default()
+            },
+        ] {
+            let mut e = Edits::default();
+            e.merge(patch);
+            assert!(!e.is_plain());
+        }
+        let mut e = Edits::default();
+        e.merge(EditsPatch {
+            encoder: Some(Some(Encoder::Small)),
+            ..Default::default()
+        });
+        assert_eq!(e.encoder, Some(Encoder::Small));
+        assert!(e.is_plain());
+    }
+
+    #[test]
+    fn the_new_fields_read_from_card_json() {
+        let p: EditsPatch = serde_json::from_str(
+            r#"{"speed":{"percent":150,"keep_frames":false},"mute":true,"encoder":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            p.speed,
+            Some(Some(Speed {
+                percent: 150,
+                keep_frames: false
+            }))
+        );
+        assert_eq!((p.mute, p.encoder), (Some(true), Some(None)));
+        let old: Edits = serde_json::from_str(r#"{"scale":50}"#).unwrap(); // a Cycle 2 recipe
+        assert_eq!((old.speed, old.mute, old.encoder), (None, false, None));
     }
 }

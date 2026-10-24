@@ -32,6 +32,10 @@ pub struct AppState {
     pub recent: Mutex<VecDeque<JobUpdate>>,
     /// One permit per CPU, so a burst of copies cannot starve the machine.
     pub permits: Arc<Semaphore>,
+    // stream A: video
+    /// One video encodes at a time (consumer GPUs limit encode sessions, and
+    /// x264 and SVT-AV1 use every core themselves).
+    pub video_permits: Arc<Semaphore>,
     /// Held across every clipboard write, so the watcher never mistakes our own
     /// write for the user's.
     pub clipboard: Mutex<ClipboardLog>,
@@ -63,6 +67,8 @@ impl AppState {
             jobs: Mutex::new(HashMap::new()),
             recent: Mutex::new(VecDeque::new()),
             permits: Arc::new(Semaphore::new(workers)),
+            // stream A: video
+            video_permits: Arc::new(Semaphore::new(1)),
             clipboard: Mutex::new(ClipboardLog::default()),
             stack: Mutex::new(StackInbox::default()),
             tray_error: AtomicBool::new(false),
@@ -339,6 +345,21 @@ mod tests {
         let mut log = ClipboardLog::default();
         log.record(9, None);
         assert!(!log.may_replace(7, 9));
+    }
+
+    // stream A: video
+    #[test]
+    fn there_is_one_video_permit() {
+        let dir = std::env::temp_dir();
+        let state = AppState::new(
+            Settings::default(),
+            dir.join("s.json"),
+            dir.join("b"),
+            dir.join("w"),
+            dir.join("l"),
+            None,
+        );
+        assert_eq!(state.video_permits.available_permits(), 1);
     }
 
     #[test]

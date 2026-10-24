@@ -24,6 +24,7 @@ Visual Studio Build Tools on Windows.
 ```bash
 pnpm install
 pnpm sidecar          # builds src-tauri/binaries/gifsicle-<host-triple>
+pnpm sidecar:ffmpeg   # builds src-tauri/binaries/ffmpeg-<host-triple>
 pnpm tauri dev
 ```
 
@@ -32,5 +33,12 @@ Checks: `pnpm check && pnpm test && cargo test --workspace && cargo clippy --wor
 GIF tests run the real sidecar when `FERRY_GIFSICLE` points at it, for example
 `export FERRY_GIFSICLE="$PWD/src-tauri/binaries/gifsicle-$(rustc -vV | sed -n 's/^host: //p')"`.
 Without it they skip; CI always sets it.
+
+Video tests run the real ffmpeg sidecar when `FERRY_FFMPEG` points at it
+(`export FERRY_FFMPEG="$PWD/src-tauri/binaries/ffmpeg-$(rustc -vV | sed -n 's/^host: //p')"`).
+`pnpm sidecar:ffmpeg` builds ffmpeg from pinned sources; the first build takes about 30 to 45 minutes. On macOS install
+the tools first: `brew install nasm pkgconf meson ninja cmake`. The universal build (`scripts/build-ffmpeg.sh
+universal-apple-darwin`, used by CI) needs an Apple Silicon Mac; an Intel Mac builds x86_64 only. On Windows run it in
+an MSYS2 MINGW64 shell.
 
 Design: `docs/superpowers/specs/`. Requirements: `docs/requirements/`.

@@ -41,6 +41,31 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      - id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            src-tauri/binaries/ffmpeg-*
+            src-tauri/binaries/licenses
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'THIRD-PARTY-NOTICES.md') }}
+      - name: Build ffmpeg sidecar (macOS)
+        if: runner.os == 'macOS' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          softwareupdate --install-rosetta --agree-to-license || true
+          brew install nasm pkgconf meson ninja
+          bash scripts/build-ffmpeg.sh universal-apple-darwin
+      - if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git make diffutils mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-meson mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+      - name: Build ffmpeg sidecar (Windows)
+        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg.sh x86_64-pc-windows-msvc
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.target }}
@@ -85,3 +110,22 @@ jobs:
             and (["darwin-aarch64", "darwin-x86_64", "windows-x86_64"]
                  | all(. as $p | (($m.platforms[$p].signature // "") != "") and (($m.platforms[$p].url // "") != "")))' \
             manifest/latest.json
+
+  sources:
+    name: third-party sources
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect the corresponding source (GPL-3 section 6d)
+        run: |
+          bash scripts/build-gifsicle.sh x86_64-unknown-linux-gnu
+          bash scripts/build-ffmpeg.sh --sources "$RUNNER_TEMP/src"
+          cp -R scripts THIRD-PARTY-NOTICES.md target/gifsicle-build/gifsicle-1.98.tar.gz "$RUNNER_TEMP/src/"
+          tar -cJf "ferry-${GITHUB_REF_NAME}-third-party-sources.tar.xz" -C "$RUNNER_TEMP" src
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" ferry-*-third-party-sources.tar.xz --clobber
