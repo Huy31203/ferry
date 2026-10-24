@@ -7,6 +7,18 @@ import { sample } from './settings.fixture';
 describe('the list of settings', () => {
   const all = settingsFor(true);
 
+  it('has the Sharing pane with editors per type, the uploader and shelf apps', () => {
+    expect(all.filter((s) => s.pane === 'sharing').map((s) => s.path)).toEqual([
+      'share.edit_with.image',
+      'share.edit_with.video',
+      'share.edit_with.audio',
+      'share.edit_with.pdf',
+      'share.uploader',
+      'share.shelf_apps',
+    ]);
+    expect(panes.map((p) => p.id)).toContain('sharing');
+  });
+
   it('has unique ids', () => {
     const ids = all.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -2,8 +2,11 @@
   import { invoke } from '@tauri-apps/api/core';
   import { formatBytes } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
+  import type { AppRef } from '../lib/settings'; // stream H
   import type { Setting } from '../lib/schema';
   import type { OutputRule as Rule } from '../lib/settings';
+  import AppList from './controls/AppList.svelte'; // stream H
+  import AppPicker from './controls/AppPicker.svelte'; // stream H
   import Choice from './controls/Choice.svelte';
   import HotkeyRecorder from './controls/HotkeyRecorder.svelte';
   import EncoderPicker from './controls/EncoderPicker.svelte'; // stream A: video
@@ -163,6 +166,10 @@
       <SyncControl {disabled} labelledby={labelId} />
     {:else if control.kind === 'update'}
       <UpdatePanel />
+    {:else if control.kind === 'app'}
+      <AppPicker value={value as AppRef | null} {disabled} labelledby={labelId} {onchange} onerror={(why) => (outcome = why)} />
+    {:else if control.kind === 'app_list'}
+      <AppList items={value as AppRef[]} {disabled} labelledby={labelId} {onchange} onerror={(why) => (outcome = why)} />
     {:else if control.kind === 'action'}
       <button
         type="button"
