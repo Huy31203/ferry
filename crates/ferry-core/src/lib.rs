@@ -20,6 +20,7 @@ pub mod optimise;
 pub mod output;
 pub mod pipeline;
 pub mod run_state;
+pub mod selfwrite; // stream C
 pub mod settings;
 pub mod settings_sync;
 pub mod sidecar;
@@ -27,6 +28,7 @@ pub mod sniff;
 pub mod svc_settings;
 pub mod template;
 pub mod trigger;
+pub mod watch; // stream C
 pub mod workdir;
 
 // stream A: video

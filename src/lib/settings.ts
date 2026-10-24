@@ -54,6 +54,8 @@ export interface Settings {
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
+  /** Stream C: mirrors ferry_core::settings::Watch. */
+  watch: Watch;
   clip: { auto_copy: boolean };
   video: VideoSettings;
   // Stream D
@@ -68,6 +70,30 @@ export interface Settings {
   };
   results_list: { after_cards: number };
   audio: AudioSettings; // stream B: audio
+}
+
+/** Stream C: mirrors ferry_core::settings::WatchTypes. */
+export interface WatchTypes {
+  image: boolean;
+  video: boolean;
+  audio: boolean;
+  pdf: boolean;
+}
+
+/** Stream C: mirrors ferry_core::settings::WatchedFolder. */
+export interface WatchedFolder {
+  path: string;
+  types: WatchTypes;
+  show_results: boolean;
+  ignore: string[];
+  max_files_at_once: number;
+  paused: boolean;
+}
+
+/** Stream C: mirrors ferry_core::settings::Watch. */
+export interface Watch {
+  captures: { screenshots: boolean; recordings: boolean; show_results: boolean };
+  folders: WatchedFolder[];
 }
 
 // stream A: video

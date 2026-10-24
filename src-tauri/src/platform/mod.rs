@@ -39,3 +39,11 @@ pub use self::windows::set_stack_key;
 pub use self::windows::{
     accent_rgb, app_identifier, hide, make_non_activating, show_without_focus,
 };
+
+// ---- Stream C: capture folders ----
+#[cfg(target_os = "macos")]
+#[path = "macos_capture.rs"]
+pub mod capture;
+#[cfg(windows)]
+#[path = "windows_capture.rs"]
+pub mod capture;

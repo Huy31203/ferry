@@ -18,6 +18,7 @@ imagequant = "4.4"
 mozjpeg = { version = "0.10", default-features = false }
 # The same features mozjpeg already enables; named here for the decoder's error manager.
 mozjpeg-sys = { version = "2.2.3", default-features = false, features = ["unwinding"] }
+notify = "8.2.0"
 oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
