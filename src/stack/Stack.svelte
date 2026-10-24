@@ -6,9 +6,11 @@
   import type { CropFrame } from '../lib/edits';
   import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
+  import { isVideo } from '../lib/video'; // stream A: video
   import Card from './Card.svelte';
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
+  import SpeedPopover from './SpeedPopover.svelte'; // stream A: video
   import DragAllBar from './DragAllBar.svelte';
 
   let cards = $state<JobUpdate[]>([]);
@@ -75,7 +77,7 @@
 
   // A click elsewhere in the stack closes a popover (spec §5.3 "click-away").
   function clickAway(event: PointerEvent) {
-    if (tool === null || (tool.kind !== 'crop' && tool.kind !== 'fit')) return;
+    if (tool === null || (tool.kind !== 'crop' && tool.kind !== 'fit' && tool.kind !== 'speed')) return;
     const target = event.target as Element;
     if (target.closest('[data-popover]') || target.closest(`[data-action="${tool.kind}"]`)) return;
     tool = null;
@@ -246,7 +248,7 @@
         compact={config.card_size === 'compact'}
         {railRight}
         autoHideSecs={config.auto_hide_secs}
-        compression={config.compression}
+        compression={isVideo(card.format) ? config.video_compression : config.compression}
         tool={open}
         onclose={() => close(card.id)}
         ondrag={dragState}
@@ -263,6 +265,14 @@
         />
       {:else if open === 'fit'}
         <FitPopover {card} onapply={(edits) => apply(card.id, edits)} onclose={() => setTool(card.id, null)} />
+      {:else if open === 'speed'}
+        <!-- stream A: video -->
+        <SpeedPopover
+          {card}
+          framesDefault={config.speed_frames}
+          onapply={(edits) => apply(card.id, edits)}
+          onclose={() => setTool(card.id, null)}
+        />
       {/if}
     </div>
   {/each}

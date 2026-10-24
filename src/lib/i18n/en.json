@@ -279,5 +279,14 @@
   "video.note.hevc_as_h264": "Saved as H.264 — this computer has no HEVC encoder",
   "video.menu.speed": "Change speed…",
   "video.menu.mute": "Remove audio",
-  "video.menu.unmute": "Keep audio"
+  "video.menu.unmute": "Keep audio",
+  "video.speed.title": "Playback speed",
+  "video.speed.custom": "Custom",
+  "video.speed.custom_placeholder": "e.g. 1.75",
+  "video.speed.keep_frames": "Keep frames",
+  "video.speed.drop_frames": "Drop frames",
+  "video.speed.apply": "Apply",
+  "video.speed.reset": "Normal speed",
+  "video.speed.invalid": "Use 0.5 to 4",
+  "video.card.duration": "Duration {time}"
 }
