@@ -29,6 +29,11 @@ use video_job::VideoState;
 
 mod video_job;
 
+// ---- stream B: audio ----
+mod audio;
+use audio::AudioJob;
+pub use audio::AudioRunOptions;
+
 /// Puts an image on the clipboard: format, bytes and the working file holding them.
 pub type Deliver<'a> = &'a mut dyn FnMut(Format, &[u8], &Path) -> Result<(), String>;
 
@@ -72,6 +77,8 @@ pub struct RunOptions {
     /// for the start-up probe. Tests set `Some(Hardware::default())` for
     /// deterministic software encodes.
     pub hardware: Option<Hardware>,
+    // stream B: audio
+    pub audio: AudioRunOptions,
 }
 
 impl RunOptions {
@@ -95,6 +102,8 @@ impl RunOptions {
             // stream A: video
             video: settings.video.clone(),
             hardware: None,
+            // stream B: audio
+            audio: AudioRunOptions::new(settings),
         }
     }
 }
@@ -154,6 +163,8 @@ pub struct Job {
     twin: bool,
     // stream A: video
     video: Option<VideoState>,
+    // stream B: audio
+    audio: Option<AudioJob>,
 }
 
 /// A file job's result on disk (spec §4.4: one result per job).
@@ -294,6 +305,7 @@ impl Job {
             changed: false,
             twin: false,
             video: None,
+            audio: None,
         }
     }
 
@@ -303,6 +315,10 @@ impl Job {
         // stream A: video
         if let Some((container, len)) = video_job::video_container(path) {
             return Job::video_file(path, settings, container, len);
+        }
+        // stream B: audio
+        if let Some((format, len)) = audio::audio_container(path) {
+            return Job::audio_file(path, settings, format, len);
         }
         let file_name = path
             .file_name()
@@ -360,6 +376,7 @@ impl Job {
             changed: false,
             twin: false,
             video: None,
+            audio: None,
         })
     }
 
@@ -389,9 +406,11 @@ impl Job {
             before: self.before,
             after,
             // stream A: video
-            thumb_path: match &self.video {
-                Some(video) => video.thumb.clone(),
-                None => self.backup.clone(),
+            thumb_path: match (&self.video, &self.audio) {
+                (Some(video), _) => video.thumb.clone(),
+                // stream B: audio (the original's cover)
+                (None, Some(audio)) => audio.cover_file.clone(),
+                (None, None) => self.backup.clone(),
             },
             source: self.source,
             output: self.output.exists().then(|| self.output.clone()),
@@ -407,6 +426,8 @@ impl Job {
             state,
             // stream A: video
             video: self.video_meta(),
+            // stream B: audio
+            audio: self.audio.as_ref().map(|_| self.audio_card()),
         }
     }
 
@@ -460,14 +481,19 @@ impl Job {
         self.prior = Some((self.edits.clone(), self.level));
         self.edits.merge(patch);
         // stream A: video (a video can become a GIF; only its own targets are kept)
-        let cleared = match self.video {
-            Some(_) => matches!(
+        let cleared = match (&self.video, &self.audio) {
+            (Some(_), _) => matches!(
                 self.edits.format,
                 Some(f) if f == self.source_format || !video::is_target(f)
             ),
-            None => matches!(
+            // stream B: audio (the source format stays: "same format, ignore the rule")
+            (None, Some(_)) => matches!(
                 self.edits.format,
-                Some(f) if f == self.source_format || f == Format::Gif
+                Some(f) if !crate::audio::TARGETS.contains(&f)
+            ),
+            (None, None) => matches!(
+                self.edits.format,
+                Some(f) if f == self.source_format || f == Format::Gif || f.is_audio()
             ),
         };
         if cleared {
@@ -528,6 +554,7 @@ impl Job {
             changed: false,
             twin: true,
             video: self.video.clone(),
+            audio: self.audio.clone(),
         }
     }
 
@@ -585,6 +612,10 @@ impl Job {
         if self.video.is_some() {
             return self.run_video(o, backups, emit);
         }
+        // stream B: audio
+        if self.audio.is_some() {
+            return self.run_audio(o, backups, emit);
+        }
         let original = match self.original(backups) {
             Ok(bytes) => bytes,
             Err(e) => return Some(self.fail(tf("error.backup", &[("why", &describe(&e))]), e)),
@@ -602,6 +633,17 @@ impl Job {
                 true,
                 Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv,
             ) => "video.step.reading",
+            // stream B: audio never reaches the image engine
+            (
+                true,
+                Format::Mp3
+                | Format::M4a
+                | Format::Flac
+                | Format::Wav
+                | Format::Aiff
+                | Format::Ogg
+                | Format::Opus,
+            ) => "card.step.edit",
         });
         emit(self.update(
             JobState::Optimising {
@@ -684,6 +726,10 @@ impl Job {
         // stream A: video
         if self.video.is_some() {
             return self.restore_video(o);
+        }
+        // stream B: audio
+        if self.audio.is_some() {
+            return self.restore_audio(o);
         }
         let read = self
             .backup
@@ -1019,6 +1065,10 @@ impl Job {
         if self.video.is_some() {
             return self.video_detail();
         }
+        // stream B: audio
+        if self.audio.is_some() {
+            return self.audio_detail();
+        }
         let mut parts = Vec::new();
         match (self.dims, self.dims_after) {
             (Some((w, h)), Some((aw, ah))) => parts.push(format!("{w}×{h} → {aw}×{ah}")),
@@ -1062,6 +1112,8 @@ pub fn notice(reason: String) -> JobUpdate {
         edit_hint: None,
         // stream A: video
         video: None,
+        // stream B: audio
+        audio: None,
     }
 }
 
@@ -1217,6 +1269,24 @@ mod tests {
             now(),
         );
         (job, input)
+    }
+
+    // stream B: audio
+    #[test]
+    fn a_file_content_is_copied_not_read_into_memory() {
+        let env = Env::new();
+        let src = env.file("big.bin", &vec![7u8; 3_000_000]);
+        let target = env.file("t.bin", b"old");
+        let job = Job::file(
+            &env.file("a.png", &testutil::png(8, 8)),
+            &Settings::default(),
+            true,
+        )
+        .unwrap();
+        job.write_file(&target, Content::File(&src), &target, &options())
+            .unwrap();
+        assert_eq!(fs::read(&target).unwrap().len(), 3_000_000);
+        assert!(!target.with_file_name("t.bin.ferry-tmp").exists());
     }
 
     #[test]

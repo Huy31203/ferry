@@ -65,11 +65,13 @@ pub enum HotkeyPlan {
 /// Bytes in a settings megabyte; sizes are shown in decimal units too.
 pub const MB: u64 = 1_000_000;
 
-/// Lower-case, no leading dot, and `jpeg` / `jpe` count as `jpg`.
+/// Lower-case, no leading dot, `jpeg` / `jpe` count as `jpg` and `aif` / `aifc` as `aiff`.
 pub fn normalise_ext(ext: &str) -> String {
     let ext = ext.trim().trim_start_matches('.').to_lowercase();
     match ext.as_str() {
         "jpeg" | "jpe" => "jpg".into(),
+        // stream B: audio
+        "aif" | "aifc" => "aiff".into(),
         _ => ext,
     }
 }
@@ -295,6 +297,9 @@ mod tests {
             "Photo.JPE".rsplit('.').next().unwrap()
         ));
         assert!(!is_ignored_extension(&["png".into()], "jpg"));
+        // stream B: audio
+        assert_eq!(normalise_ext(".AIF"), "aiff");
+        assert_eq!(normalise_ext("aifc"), "aiff");
     }
 
     #[test]

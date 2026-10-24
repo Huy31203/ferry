@@ -9,7 +9,19 @@ export type JobState =
   | { kind: 'restored' };
 
 // stream A: video (the last six)
-export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv';
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv' | 'mp3' | 'm4a' | 'flac' | 'wav' | 'aiff' | 'ogg' | 'opus'; // stream B: audio (the last seven)
+
+// ---- stream B: audio ----
+export type Loudness = 'off' | 'streaming' | 'apple_music' | 'podcast' | 'broadcast';
+export type CoverPolicy = 'keep' | 'optimise' | 'downscale' | 'remove';
+
+/** Mirrors ferry_core::audio::AudioCard. */
+export interface AudioCard {
+  bitrate_before: number | null;
+  bitrate_after: number | null;
+  lossless: boolean;
+  has_cover: boolean;
+}
 
 /** Mirrors ferry_core::edit::Size (serde tag `kind`). */
 export type Size =
@@ -33,6 +45,10 @@ export interface Edits {
   // stream A: video
   speed: Speed | null;
   mute: boolean;
+  // stream B: audio
+  bitrate: number | null;
+  loudness: Loudness | null;
+  cover: CoverPolicy | null;
 }
 
 // stream A: video
@@ -68,6 +84,8 @@ export interface JobUpdate {
   edit_hint: string | null;
   // stream A: video
   video: VideoMeta | null;
+  // stream B: audio
+  audio: AudioCard | null;
 }
 
 // stream A: video (mirrors ferry_core::job::VideoMeta)

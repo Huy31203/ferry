@@ -6,6 +6,7 @@ export type PaneId =
   | 'clipboard'
   | 'images'
   | 'videos' // stream A: video
+  | 'audio' // stream B: audio
   | 'files'
   | 'floating'
   | 'drop' // stream D
@@ -17,6 +18,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'clipboard', label: 'pane.clipboard' },
   { id: 'images', label: 'pane.images' },
   { id: 'videos', label: 'video.pane' }, // stream A: video
+  { id: 'audio', label: 'audio.pane' }, // stream B: audio
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
   { id: 'drop', label: 'drop.pane' }, // stream D
@@ -33,7 +35,7 @@ export type Control =
   | { kind: 'extensions' }
   | { kind: 'apps' }
   | { kind: 'tray_style' }
-  | { kind: 'output'; converted: boolean; media?: 'video' }
+  | { kind: 'output'; converted: boolean; media?: 'video' | 'audio' }
   | { kind: 'encoder' } // stream A: video
   | { kind: 'sizes' }
   | { kind: 'action'; action: 'open_backups' | 'open_work' | 'force_clean'; button: StringKey }
@@ -393,6 +395,129 @@ const all: Setting[] = [
     control: { kind: 'number', min: 1, max: 100000, unit: SIZE_UNIT },
   },
 
+  // ---- stream B: audio ----
+  {
+    id: 'audio_out_wav',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.wav',
+    help: 'audio.outputs.help',
+    path: 'audio.outputs.wav',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_out_aiff',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.aiff',
+    path: 'audio.outputs.aiff',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_out_flac',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.flac',
+    path: 'audio.outputs.flac',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_out_mp3',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.mp3',
+    path: 'audio.outputs.mp3',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_out_m4a',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.m4a',
+    path: 'audio.outputs.m4a',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_out_ogg',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.ogg',
+    path: 'audio.outputs.ogg',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_out_opus',
+    pane: 'audio',
+    group: 'audio.group.formats',
+    label: 'audio.outputs.opus',
+    path: 'audio.outputs.opus',
+    control: { kind: 'select', options: [{ value: 'mp3', label: 'audio.format.mp3' }, { value: 'm4a', label: 'audio.format.m4a' }, { value: 'opus', label: 'audio.format.opus' }, { value: 'wav', label: 'audio.format.wav' }, { value: 'flac', label: 'audio.format.flac' }] },
+  },
+  {
+    id: 'audio_bitrate',
+    pane: 'audio',
+    label: 'audio.bitrate',
+    help: 'audio.bitrate.help',
+    path: 'audio.bitrate_kbps',
+    control: { kind: 'number', min: 32, max: 320, unit: 'audio.unit.kbps' },
+  },
+  {
+    id: 'audio_opus_bitrate',
+    pane: 'audio',
+    label: 'audio.opus_bitrate',
+    help: 'audio.opus_bitrate.help',
+    path: 'audio.opus_bitrate_kbps',
+    control: { kind: 'number', min: 16, max: 256, unit: 'audio.unit.kbps' },
+  },
+  {
+    id: 'audio_loudness',
+    pane: 'audio',
+    label: 'audio.loudness',
+    help: 'audio.loudness.help',
+    path: 'audio.loudness',
+    control: { kind: 'select', options: [{ value: 'off', label: 'audio.loudness.off' }, { value: 'streaming', label: 'audio.loudness.streaming' }, { value: 'apple_music', label: 'audio.loudness.apple_music' }, { value: 'podcast', label: 'audio.loudness.podcast' }, { value: 'broadcast', label: 'audio.loudness.broadcast' }] },
+  },
+  {
+    id: 'audio_cover',
+    pane: 'audio',
+    label: 'audio.cover',
+    help: 'audio.cover.help',
+    path: 'audio.cover',
+    control: { kind: 'select', options: [{ value: 'keep', label: 'audio.cover.keep' }, { value: 'optimise', label: 'audio.cover.optimise' }, { value: 'downscale', label: 'audio.cover.downscale' }, { value: 'remove', label: 'audio.cover.remove' }] },
+  },
+  {
+    id: 'audio_cover_shape',
+    pane: 'audio',
+    label: 'audio.cover_shape',
+    help: 'audio.cover_shape.help',
+    path: 'audio.cover_size.shape',
+    control: { kind: 'select', options: [{ value: 'square', label: 'audio.cover_shape.square' }, { value: 'long_edge', label: 'audio.cover_shape.long_edge' }] },
+  },
+  {
+    id: 'audio_cover_side',
+    pane: 'audio',
+    label: 'audio.cover_side',
+    help: 'audio.cover_side.help',
+    path: 'audio.cover_size.side',
+    control: { kind: 'number', min: 100, max: 3000, unit: 'audio.unit.px' },
+  },
+  {
+    id: 'audio_ignored_extensions',
+    pane: 'audio',
+    label: 'audio.ignored_extensions',
+    help: 'audio.ignored_extensions.help',
+    path: 'audio.ignored_extensions',
+    control: { kind: 'extensions' },
+  },
+  {
+    id: 'audio_max_size',
+    pane: 'audio',
+    label: 'audio.max_size',
+    help: 'audio.max_size.help',
+    path: 'audio.max_size_mb',
+    control: { kind: 'number', min: 1, max: 100000, unit: SIZE_UNIT },
+  },
+
   {
     id: 'output_optimised',
     pane: 'files',
@@ -428,6 +553,24 @@ const all: Setting[] = [
     help: 'video.output.converted.help',
     path: 'video.output.converted',
     control: { kind: 'output', converted: true, media: 'video' },
+  },
+  {
+    id: 'audio_output_optimised',
+    pane: 'files',
+    group: 'audio.group.files',
+    label: 'output.optimised',
+    help: 'output.optimised.help',
+    path: 'audio.output.optimised',
+    control: { kind: 'output', converted: false, media: 'audio' },
+  },
+  {
+    id: 'audio_output_converted',
+    pane: 'files',
+    group: 'audio.group.files',
+    label: 'output.converted',
+    help: 'output.converted.help',
+    path: 'audio.output.converted',
+    control: { kind: 'output', converted: true, media: 'audio' },
   },
 
   {

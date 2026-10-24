@@ -160,6 +160,7 @@ impl Job {
             changed: false,
             twin: false,
             video: Some(VideoState::default()),
+            audio: None,
         })
     }
 
