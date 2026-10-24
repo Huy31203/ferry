@@ -20,6 +20,22 @@ pub const XATTR_TIMEOUT: Duration = Duration::from_secs(5);
 /// refused with `PermissionDenied`, the same on every OS: a rename would replace
 /// it on macOS and Linux, and the user marked it read-only to keep it as it is.
 pub fn atomic_replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_with(target, |tmp| write_synced(tmp, bytes))
+}
+
+/// `atomic_replace`, but the new content is a copy of the file `from` (which
+/// stays where it is). For results too big to hold in memory.
+pub fn atomic_replace_from(target: &Path, from: &Path) -> io::Result<()> {
+    replace_with(target, |tmp| {
+        fs::copy(from, tmp)?;
+        // Opened for writing: Windows refuses to flush a read-only handle.
+        OpenOptions::new().write(true).open(tmp)?.sync_all()
+    })
+}
+
+/// The shared steps: symlink, read-only check, permissions, rename. `fill`
+/// writes the temporary file it is given.
+fn replace_with(target: &Path, fill: impl FnOnce(&Path) -> io::Result<()>) -> io::Result<()> {
     let target = if fs::symlink_metadata(target).is_ok_and(|m| m.is_symlink()) {
         fs::canonicalize(target)?
     } else {
@@ -32,7 +48,7 @@ pub fn atomic_replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
         ));
     }
     let tmp = temp_path(&target)?;
-    let result = write_synced(&tmp, bytes)
+    let result = fill(&tmp)
         .and_then(|()| match fs::metadata(&target) {
             // Keep the original's permissions (a 0600 file must not become 0644).
             Ok(meta) => fs::set_permissions(&tmp, meta.permissions()),
@@ -373,5 +389,55 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(fs::read(&target).unwrap(), b"old");
         assert!(!dir.path().join("locked.png.ferry-tmp").exists());
+    }
+
+    #[test]
+    fn replacing_from_a_file_copies_it_and_keeps_the_source_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (target, from) = (dir.path().join("a.mp4"), dir.path().join("new.mp4"));
+        fs::write(&target, b"old").unwrap();
+        fs::write(&from, b"new").unwrap();
+        atomic_replace_from(&target, &from).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(fs::read(&from).unwrap(), b"new");
+        assert!(!dir.path().join("a.mp4.ferry-tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_from_a_file_keeps_the_targets_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (target, from) = (dir.path().join("a.mp4"), dir.path().join("new.mp4"));
+        fs::write(&target, b"old").unwrap();
+        fs::write(&from, b"new").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        atomic_replace_from(&target, &from).unwrap();
+        let mode = fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn replacing_from_a_missing_file_leaves_the_target_and_no_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.mp4");
+        fs::write(&target, b"old").unwrap();
+        assert!(atomic_replace_from(&target, &dir.path().join("missing.mp4")).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(!dir.path().join("a.mp4.ferry-tmp").exists());
+    }
+
+    #[test]
+    fn replacing_from_a_file_refuses_a_read_only_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (target, from) = (dir.path().join("locked.mp4"), dir.path().join("new.mp4"));
+        fs::write(&target, b"old").unwrap();
+        fs::write(&from, b"new").unwrap();
+        let mut perms = fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&target, perms).unwrap();
+        let err = atomic_replace_from(&target, &from).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&target).unwrap(), b"old");
     }
 }

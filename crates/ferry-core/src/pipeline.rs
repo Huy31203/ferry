@@ -27,6 +27,26 @@ use crate::trigger::{MB, Skip, is_ignored_extension, normalise_ext};
 /// Puts an image on the clipboard: format, bytes and the working file holding them.
 pub type Deliver<'a> = &'a mut dyn FnMut(Format, &[u8], &Path) -> Result<(), String>;
 
+/// A result or an original: bytes in memory, or a file (a video is never read
+/// into memory).
+#[derive(Clone, Copy)]
+#[allow(dead_code)] // `File` is built by video jobs (Task 10)
+enum Content<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
+}
+
+/// What a clipboard branch says when it is handed a file.
+fn in_memory<'a>(content: Content<'a>) -> Result<&'a [u8], (String, String)> {
+    match content {
+        Content::Bytes(bytes) => Ok(bytes),
+        Content::File(_) => Err((
+            t("error.unexpected"),
+            "a clipboard result must be in memory".into(),
+        )),
+    }
+}
+
 /// Settings a run reads, taken when the run starts.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -588,14 +608,21 @@ impl Job {
                     tf("card.note.fit_missed", &[("size", &target)])
                 });
                 let after = bytes.len() as u64;
-                self.put(&bytes, format, &original, o, deliver)
-                    .map(|()| Some(after))
+                self.put(
+                    Content::Bytes(&bytes),
+                    format,
+                    Content::Bytes(&original),
+                    o,
+                    deliver,
+                )
+                .map(|()| Some(after))
             }
             None => {
                 self.dims_after = None;
                 self.note = None;
                 let replace = self.changed;
-                self.put_back(&original, replace, o, deliver).map(|()| None)
+                self.put_back(Content::Bytes(&original), replace, o, deliver)
+                    .map(|()| None)
             }
         };
         Some(match written {
@@ -620,7 +647,7 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return self.fail(t("error.backup_missing"), e),
         };
-        if let Err((reason, cause)) = self.put_back(&original, true, o, deliver) {
+        if let Err((reason, cause)) = self.put_back(Content::Bytes(&original), true, o, deliver) {
             return self.fail(reason, cause);
         }
         self.edits = Edits::default();
@@ -634,6 +661,11 @@ impl Job {
 
     /// The original bytes, backed up first on the first run.
     fn original(&mut self, backups: &Backups) -> io::Result<Vec<u8>> {
+        fs::read(self.backup_path(backups)?)
+    }
+
+    /// Where the original is stored, backing it up first on the first run.
+    fn backup_path(&mut self, backups: &Backups) -> io::Result<PathBuf> {
         if self.backup.is_none() {
             let stored = match self.source {
                 Source::Clipboard => {
@@ -654,7 +686,7 @@ impl Job {
             self.backup = Some(stored);
             self.pending = None;
         }
-        fs::read(self.backup.as_ref().expect("stored above"))
+        Ok(self.backup.clone().expect("stored above"))
     }
 
     /// Make `bytes`, in `format`, the job's one result. A file job's result
@@ -662,9 +694,9 @@ impl Job {
     /// back first (spec §4.4).
     fn put(
         &mut self,
-        bytes: &[u8],
+        result: Content,
         format: Format,
-        original: &[u8],
+        original: Content,
         o: &RunOptions,
         deliver: Deliver,
     ) -> Result<(), (String, String)> {
@@ -675,6 +707,7 @@ impl Job {
         };
         match self.source {
             Source::Clipboard => {
+                let bytes = in_memory(result)?;
                 let path = self.output.with_file_name(format!("{}.{ext}", self.name));
                 self.write_work_file(&path, bytes)?;
                 deliver(format, bytes, &self.output)
@@ -730,7 +763,7 @@ impl Job {
                         self.restore_source(original, o)?;
                     }
                 }
-                self.write_file(&path, bytes, &source, o)?;
+                self.write_file(&path, result, &source, o)?;
                 if trash_source && self.source_state != SourceState::Trashed {
                     // Only the original, which this job has not trashed yet.
                     let trashed = !source.exists() || (o.trash)(&source).is_ok();
@@ -759,13 +792,14 @@ impl Job {
     /// is taken back.
     fn put_back(
         &mut self,
-        original: &[u8],
+        original: Content,
         replace: bool,
         o: &RunOptions,
         deliver: Deliver,
     ) -> Result<(), (String, String)> {
         match self.source {
             Source::Clipboard => {
+                let original = in_memory(original)?;
                 let path = self
                     .output
                     .with_file_name(format!("{}.{}", self.name, self.source_ext));
@@ -839,7 +873,11 @@ impl Job {
     /// there, or, once it went to the Trash, at the same path if that is free.
     /// Something else may have taken the path; that file stays, and the
     /// original goes beside it (and the job follows it).
-    fn restore_source(&mut self, original: &[u8], o: &RunOptions) -> Result<(), (String, String)> {
+    fn restore_source(
+        &mut self,
+        original: Content,
+        o: &RunOptions,
+    ) -> Result<(), (String, String)> {
         let Some(mut source) = self.source_path.clone() else {
             return Ok(());
         };
@@ -860,13 +898,16 @@ impl Job {
     fn write_file(
         &self,
         path: &Path,
-        bytes: &[u8],
+        content: Content,
         source: &Path,
         o: &RunOptions,
     ) -> Result<(), (String, String)> {
         let folder = path.parent().unwrap_or(Path::new(""));
         fs::create_dir_all(folder)
-            .and_then(|()| fsutil::atomic_replace(path, bytes))
+            .and_then(|()| match content {
+                Content::Bytes(bytes) => fsutil::atomic_replace(path, bytes),
+                Content::File(from) => fsutil::atomic_replace_from(path, from),
+            })
             .map_err(|e| (tf("error.write", &[("dir", &shown(folder))]), e.to_string()))?;
         // Best effort: the content is safe; a lost tag or date is not worth an Error card.
         if let Some(backup) = &self.backup {
