@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::{edit, fsutil, template};
+use crate::{edit, fsutil, optimise::Encoder, template};
 
 pub const VERSION: u32 = 2;
 
@@ -23,6 +23,8 @@ pub struct Settings {
     pub floating: Floating,
     pub backups: Backups,
     pub hotkeys: Hotkeys,
+    // stream A: video
+    pub video: Video,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -225,6 +227,8 @@ impl Default for Settings {
             floating: Floating::default(),
             backups: Backups::default(),
             hotkeys: Hotkeys::default(),
+            // stream A: video
+            video: Video::default(),
             extra: Map::new(),
         }
     }
@@ -299,6 +303,99 @@ impl Default for Backups {
     }
 }
 
+// stream A: video settings
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeedFrames {
+    #[default]
+    Keep,
+    Drop,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FpsCap {
+    #[default]
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "24")]
+    Fps24,
+    #[serde(rename = "30")]
+    Fps30,
+    #[serde(rename = "60")]
+    Fps60,
+}
+
+impl FpsCap {
+    pub fn fps(self) -> Option<u32> {
+        match self {
+            FpsCap::Off => None,
+            FpsCap::Fps24 => Some(24),
+            FpsCap::Fps30 => Some(30),
+            FpsCap::Fps60 => Some(60),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Video {
+    pub encoder: Encoder,
+    /// 5 to 100, like the image setting.
+    pub compression: u8,
+    pub convert_mov: bool,
+    pub audio_to_aac: bool,
+    pub remove_audio: bool,
+    pub fps_cap: FpsCap,
+    pub speed_frames: SpeedFrames,
+    pub preserve_dates: bool,
+    pub ignored_extensions: Vec<String>,
+    pub max_size_mb: u32,
+    pub output: Output,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Output {
+    /// The default rules with both folders replaced.
+    pub fn with_folder(folder: &str) -> Output {
+        let defaults = Output::default();
+        Output {
+            optimised: OutputRule {
+                folder: folder.into(),
+                ..defaults.optimised
+            },
+            converted: OutputRule {
+                folder: folder.into(),
+                ..defaults.converted
+            },
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Default for Video {
+    fn default() -> Self {
+        Self {
+            encoder: Encoder::Fast,
+            compression: 80,
+            convert_mov: true,
+            audio_to_aac: false,
+            remove_audio: false,
+            fps_cap: FpsCap::Off,
+            speed_frames: SpeedFrames::Keep,
+            preserve_dates: true,
+            ignored_extensions: Vec::new(),
+            max_size_mb: 4000,
+            output: Output::with_folder(if cfg!(windows) {
+                "~/Videos/Ferry"
+            } else {
+                "~/Movies/Ferry"
+            }),
+            extra: Map::new(),
+        }
+    }
+}
+
 /// How `Settings::load` found the file.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LoadStatus {
@@ -355,24 +452,39 @@ impl Settings {
                 .filter(|item| !item.is_empty())
                 .collect();
         }
-        let defaults = Output::default();
-        for (rule, default) in [
-            (&mut self.images.output.optimised, &defaults.optimised),
-            (&mut self.images.output.converted, &defaults.converted),
-        ] {
-            if rule.template.trim().is_empty() || template::validate(&rule.template).is_err() {
-                rule.template = default.template.clone();
-            }
-            if rule.folder.trim().is_empty() {
-                rule.folder = default.folder.clone();
-            }
-        }
+        repair_output(&mut self.images.output, &Output::default());
         let side = 1..=edit::MAX_SIDE;
         self.images
             .crop_sizes
             .retain(|(w, h)| side.contains(w) && side.contains(h));
+        // stream A: video
+        self.video.compression = self.video.compression.clamp(5, 100);
+        self.video.max_size_mb = self.video.max_size_mb.max(1);
+        self.video.ignored_extensions = self
+            .video
+            .ignored_extensions
+            .iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect();
+        repair_output(&mut self.video.output, &Video::default().output);
         self.version = self.version.max(VERSION);
         self
+    }
+}
+
+/// An invalid or empty template, or an empty folder, goes back to the default.
+fn repair_output(out: &mut Output, defaults: &Output) {
+    for (rule, default) in [
+        (&mut out.optimised, &defaults.optimised),
+        (&mut out.converted, &defaults.converted),
+    ] {
+        if rule.template.trim().is_empty() || template::validate(&rule.template).is_err() {
+            rule.template = default.template.clone();
+        }
+        if rule.folder.trim().is_empty() {
+            rule.folder = default.folder.clone();
+        }
     }
 }
 
@@ -672,5 +784,80 @@ mod tests {
         );
         assert_eq!(s.images.output.converted.folder, defaults.converted.folder);
         assert_eq!(s.images.crop_sizes, [(1200, 628)]);
+    }
+
+    // stream A: video
+    #[test]
+    fn video_defaults_match_the_plan() {
+        let v = Settings::default().video;
+        assert_eq!(
+            (
+                v.encoder,
+                v.compression,
+                v.convert_mov,
+                v.audio_to_aac,
+                v.remove_audio
+            ),
+            (Encoder::Fast, 80, true, false, false)
+        );
+        assert_eq!(
+            (v.fps_cap, v.speed_frames, v.preserve_dates, v.max_size_mb),
+            (FpsCap::Off, SpeedFrames::Keep, true, 4000)
+        );
+        let folder = if cfg!(windows) {
+            "~/Videos/Ferry"
+        } else {
+            "~/Movies/Ferry"
+        };
+        assert_eq!(v.output.optimised.folder, folder);
+        assert_eq!(v.output.optimised.template, "%f_optimised.%e");
+        assert_eq!(v.output.converted.template, "%f.%e");
+    }
+
+    #[test]
+    fn a_file_without_a_video_section_loads_its_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, br#"{"version":2,"images":{"compression":60}}"#).unwrap();
+        let (s, status) = Settings::load(&path);
+        assert_eq!(status, LoadStatus::Loaded);
+        assert_eq!(s.images.compression, 60);
+        assert_eq!(s.video, Video::default());
+    }
+
+    #[test]
+    fn video_values_out_of_range_are_repaired() {
+        let mut s = Settings::default();
+        s.video.compression = 0;
+        assert_eq!(s.clone().sanitised().video.compression, 5);
+        s.video.compression = 250;
+        s.video.max_size_mb = 0;
+        s.video.output.optimised.template = "%q".into();
+        s.video.output.converted.folder = " ".into();
+        s.video.ignored_extensions = vec![" mov ".into(), "  ".into()];
+        let s = s.sanitised();
+        assert_eq!(s.video.compression, 100);
+        assert_eq!(s.video.max_size_mb, 1);
+        assert_eq!(s.video.output.optimised.template, "%f_optimised.%e");
+        assert_eq!(
+            s.video.output.converted.folder,
+            Video::default().output.converted.folder
+        );
+        assert_eq!(s.video.ignored_extensions, ["mov"]);
+    }
+
+    #[test]
+    fn the_fps_cap_reads_and_writes_as_text() {
+        assert_eq!(serde_json::to_string(&FpsCap::Fps30).unwrap(), "\"30\"");
+        assert_eq!(FpsCap::Fps60.fps(), Some(60));
+    }
+
+    #[test]
+    fn the_video_encoder_setting_reads_snake_case() {
+        let s: Settings =
+            serde_json::from_str(r#"{"video":{"encoder":"visually_lossless"}}"#).unwrap();
+        assert_eq!(s.video.encoder, Encoder::VisuallyLossless);
+        let s: Settings = serde_json::from_str(r#"{"video":{"encoder":"small"}}"#).unwrap();
+        assert_eq!(s.video.encoder, Encoder::Small);
     }
 }
