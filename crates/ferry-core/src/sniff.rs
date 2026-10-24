@@ -16,7 +16,18 @@ pub enum Format {
     WebM,
     Mov,
     Mkv,
+    // ---- stream B: audio ----
+    Mp3,
+    M4a,
+    Flac,
+    Wav,
+    Aiff,
+    Ogg,
+    Opus,
 }
+
+/// Bytes `Job::file` reads to sniff a file.
+pub const HEAD: usize = 64 * 1024;
 
 impl Format {
     /// File extension used when Ferry writes this format.
@@ -31,6 +42,14 @@ impl Format {
             Format::Av1 | Format::Mkv => "mkv",
             Format::WebM => "webm",
             Format::Mov => "mov",
+            // ---- stream B: audio ----
+            Format::Mp3 => "mp3",
+            Format::M4a => "m4a",
+            Format::Flac => "flac",
+            Format::Wav => "wav",
+            Format::Aiff => "aiff",
+            Format::Ogg => "ogg",
+            Format::Opus => "opus",
         }
     }
 
@@ -48,6 +67,14 @@ impl Format {
             Format::WebM => "WebM",
             Format::Mov => "MOV",
             Format::Mkv => "MKV",
+            // ---- stream B: audio ----
+            Format::Mp3 => "MP3",
+            Format::M4a => "M4A",
+            Format::Flac => "FLAC",
+            Format::Wav => "WAV",
+            Format::Aiff => "AIFF",
+            Format::Ogg => "Ogg",
+            Format::Opus => "Opus",
         }
     }
 
@@ -56,6 +83,21 @@ impl Format {
         matches!(
             self,
             Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv
+        )
+    }
+
+    // ---- stream B: audio ----
+    /// MP3, M4A, FLAC, WAV, AIFF, Ogg and Opus.
+    pub fn is_audio(self) -> bool {
+        matches!(
+            self,
+            Format::Mp3
+                | Format::M4a
+                | Format::Flac
+                | Format::Wav
+                | Format::Aiff
+                | Format::Ogg
+                | Format::Opus
         )
     }
 }
@@ -71,9 +113,75 @@ pub fn sniff(bytes: &[u8]) -> Option<Format> {
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some(Format::WebP)
     } else {
-        // stream A: video
-        sniff_video(bytes)
+        // stream B: audio (before video: an M4A is an `ftyp` file too)
+        sniff_audio(bytes).or_else(|| sniff_video(bytes))
     }
+}
+
+// ---- stream B: audio ----
+const AUDIO_BRANDS: [&[u8; 4]; 3] = [b"M4A ", b"M4B ", b"M4P "];
+/// Major brands of video files that list `M4A ` among their compatible ones.
+const VIDEO_MAJORS: [&[u8; 4]; 4] = [b"M4V ", b"M4VH", b"M4VP", b"qt  "];
+
+fn sniff_audio(bytes: &[u8]) -> Option<Format> {
+    let head = |range: std::ops::Range<usize>| bytes.get(range);
+    if matches!(head(0..4), Some(b"RIFF" | b"RF64" | b"BW64")) && head(8..12) == Some(b"WAVE") {
+        return Some(Format::Wav);
+    }
+    if head(0..4) == Some(b"FORM") && matches!(head(8..12), Some(b"AIFF" | b"AIFC")) {
+        return Some(Format::Aiff);
+    }
+    if bytes.starts_with(b"fLaC") {
+        return Some(Format::Flac);
+    }
+    if bytes.starts_with(b"ID3") {
+        // A syncsafe size, then 10 more when a footer follows.
+        let size = bytes.get(6..10).map_or(0, |b| {
+            b.iter().fold(0, |n, &x| (n << 7) | usize::from(x & 0x7F))
+        });
+        let footer = if bytes.get(5).is_some_and(|f| f & 0x10 != 0) {
+            10
+        } else {
+            0
+        };
+        return match bytes.get(10 + size + footer..) {
+            Some(after) if after.starts_with(b"fLaC") => Some(Format::Flac),
+            _ => Some(Format::Mp3),
+        };
+    }
+    if bytes.starts_with(b"OggS") {
+        let payload = bytes.get(27 + usize::from(*bytes.get(26)?)..)?;
+        return if payload.starts_with(b"OpusHead") {
+            Some(Format::Opus)
+        } else if payload.starts_with(b"\x01vorbis") || payload.starts_with(b"\x7fFLAC") {
+            Some(Format::Ogg)
+        } else {
+            None
+        };
+    }
+    if head(4..8) == Some(b"ftyp") {
+        let size = (be32(bytes, 0)? as usize).min(bytes.len());
+        let major: &[u8] = bytes.get(8..12)?;
+        let compatible = bytes
+            .get(16..size)
+            .unwrap_or_default()
+            .chunks_exact(4)
+            .any(|brand| AUDIO_BRANDS.iter().any(|b| b.as_slice() == brand));
+        let audio_major = AUDIO_BRANDS.iter().any(|b| b.as_slice() == major);
+        let video_major = VIDEO_MAJORS.iter().any(|b| b.as_slice() == major);
+        return (audio_major || (compatible && !video_major)).then_some(Format::M4a);
+    }
+    // MPEG-1/2 Layer III frame sync (layer bits 00 are ADTS AAC).
+    let [b0, b1, b2, ..] = *bytes else {
+        return None;
+    };
+    (b0 == 0xFF
+        && b1 & 0xE0 == 0xE0
+        && (b1 >> 1) & 3 == 1
+        && (b1 >> 3) & 3 != 1
+        && b2 >> 4 != 0xF
+        && (b2 >> 2) & 3 != 3)
+        .then_some(Format::Mp3)
 }
 
 /// ISO BMFF brands that are video (`qt  ` is MOV). Others, such as HEIC, AVIF
@@ -129,6 +237,14 @@ pub fn is_animated(bytes: &[u8], format: Format) -> bool {
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             false
         }
+        // ---- stream B: audio ----
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => false,
     }
 }
 
@@ -257,6 +373,14 @@ pub fn dimensions(bytes: &[u8], format: Format) -> Option<(u32, u32)> {
         Format::WebP => webp_dimensions(bytes),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => None,
+        // ---- stream B: audio ----
+        Format::Mp3
+        | Format::M4a
+        | Format::Flac
+        | Format::Wav
+        | Format::Aiff
+        | Format::Ogg
+        | Format::Opus => None,
     }
 }
 
@@ -329,7 +453,7 @@ mod tests {
         );
         assert_eq!(sniff(&ftyp(b"heic")), None);
         assert_eq!(sniff(&ftyp(b"avif")), None);
-        assert_eq!(sniff(&ftyp(b"M4A ")), None);
+        assert_eq!(sniff(&ftyp(b"M4A ")), Some(Format::M4a)); // stream B: audio
         let ebml = |doc: &[u8]| {
             [
                 &[
@@ -436,7 +560,7 @@ mod tests {
 
     #[test]
     fn rejects_other_riff_files() {
-        assert_eq!(sniff(b"RIFF\x24\0\0\0WAVEfmt "), None);
+        assert_eq!(sniff(b"RIFF\x24\0\0\0RMIDdata"), None);
     }
 
     #[test]
@@ -490,5 +614,91 @@ mod tests {
             assert!(!gif_is_complete(&full[..cut]), "cut at {cut}");
         }
         assert!(!gif_is_complete(b"not a gif"));
+    }
+
+    // ---- stream B: audio ----
+    fn ftyp(major: &[u8; 4], compat: &[&[u8; 4]]) -> Vec<u8> {
+        let size = 16 + 4 * compat.len();
+        let mut b = (size as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(b"ftyp");
+        b.extend_from_slice(major);
+        b.extend_from_slice(&[0, 0, 2, 0]);
+        for c in compat {
+            b.extend_from_slice(*c);
+        }
+        b
+    }
+
+    fn ogg(packet: &[u8]) -> Vec<u8> {
+        let mut b = b"OggS\0\x02".to_vec();
+        b.extend_from_slice(&[0; 20]);
+        b.push(1);
+        b.push(packet.len() as u8);
+        b.extend_from_slice(packet);
+        b
+    }
+
+    #[test]
+    fn detects_each_audio_container() {
+        assert_eq!(
+            sniff(&crate::testutil::wav_tone(&[(0.01, 0.5)], 8000, 1)),
+            Some(Format::Wav)
+        );
+        assert_eq!(sniff(b"RF64\xff\xff\xff\xffWAVEds64"), Some(Format::Wav));
+        assert_eq!(sniff(b"FORM\0\0\0\x10AIFFCOMM"), Some(Format::Aiff));
+        assert_eq!(sniff(b"FORM\0\0\0\x10AIFCFVER"), Some(Format::Aiff));
+        assert_eq!(sniff(b"fLaC\0\0\0\x22"), Some(Format::Flac));
+        assert_eq!(
+            sniff(b"ID3\x03\0\0\0\0\0\x00\xff\xfb\x90\x64"),
+            Some(Format::Mp3)
+        );
+        assert_eq!(sniff(b"ID3\x04\0\0\0\0\0\x00fLaC"), Some(Format::Flac));
+        assert_eq!(sniff(&[0xFF, 0xFB, 0x90, 0x64, 0, 0]), Some(Format::Mp3));
+        assert_eq!(sniff(&[0xFF, 0xF3, 0x48, 0xC4, 0, 0]), Some(Format::Mp3));
+        assert_eq!(sniff(&ogg(b"OpusHead\x01\x02")), Some(Format::Opus));
+        assert_eq!(sniff(&ogg(b"\x01vorbis\0\0")), Some(Format::Ogg));
+        assert_eq!(
+            sniff(&ftyp(b"M4A ", &[b"M4A ", b"mp42", b"isom"])),
+            Some(Format::M4a)
+        );
+        assert_eq!(
+            sniff(&ftyp(b"mp42", &[b"isom", b"M4A "])),
+            Some(Format::M4a)
+        );
+        assert_eq!(sniff(&ftyp(b"M4B ", &[])), Some(Format::M4a));
+    }
+
+    #[test]
+    fn video_and_raw_streams_are_not_audio() {
+        let not_audio = |b: &[u8]| !sniff(b).is_some_and(Format::is_audio);
+        assert!(not_audio(&ftyp(
+            b"isom",
+            &[b"isom", b"iso2", b"avc1", b"mp41"]
+        )));
+        assert!(not_audio(&ftyp(b"qt  ", &[b"qt  "])));
+        // iTunes video lists M4A among its compatible brands.
+        assert!(not_audio(&ftyp(b"M4V ", &[b"M4V ", b"M4A ", b"mp42"])));
+        assert!(not_audio(&[0xFF, 0xF1, 0x50, 0x80, 0, 0]));
+        assert!(not_audio(b"RIFF\x24\0\0\0RMIDdata"));
+        assert!(not_audio(&ogg(b"\x80theora")));
+        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(Format::Jpeg));
+    }
+
+    #[test]
+    fn audio_formats_have_names_and_no_pixels() {
+        for (f, ext, label) in [
+            (Format::Mp3, "mp3", "MP3"),
+            (Format::M4a, "m4a", "M4A"),
+            (Format::Flac, "flac", "FLAC"),
+            (Format::Wav, "wav", "WAV"),
+            (Format::Aiff, "aiff", "AIFF"),
+            (Format::Ogg, "ogg", "Ogg"),
+            (Format::Opus, "opus", "Opus"),
+        ] {
+            assert_eq!((f.extension(), f.label(), f.is_audio()), (ext, label, true));
+            assert_eq!(serde_json::to_string(&f).unwrap(), format!("\"{ext}\""));
+            assert!(!is_animated(b"", f) && dimensions(b"", f).is_none());
+        }
+        assert!(!Format::Png.is_audio());
     }
 }

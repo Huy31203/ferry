@@ -602,6 +602,17 @@ impl Job {
                 true,
                 Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv,
             ) => "video.step.reading",
+            // stream B: audio never reaches the image engine
+            (
+                true,
+                Format::Mp3
+                | Format::M4a
+                | Format::Flac
+                | Format::Wav
+                | Format::Aiff
+                | Format::Ogg
+                | Format::Opus,
+            ) => "card.step.edit",
         });
         emit(self.update(
             JobState::Optimising {
