@@ -28,7 +28,14 @@ enum Key {
     StepDown,
     /// Downscale to this percent.
     Scale(u8),
+    /// Stream H: integrations.
+    EditWith,
+    Upload,
 }
+
+/// Stream H: fixed hover keys beside the editable ones.
+const INTEGRATION_KEYS: [(&str, Key); 2] =
+    [("CmdOrCtrl+E", Key::EditWith), ("CmdOrCtrl+U", Key::Upload)];
 
 /// The key a hover binding's accelerator stands for; `scale` is one digit.
 fn key_for(id: &str, accelerator: &str) -> Option<Key> {
@@ -50,6 +57,7 @@ fn keys(app: &AppHandle) -> Vec<(String, Key)> {
     hotkeys::wanted(&settings, Group::Hover, false, cfg!(target_os = "macos"))
         .into_iter()
         .filter_map(|(id, accelerator)| Some((accelerator.clone(), key_for(id, &accelerator)?)))
+        .chain(INTEGRATION_KEYS.map(|(accelerator, key)| (accelerator.to_string(), key)))
         .collect()
 }
 
@@ -221,6 +229,20 @@ fn pressed(app: &AppHandle, key: Key) {
         return;
     };
     let scale = match key {
+        Key::EditWith | Key::Upload => {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let done = if key == Key::EditWith {
+                    crate::integrations::actions::edit_with(&app, &id)
+                } else {
+                    crate::integrations::actions::upload(&app, &id)
+                };
+                if let Err(reason) = done {
+                    jobs::notice(&app, reason);
+                }
+            });
+            return;
+        }
         Key::Preview | Key::Compare => {
             let action = if key == Key::Preview {
                 "preview"
@@ -307,6 +329,23 @@ mod tests {
             typing_after(settings(), "batch", true),
             Some("batch".to_owned())
         );
+    }
+
+    #[test]
+    fn the_integration_accelerators_parse_and_do_not_clash() {
+        let wanted = hotkeys::wanted(
+            &Settings::default(),
+            Group::Hover,
+            false,
+            cfg!(target_os = "macos"),
+        );
+        for (accelerator, _) in INTEGRATION_KEYS {
+            assert!(accelerator.parse::<Shortcut>().is_ok(), "{accelerator}");
+            assert!(
+                wanted.iter().all(|(_, other)| other != accelerator),
+                "{accelerator}"
+            );
+        }
     }
 
     #[test]
