@@ -72,4 +72,18 @@ export const sample: Settings = {
       converted: { location: 'in_place', folder: '~/Movies/Ferry', template: '%f.%e' },
     },
   },
+  audio: {
+    outputs: { wav: 'mp3', aiff: 'm4a', flac: 'm4a', mp3: 'mp3', m4a: 'm4a', ogg: 'opus', opus: 'opus' },
+    bitrate_kbps: 192,
+    opus_bitrate_kbps: 128,
+    loudness: 'off',
+    cover: 'optimise',
+    cover_size: { shape: 'square', side: 1000 },
+    ignored_extensions: [],
+    max_size_mb: 2000,
+    output: {
+      optimised: { location: 'in_place', folder: '~/Music/Ferry', template: '%f_optimised.%e' },
+      converted: { location: 'in_place', folder: '~/Music/Ferry', template: '%f.%e' },
+    },
+  },
 };
