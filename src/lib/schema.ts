@@ -146,6 +146,16 @@ const all: Setting[] = [
     help: 'general.force_clean.help',
     control: { kind: 'action', action: 'force_clean', button: 'action.clean' },
   },
+  {
+    id: 'svc_sync',
+    pane: 'general',
+    group: 'svc.group.sync',
+    label: 'svc.sync.enabled',
+    help: 'svc.sync.enabled.help',
+    path: 'svc.sync.enabled',
+    control: { kind: 'sync' },
+    wide: true,
+  },
 
   {
     id: 'clipboard_enabled',

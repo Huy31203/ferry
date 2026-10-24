@@ -13,6 +13,7 @@
   import SizeList from './controls/SizeList.svelte';
   import Slider from './controls/Slider.svelte';
   import Switch from './controls/Switch.svelte';
+  import SyncControl from './controls/SyncControl.svelte';
   import TemplateField from './controls/TemplateField.svelte';
   import TrayStyle from './controls/TrayStyle.svelte';
   import UpdatePanel from './controls/UpdatePanel.svelte';
@@ -154,6 +155,8 @@
       />
     {:else if control.kind === 'rail'}
       <RailEditor value={value as string[]} {disabled} labelledby={labelId} {onchange} />
+    {:else if control.kind === 'sync'}
+      <SyncControl {disabled} labelledby={labelId} />
     {:else if control.kind === 'update'}
       <UpdatePanel />
     {:else if control.kind === 'action'}
