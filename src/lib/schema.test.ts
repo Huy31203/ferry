@@ -75,4 +75,11 @@ describe('the list of settings', () => {
       'svc.updates.pill',
     ]);
   });
+
+  it('has the About pane with the update panel and the automatic-check switch', () => {
+    expect(all.filter((s) => s.pane === 'about').map((s) => s.id)).toEqual([
+      'svc_update',
+      'svc_auto_check',
+    ]);
+  });
 });

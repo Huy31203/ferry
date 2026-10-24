@@ -446,6 +446,21 @@ const all: Setting[] = [
     control: { kind: 'switch' },
     depends_on: 'floating.enabled',
   },
+  {
+    id: 'svc_update',
+    pane: 'about',
+    label: 'svc.updates.version',
+    control: { kind: 'update' },
+    wide: true,
+  },
+  {
+    id: 'svc_auto_check',
+    pane: 'about',
+    label: 'svc.updates.auto',
+    help: 'svc.updates.auto.help',
+    path: 'svc.updates.auto_check',
+    control: { kind: 'switch' },
+  },
 ];
 
 /** The settings to show on this OS. */
