@@ -9,6 +9,10 @@ export interface Shot {
   format: string;
   /** Changes whenever the file is rewritten. */
   version: number;
+  // stream A: video
+  kind: 'image' | 'video';
+  duration_ms: number | null;
+  fps: number | null;
 }
 
 /** Mirrors compare::CompareView. `original` is null in single-image mode (Windows quick preview). */

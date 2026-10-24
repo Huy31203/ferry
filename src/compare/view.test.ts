@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { clampPan, cssScale, dividerAt, nowBox, shotLabel, versioned, type Shot } from './view';
 
-const original: Shot = { path: '/b/shot.png', bytes: 2_400_000, dims: [2880, 1800], format: 'PNG', version: 0 };
-const now: Shot = { path: '/w/shot.webp', bytes: 380_000, dims: [1440, 900], format: 'WebP', version: 1_700_000 };
+const original: Shot = {
+  path: '/b/shot.png',
+  bytes: 2_400_000,
+  dims: [2880, 1800],
+  format: 'PNG',
+  version: 0,
+  kind: 'image',
+  duration_ms: null,
+  fps: null,
+};
+const now: Shot = {
+  path: '/w/shot.webp',
+  bytes: 380_000,
+  dims: [1440, 900],
+  format: 'WebP',
+  version: 1_700_000,
+  kind: 'image',
+  duration_ms: null,
+  fps: null,
+};
 
 describe('shotLabel', () => {
   it('reads size, dimensions and format, and the change for the result', () => {

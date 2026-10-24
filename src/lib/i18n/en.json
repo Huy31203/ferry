@@ -322,5 +322,12 @@
   "video.max_size": "Maximum size",
   "video.max_size.help": "Larger videos are left alone.",
   "video.output.optimised.help": "Where optimised, downscaled, cropped and sped-up videos go.",
-  "video.output.converted.help": "Where videos converted to another format or to GIF go."
+  "video.output.converted.help": "Where videos converted to another format or to GIF go.",
+  "video.compare.play": "Play",
+  "video.compare.pause": "Pause",
+  "video.compare.back": "Previous frame",
+  "video.compare.forward": "Next frame",
+  "video.compare.swap": "Swap sides",
+  "video.compare.position": "Position",
+  "video.compare.cant_play": "Can't play {format} here — open the file instead"
 }
