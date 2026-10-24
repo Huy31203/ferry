@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { card } from './card.fixture';
+import type { JobUpdate } from './ipc';
 import {
+  BITRATE_STOPS,
   QUALITY_STOPS,
   SCALE_STOPS,
+  bitrateLabel,
+  bitratePatch,
+  compressionLabel,
+  compressionPatch,
+  compressionRound,
+  compressionStops,
+  currentBitrate,
+  nextBitrate,
+  nextCompression,
   addSize,
   parseSize,
   sizeLabel,
@@ -343,5 +354,50 @@ describe('saved crop sizes', () => {
     expect(addSize(sizes, [640, 480])).toEqual([[640, 480], [1200, 628], [1080, 1080]]);
     expect(addSize(sizes, [1080, 1080])).toEqual([[1080, 1080], [1200, 628]]);
     expect(sizeLabel([1200, 628])).toBe('1200×628');
+  });
+});
+
+// stream B: audio
+const audio = (extra: Partial<JobUpdate> = {}) =>
+  card({ kind: 'done' }, {
+    format: 'mp3',
+    source_format: 'wav',
+    ext: 'mp3',
+    audio: { bitrate_before: null, bitrate_after: 192, lossless: false, has_cover: true },
+    ...extra,
+  });
+
+describe('audio cards', () => {
+  it('steps the bitrate down the stops', () => {
+    expect(currentBitrate(audio())).toBe(192);
+    expect(currentBitrate(audio({ edits: { ...audio().edits, bitrate: 150 } }))).toBe(128);
+    expect([nextBitrate(320), nextBitrate(96), nextBitrate(64)]).toEqual([256, 64, 64]);
+    expect(bitratePatch(128)).toEqual({ bitrate: 128, level: 'normal' });
+    expect(bitrateLabel(96)).toBe('96 kbps');
+  });
+
+  it('drives bitrate on audio cards and quality on images', () => {
+    expect(compressionStops(audio())).toEqual([320, 256, 192, 160, 128, 96, 64]);
+    expect(compressionLabel(audio(), 128)).toBe('128 kbps');
+    expect(compressionPatch(audio(), 128)).toEqual({ bitrate: 128, level: 'normal' });
+    expect(nextCompression(audio(), 192)).toBe(160);
+    expect(compressionStops(card({ kind: 'done' }))).toEqual(QUALITY_STOPS);
+    expect(compressionLabel(card({ kind: 'done' }), 60)).toBe('q 60');
+  });
+
+  it('lays bitrate stops on the track by value and labels the round ones', () => {
+    expect(stopY(BITRATE_STOPS, 0, 128)).toBe(0);
+    expect(stopY(BITRATE_STOPS, 6, 128)).toBe(128);
+    expect(stopY(BITRATE_STOPS, 2, 128)).toBe(64);
+    expect(labelledStops(BITRATE_STOPS, 200, compressionRound(audio())).map((i) => BITRATE_STOPS[i])).toEqual([320, 256, 192, 128, 64]);
+  });
+
+  it('offers MP3, M4A, Opus and WAV on audio cards', () => {
+    expect(formatChoices(audio()).map((c) => [c.label, c.current])).toEqual([
+      ['MP3', true],
+      ['M4A', false],
+      ['Opus', false],
+      ['WAV', false],
+    ]);
   });
 });
