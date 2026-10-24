@@ -28,6 +28,17 @@ export interface Edits {
   compression: number | null;
   fit_under: number | null;
   level: 'normal' | 'aggressive';
+  // stream F: pipelines
+  encoder: 'fast' | 'small' | 'visually_lossless' | null;
+  // stream A: video
+  speed: Speed | null;
+  mute: boolean;
+}
+
+// stream A: video
+export interface Speed {
+  percent: number;
+  keep_frames: boolean;
 }
 
 /** What `card_edit` sends (ferry_core::edit::EditsPatch): an absent field is left alone, `null` clears it. */
