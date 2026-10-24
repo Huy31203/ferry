@@ -3,6 +3,7 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { t } from '../lib/i18n';
+  import VideoCompare from './VideoCompare.svelte'; // stream A: video
   import {
     clampPan,
     cssScale,
@@ -125,7 +126,10 @@
 
 <svelte:window {onkeydown} />
 
-{#if view}
+{#if view && view.now.kind === 'video'}
+  <!-- stream A: video -->
+  <VideoCompare {view} />
+{:else if view}
   <div class="compare">
     <header class:single>
       {#if view.original}
