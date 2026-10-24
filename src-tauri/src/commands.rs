@@ -35,6 +35,8 @@ pub struct StackConfig {
     compression: u8,
     crop_sizes: Vec<(u32, u32)>,
     hover_hotkeys: bool,
+    /// The rail's tool ids in order (svc.rail.tools).
+    rail: Vec<String>,
 }
 
 /// The stack page is listening: hand it its settings and any cards sent before.
@@ -51,6 +53,7 @@ pub fn stack_ready(app: AppHandle) -> (StackConfig, Vec<JobUpdate>) {
         compression: settings.images.compression,
         crop_sizes: settings.images.crop_sizes,
         hover_hotkeys: settings.floating.hover_hotkeys,
+        rail: settings.svc.rail.tools,
     };
     (config, std::mem::take(&mut inbox.pending))
 }

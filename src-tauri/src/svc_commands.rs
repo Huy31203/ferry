@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::hotkeys::{self, Verdict};
 use crate::state::AppState;
-use crate::{prefs, windows};
+use crate::{prefs, rail_menu, windows};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -110,5 +110,20 @@ pub fn svc_settings_pane() -> Option<PaneRequest> {
     PANE.lock().unwrap().take()
 }
 
+/// The "+" on a card's rail: a native menu at `(x, y)`. Sync, so it runs on the
+/// main thread, as menus must.
+#[tauri::command]
+pub fn svc_rail_menu(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    x: f64,
+    y: f64,
+    items: Vec<rail_menu::RailMenuItem>,
+) -> Result<(), String> {
+    rail_menu::popup(&app, &window, x, y, &items)
+}
+
 /// Grows in later tasks.
-pub fn setup(_app: &AppHandle) {}
+pub fn setup(app: &AppHandle) {
+    rail_menu::init(app);
+}
