@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ferry_core::cancel::CancelToken;
+use ferry_core::clip::{self, ClipWrite, Produced};
 use ferry_core::edit::EditsPatch;
 use ferry_core::i18n::{t, tf};
 use ferry_core::job::{JobId, JobState, JobUpdate, Source};
@@ -103,8 +104,10 @@ pub fn rename(app: &AppHandle, id: &JobId, stem: &str) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let card = {
         let mut job = relock(&entry.job);
+        let old = job.output.clone();
         job.rename(stem).map_err(|e| e.message())?;
         entry.set_output(job.output.clone());
+        follow_rename(app, id, &old, &job.output);
         let last = entry.last.lock().unwrap().clone();
         job.update(last.state, last.after)
     };
@@ -132,7 +135,7 @@ pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let (finished, twin) = {
         let mut job = relock(&entry.job);
         let finished = job.restore(&options, &mut |format, bytes, file| {
-            deliver(app, format, bytes, file, None)
+            put_result(app, id, Some((format, bytes)), file, None)
         });
         entry.set_output(job.output.clone());
         (finished, job.is_twin())
@@ -160,20 +163,29 @@ fn close_card(app: &AppHandle, id: &JobId) {
     tray::rebuild(app);
 }
 
-/// Copy the card's result again: the image for a clipboard job, the file for a file job.
+/// Copy the card's result again, as "Copy file paths" asks: the image for a
+/// clipboard job, the file for a file job. It never accumulates.
 pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
     let entry = idle_entry(app, id)?;
     let job = relock(&entry.job);
+    if !job.output.exists() {
+        return Err(t("compare.file_gone"));
+    }
     let state = app.state::<AppState>();
-    let mut log = state.clipboard.lock().unwrap();
-    let seq = match job.source {
-        Source::Clipboard => {
-            let bytes = std::fs::read(&job.output).map_err(|e| e.to_string())?;
-            platform::clipboard::write_image(job.format, &bytes)?
-        }
-        Source::File => platform::clipboard::write_files(std::slice::from_ref(&job.output))?,
+    let copy_paths = state.settings.read().unwrap().clipboard.copy_paths;
+    let produced = match job.source {
+        Source::Clipboard => Produced::Image,
+        Source::File => Produced::File,
     };
-    log.record(seq, None);
+    let write = clip::plan(copy_paths, produced, &job.output, None);
+    let bytes = if write == ClipWrite::Image {
+        Some(std::fs::read(&job.output).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let mut log = state.clipboard.lock().unwrap();
+    let seq = write_clipboard(&write, bytes.as_deref().map(|b| (job.format, b)))?;
+    log.wrote(seq, None, write);
     Ok(())
 }
 
@@ -233,23 +245,24 @@ pub fn output(app: &AppHandle, id: &JobId) -> Option<std::path::PathBuf> {
 /// what queued or running jobs still use. Backups are untouched.
 pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, String> {
     let state = app.state::<AppState>();
-    let (keep, busy) = {
+    let (keep, busy, ids) = {
         let mut jobs = state.jobs.lock().unwrap();
         jobs.retain(|_, entry| entry.is_busy());
+        let ids: Vec<JobId> = jobs.keys().cloned().collect();
         let keep: Vec<std::path::PathBuf> = jobs.values().map(|e| e.output()).collect();
         let busy: Vec<JobUpdate> = jobs
             .values()
             .map(|e| e.last.lock().unwrap().clone())
             .collect();
-        (keep, busy)
+        (keep, busy, ids)
     };
     state.recent.lock().unwrap().clear();
     state
         .clipboard
         .lock()
         .unwrap()
-        .accumulated
-        .retain(|f| keep.contains(f));
+        .collected
+        .retain(|id| ids.contains(id));
     let result = ferry_core::workdir::clean(&state.work_dir, &keep);
     match &result {
         Ok(report) => info!(
@@ -288,38 +301,6 @@ pub fn show(app: &AppHandle, update: JobUpdate) {
     if let Err(e) = app.emit_to(STACK, "job:update", &update) {
         warn!("could not send a card: {e}");
     }
-}
-
-/// Put an optimised image on the clipboard, or the collected files when
-/// "accumulate results" is on. The clipboard log stays locked until the write's
-/// sequence number is recorded, so the watcher cannot mistake it for the user's.
-/// With a `source` copy, nothing is written if the user has copied since.
-fn deliver(
-    app: &AppHandle,
-    format: Format,
-    bytes: &[u8],
-    file: &Path,
-    source: Option<u64>,
-) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let settings = state.settings.read().unwrap().clipboard.clone();
-    let mut log = state.clipboard.lock().unwrap();
-    if let Some(source) = source
-        && !log.may_replace(source, platform::clipboard::seq())
-    {
-        info!("the clipboard changed while the job ran; result left off it");
-        return Ok(());
-    }
-    let seq = if settings.accumulate {
-        if !log.accumulated.iter().any(|f| f == file) {
-            log.accumulated.push(file.to_owned());
-        }
-        platform::clipboard::write_files(&log.accumulated)?
-    } else {
-        platform::clipboard::write_image(format, bytes)?
-    };
-    log.record(seq, source);
-    Ok(())
 }
 
 fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
@@ -368,6 +349,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
         "job started"
     );
     let state = app.state::<AppState>();
+    let id = job.id.clone();
     // Only the first run checks; a re-run is the user's explicit request.
     let source = entry.source_seq.lock().unwrap().take();
     let finished = job.run(
@@ -382,7 +364,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
             *entry.last.lock().unwrap() = update.clone();
             show(app, update);
         },
-        &mut |format, bytes, file| deliver(app, format, bytes, file, source),
+        &mut |format, bytes, file| put_result(app, &id, Some((format, bytes)), file, source),
     );
     entry.set_output(job.output.clone());
     drop(job);
@@ -488,6 +470,80 @@ fn trash_context() -> trash::TrashContext {
         context.set_delete_method(DeleteMethod::NsFileManager);
     }
     context
+}
+
+// ---- sI clipboard-fixes ----
+
+/// Put a result on the clipboard as `clip::plan` decides: the image, the file,
+/// or the collected files, with their paths as text when "Copy file paths" is
+/// on. The clipboard log stays locked until the write's sequence number is
+/// recorded, so the watcher cannot mistake it for the user's. With a `source`
+/// copy, nothing is written if the user has copied since.
+fn put_result(
+    app: &AppHandle,
+    id: &JobId,
+    image: Option<(Format, &[u8])>,
+    file: &Path,
+    source: Option<u64>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let settings = state.settings.read().unwrap().clipboard.clone();
+    let mut log = state.clipboard.lock().unwrap();
+    if settings.accumulate {
+        log.collected.put(id, file);
+    }
+    if let Some(source) = source
+        && !log.may_replace(source, platform::clipboard::seq())
+    {
+        info!("the clipboard changed while the job ran; result left off it");
+        return Ok(());
+    }
+    let produced = if image.is_some() {
+        Produced::Image
+    } else {
+        Produced::File
+    };
+    let write = clip::plan(
+        settings.copy_paths,
+        produced,
+        file,
+        settings.accumulate.then_some(&log.collected),
+    );
+    let seq = write_clipboard(&write, image)?;
+    log.wrote(seq, source, write);
+    Ok(())
+}
+
+fn write_clipboard(write: &ClipWrite, image: Option<(Format, &[u8])>) -> Result<u64, String> {
+    match write {
+        ClipWrite::Image => {
+            let (format, bytes) = image.ok_or("no image to write")?;
+            platform::clipboard::write_image(format, bytes)
+        }
+        ClipWrite::Files(paths) => platform::clipboard::write_files(paths),
+        ClipWrite::Paths(paths) => platform::clipboard::write_paths(paths),
+    }
+}
+
+/// A renamed result: the collection and, while Ferry's write is still what is
+/// on the clipboard, the clipboard itself follow it.
+fn follow_rename(app: &AppHandle, id: &JobId, old: &Path, new: &Path) {
+    let state = app.state::<AppState>();
+    let mut log = state.clipboard.lock().unwrap();
+    log.collected.follow(id, new);
+    let Some((seq, write)) = log.last_write() else {
+        return;
+    };
+    if *seq != platform::clipboard::seq() {
+        return;
+    }
+    let Some(next) = write.renamed(old, new) else {
+        return;
+    };
+    match write_clipboard(&next, None) {
+        Ok(seq) => log.rewrote(seq, next),
+        Err(e) => warn!("could not update the clipboard after a rename: {e}"),
+    }
 }
 
 fn entry_name(entry: &Entry) -> String {

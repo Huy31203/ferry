@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use ferry_core::backup::Backups;
 use ferry_core::cancel::CancelToken;
+use ferry_core::clip::{ClipWrite, Collected};
 use ferry_core::job::{JobId, JobState, JobUpdate};
 use ferry_core::pipeline::Job;
 use ferry_core::run_state::RunState;
@@ -155,15 +156,36 @@ pub fn output_busy(jobs: &HashMap<JobId, Arc<Entry>>, entry: &Arc<Entry>) -> boo
         .any(|e| !Arc::ptr_eq(e, entry) && e.is_busy() && e.output() == output)
 }
 
-/// Clipboard changes Ferry made itself, and the files "accumulate results" has
-/// collected since launch or the last "Clear all".
+// ---- sI clipboard-fixes ----
+/// The jobs whose current files are `paths`, in order; `None` unless every path has one.
+pub fn jobs_with_outputs(
+    jobs: &HashMap<JobId, Arc<Entry>>,
+    paths: &[PathBuf],
+) -> Option<Vec<JobId>> {
+    if paths.is_empty() {
+        return None;
+    }
+    paths
+        .iter()
+        .map(|p| {
+            jobs.iter()
+                .find(|(_, e)| e.output() == *p)
+                .map(|(id, _)| id.clone())
+        })
+        .collect()
+}
+
+/// Clipboard changes Ferry made itself, and the results "accumulate results"
+/// has collected, by job, since launch or the last "Clear all".
 #[derive(Default)]
 pub struct ClipboardLog {
     own: VecDeque<u64>,
     /// The copy whose result Ferry last put on the clipboard; `None` after an
     /// explicit write such as a card's Copy.
     shown: Option<u64>,
-    pub accumulated: Vec<PathBuf>,
+    pub collected: Collected,
+    /// What Ferry's latest write put on the clipboard, until any plain `record`.
+    last_write: Option<(u64, ClipWrite)>,
 }
 
 impl ClipboardLog {
@@ -171,11 +193,32 @@ impl ClipboardLog {
 
     /// Remember a write Ferry made, and which copy (`from`) it was the result of.
     pub fn record(&mut self, seq: u64, from: Option<u64>) {
+        self.remember(seq);
+        self.shown = from;
+        self.last_write = None;
+    }
+
+    /// `record`, and remember what was written (for a rename that follows it).
+    pub fn wrote(&mut self, seq: u64, from: Option<u64>, write: ClipWrite) {
+        self.record(seq, from);
+        self.last_write = Some((seq, write));
+    }
+
+    /// Ferry rewrote its own write (a rename): the copy it shows stays the same.
+    pub fn rewrote(&mut self, seq: u64, write: ClipWrite) {
+        self.remember(seq);
+        self.last_write = Some((seq, write));
+    }
+
+    pub fn last_write(&self) -> Option<&(u64, ClipWrite)> {
+        self.last_write.as_ref()
+    }
+
+    fn remember(&mut self, seq: u64) {
         self.own.push_back(seq);
         if self.own.len() > Self::KEEP {
             self.own.pop_front();
         }
-        self.shown = from;
     }
 
     pub fn is_own(&self, seq: u64) -> bool {
@@ -297,6 +340,54 @@ mod tests {
         job.output = PathBuf::from(output);
         let update = job.update(last, None);
         Arc::new(Entry::new(job, None, update))
+    }
+
+    #[test]
+    fn a_files_write_is_remembered_until_the_next_plain_write() {
+        let a = PathBuf::from("/w/a.png");
+        let mut log = ClipboardLog::default();
+        log.wrote(5, None, ClipWrite::Files(vec![a.clone()]));
+        assert_eq!(log.last_write(), Some(&(5, ClipWrite::Files(vec![a]))));
+        assert!(log.is_own(5));
+        log.record(6, None);
+        assert_eq!(log.last_write(), None);
+    }
+
+    #[test]
+    fn a_rewrite_keeps_which_copy_is_shown() {
+        let mut log = ClipboardLog::default();
+        log.wrote(
+            3,
+            Some(2),
+            ClipWrite::Files(vec![PathBuf::from("/w/a.png")]),
+        );
+        log.rewrote(4, ClipWrite::Files(vec![PathBuf::from("/w/hero.png")]));
+        assert!(log.is_own(4));
+        assert!(log.may_replace(2, 4));
+        assert_eq!(log.last_write().unwrap().0, 4);
+    }
+
+    #[test]
+    fn own_paths_map_back_to_their_jobs() {
+        let (a, b) = (
+            entry("/w/a.png", JobState::Done),
+            entry("/w/b.png", JobState::Done),
+        );
+        let (id_a, id_b) = (
+            a.job.lock().unwrap().id.clone(),
+            b.job.lock().unwrap().id.clone(),
+        );
+        let jobs = HashMap::from([(id_a.clone(), a), (id_b.clone(), b)]);
+        let (pa, pb) = (PathBuf::from("/w/a.png"), PathBuf::from("/w/b.png"));
+        assert_eq!(
+            jobs_with_outputs(&jobs, &[pa.clone(), pb]),
+            Some(vec![id_a, id_b])
+        );
+        assert_eq!(
+            jobs_with_outputs(&jobs, &[pa, PathBuf::from("/w/x.png")]),
+            None
+        );
+        assert_eq!(jobs_with_outputs(&jobs, &[]), None);
     }
 
     #[test]
