@@ -72,4 +72,15 @@ export const sample: Settings = {
       converted: { location: 'in_place', folder: '~/Movies/Ferry', template: '%f.%e' },
     },
   },
+  // Stream D
+  drop_zone: {
+    enabled: true,
+    show_on: 'any_drag',
+    position: 'near_results',
+    modifier: 'alt',
+    keep_original_modifier: 'shift',
+    batch_threshold: 20,
+    ignored_apps: ['com.figma.Desktop'],
+  },
+  results_list: { after_cards: 5 },
 };
