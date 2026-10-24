@@ -52,12 +52,18 @@ pub fn output_size((cw, ch): (u32, u32), edits: &Edits) -> (u32, u32) {
         (scaled(cw, h, ch), h)
     };
     match (edits.size, edits.scale) {
-        (Some(Size::Exact { width, height }), _) => {
-            if width >= cw || height >= ch {
+        (Some(Size::Exact { width, height }), scale) => {
+            let base = if width >= cw || height >= ch {
                 (cw, ch)
             } else {
                 (width, height)
-            }
+            };
+            scale.map_or(base, |p| {
+                (
+                    scaled(base.0, u32::from(p), 100),
+                    scaled(base.1, u32::from(p), 100),
+                )
+            })
         }
         (Some(Size::Width { width }), _) => by_width(width),
         (Some(Size::Height { height }), _) => by_height(height),
@@ -99,6 +105,21 @@ mod tests {
         let portrait = (1000, 2000);
         assert_eq!(fit_ratio(portrait, (16, 9)), (1000, 563));
         assert_eq!(fit_ratio(portrait, (9, 16)), (1000, 1778));
+    }
+
+    #[test]
+    fn a_downscale_scales_an_exact_size() {
+        let exact = |scale| {
+            with(|e| {
+                e.size = Some(Size::Exact {
+                    width: 1200,
+                    height: 628,
+                });
+                e.scale = Some(scale);
+            })
+        };
+        assert_eq!(output_size((2880, 1507), &exact(50)), (600, 314));
+        assert_eq!(output_size((1000, 523), &exact(50)), (500, 262));
     }
 
     #[test]
