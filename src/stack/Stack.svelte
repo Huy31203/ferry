@@ -10,6 +10,7 @@
   import { DEFAULT_RAIL_TOOLS } from '../lib/rail';
   import { isVideo } from '../lib/video'; // stream A: video
   import { nextListMode } from '../lib/selection'; // Stream D
+import { shareAnchor } from '../lib/share'; // Stream H
   import type { ListConfig } from '../lib/drop-ipc'; // Stream D
   import Card from './Card.svelte';
   import CompactList from './CompactList.svelte'; // Stream D
@@ -139,6 +140,9 @@
     } else if (action === 'close') {
       if (isBusy(card.state)) invoke('card_cancel', { id });
       close(id);
+    } else if (action === 'share') {
+      const el = root?.querySelector<HTMLElement>(`article[data-card-id="${id}"]`);
+      if (el) invoke('card_share', { id, anchor: shareAnchor(el.getBoundingClientRect(), railRight) }).catch((e) => console.warn('share', e));
     } else {
       setTool(id, action);
     }

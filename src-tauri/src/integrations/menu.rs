@@ -205,7 +205,18 @@ pub fn extend(app: &AppHandle, menu: &Menu<Wry>, card: &JobUpdate) -> tauri::Res
         )?),
     };
 
-    // Share group: Add to Shelf ▸, Upload with, then a rule.
+    // Share group: Share ▸ (macOS) or Share or Nearby Share… (Windows), Add to Shelf ▸, Upload with, then a rule.
+    let share: Box<dyn IsMenuItem<Wry>> = if cfg!(target_os = "macos") {
+        let airdrop = item(Item::AirDrop, t("share.menu.airdrop"), None)?;
+        let more = item(Item::Share, t("share.menu.more"), None)?;
+        Box::new(submenu(
+            Item::Share,
+            t("share.menu.share"),
+            &[&airdrop, &more],
+        )?)
+    } else {
+        Box::new(item(Item::Share, t("share.menu.share_windows"), None)?)
+    };
     let shelf_items = app_items(&shelves, &Item::Shelf)?;
     let shelf_refs: Vec<&dyn IsMenuItem<Wry>> = shelf_items
         .iter()
@@ -224,17 +235,15 @@ pub fn extend(app: &AppHandle, menu: &Menu<Wry>, card: &JobUpdate) -> tauri::Res
         })
         .transpose()?;
     let rule = PredefinedMenuItem::separator(app)?;
-    let mut share_group: Vec<&dyn IsMenuItem<Wry>> = Vec::new();
+    let mut share_group: Vec<&dyn IsMenuItem<Wry>> = vec![&*share];
     if let Some(shelf) = &shelf {
         share_group.push(shelf);
     }
     if let Some(upload) = &upload {
         share_group.push(upload);
     }
-    if !share_group.is_empty() {
-        share_group.push(&rule);
-        menu.insert_items(&share_group, restore_at)?;
-    }
+    share_group.push(&rule);
+    menu.insert_items(&share_group, restore_at)?;
     menu.insert_items(&[&open_with, &*edit_with], open_at)?;
 
     *LISTED.lock().unwrap() = Some(Listed {
@@ -273,8 +282,12 @@ pub fn run(app: &AppHandle, id: &JobId, item: Item) -> Result<(), String> {
             Some(with) => actions::open_with(app, id, &with),
             None => Ok(()),
         },
-        // Share and AirDrop are wired in the share task.
-        Item::Share | Item::AirDrop => Ok(()),
+        #[cfg(target_os = "macos")]
+        Item::AirDrop => actions::airdrop(app, id),
+        // Share ends in the page (card_share); AirDrop is a macOS item.
+        #[cfg(not(target_os = "macos"))]
+        Item::AirDrop => Ok(()),
+        Item::Share => Ok(()),
     };
     if let Err(reason) = done {
         jobs::notice(app, reason);

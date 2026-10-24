@@ -171,6 +171,8 @@ impl Action {
             Action::Close => "close",
             // stream A: video
             Action::Speed => "speed",
+            // Stream H: integrations (the page measures the card, then calls card_share)
+            Action::Integration(crate::integrations::menu::Item::Share) => "share",
             _ => return None,
         })
     }

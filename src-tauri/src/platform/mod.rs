@@ -50,3 +50,6 @@ pub mod apps;
 #[cfg(target_os = "macos")]
 #[path = "macos_services.rs"]
 pub mod services;
+#[cfg(target_os = "macos")]
+#[path = "macos_share.rs"]
+pub mod share;
