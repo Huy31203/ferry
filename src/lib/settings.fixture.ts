@@ -49,4 +49,20 @@ export const sample: Settings = {
   },
   backups: { retention_days: 7 },
   hotkeys: { optimise: 'Ctrl+Shift+C', aggressive: 'Ctrl+Shift+A', cycle_state: 'Ctrl+Shift+P' },
+  video: {
+    encoder: 'fast',
+    compression: 80,
+    convert_mov: true,
+    audio_to_aac: false,
+    remove_audio: false,
+    fps_cap: 'off',
+    speed_frames: 'keep',
+    preserve_dates: true,
+    ignored_extensions: [],
+    max_size_mb: 4000,
+    output: {
+      optimised: { location: 'in_place', folder: '~/Movies/Ferry', template: '%f_optimised.%e' },
+      converted: { location: 'in_place', folder: '~/Movies/Ferry', template: '%f.%e' },
+    },
+  },
 };

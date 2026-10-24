@@ -8,6 +8,11 @@ describe('settings paths', () => {
     expect(getPath(sample, 'nope.nothing')).toBeUndefined();
   });
 
+  it('has the video section', () => {
+    expect(getPath(sample, 'video.encoder')).toBe('fast');
+    expect(getPath(withPath(sample, 'video.encoder', 'small'), 'video.encoder')).toBe('small');
+  });
+
   it('changing one path keeps every other field and unknown ones', () => {
     const withUnknown = { ...sample, future: { flag: true } } as Settings;
     const next = withPath(withUnknown, 'images.compression', 55);

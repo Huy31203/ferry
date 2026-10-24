@@ -20,6 +20,15 @@ pub enum Level {
     Aggressive,
 }
 
+// stream F: pipelines
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Encoder {
+    Fast,
+    Small,
+    VisuallyLossless,
+}
+
 #[derive(Debug, Clone)]
 pub struct OptimiseOptions {
     pub level: Level,

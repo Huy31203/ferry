@@ -48,6 +48,22 @@ export interface Settings {
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
+  video: VideoSettings;
+}
+
+// stream A: video
+export interface VideoSettings {
+  encoder: 'fast' | 'small' | 'visually_lossless';
+  compression: number;
+  convert_mov: boolean;
+  audio_to_aac: boolean;
+  remove_audio: boolean;
+  fps_cap: 'off' | '24' | '30' | '60';
+  speed_frames: 'keep' | 'drop';
+  preserve_dates: boolean;
+  ignored_extensions: string[];
+  max_size_mb: number;
+  output: { optimised: OutputRule; converted: OutputRule };
 }
 
 /** The value at a dotted path such as `images.compression`, or undefined. */
