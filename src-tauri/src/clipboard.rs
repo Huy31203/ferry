@@ -14,7 +14,7 @@ use ferry_core::trigger::{self, HotkeyPlan, Skip, Snapshot};
 use tauri::{AppHandle, Manager};
 use tracing::{debug, info, warn};
 
-use crate::state::AppState;
+use crate::state::{self, AppState};
 use crate::{jobs, platform, tray};
 
 const RETRY_AFTER: Duration = Duration::from_millis(100);
@@ -74,6 +74,18 @@ pub fn optimise_now(app: &AppHandle, level: Level) {
     };
     let state = app.state::<AppState>();
     let settings = state.settings.read().unwrap().clone();
+    // Ferry's own file paths on the clipboard are its cards: re-run them.
+    if !snap.concealed && state.clipboard.lock().unwrap().is_own(snap.seq) {
+        let own = state::jobs_with_outputs(&state.jobs.lock().unwrap(), &snap.files);
+        if let Some(ids) = own {
+            for id in ids {
+                if let Err(reason) = jobs::rerun(app, &id, level == Level::Aggressive) {
+                    jobs::notice(app, reason);
+                }
+            }
+            return;
+        }
+    }
     match trigger::hotkey(&snap, &settings, state.gifsicle.is_some()) {
         HotkeyPlan::Image(_) => start_clipboard_job(app, snap, level),
         HotkeyPlan::Files(paths) => {
