@@ -18,6 +18,7 @@ pub mod run_state;
 pub mod settings;
 pub mod sidecar;
 pub mod sniff;
+pub mod svc_settings;
 pub mod template;
 pub mod trigger;
 pub mod workdir;

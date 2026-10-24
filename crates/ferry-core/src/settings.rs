@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::svc_settings::Svc;
 use crate::{edit, fsutil, template};
 
 pub const VERSION: u32 = 2;
@@ -18,6 +19,7 @@ pub const VERSION: u32 = 2;
 pub struct Settings {
     pub version: u32,
     pub general: General,
+    pub svc: Svc, // svc (stream G)
     pub clipboard: Clipboard,
     pub images: Images,
     pub floating: Floating,
@@ -220,6 +222,7 @@ impl Default for Settings {
         Self {
             version: VERSION,
             general: General::default(),
+            svc: Svc::default(), // svc (stream G)
             clipboard: Clipboard::default(),
             images: Images::default(),
             floating: Floating::default(),
@@ -371,6 +374,7 @@ impl Settings {
         self.images
             .crop_sizes
             .retain(|(w, h)| side.contains(w) && side.contains(h));
+        self.svc = self.svc.sanitised(); // svc (stream G)
         self.version = self.version.max(VERSION);
         self
     }
