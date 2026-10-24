@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addFolder,
+  folderName,
   formatIgnore,
   newFolder,
   parseIgnore,
@@ -33,6 +34,12 @@ describe('watched folders', () => {
     const withUnknown = [{ ...newFolder('~/A'), pipeline: 'webp' }] as never;
     const next = updateFolder(withUnknown, 0, { paused: true });
     expect(next[0]).toMatchObject({ paused: true, pipeline: 'webp' });
+  });
+
+  it('names a folder by its last part', () => {
+    expect(folderName('~/Downloads')).toBe('Downloads');
+    expect(folderName('C:\\Users\\me\\Pictures\\')).toBe('Pictures');
+    expect(folderName('~')).toBe('~');
   });
 
   it('removes by index', () => {
