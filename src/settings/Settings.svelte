@@ -10,6 +10,7 @@
   import type { PaneRequest } from '../lib/svc';
   import Row from './Row.svelte';
   import { change, load, store } from './store.svelte';
+  import { loadWatch, watch } from './watchStore.svelte'; // stream C
 
   const all = settingsFor(isMac);
   const paneLabel = (id: PaneId) => t(panes.find((p) => p.id === id)!.label);
@@ -39,10 +40,16 @@
 
   onMount(() => {
     void load().then(takePane);
+    void loadWatch(); // stream C
     // svc: another part of Ferry opens Settings at a pane (and a row)
     const unlisten = listen('svc:open-pane', () => void takePane());
     return () => void unlisten.then((off) => off());
   });
+
+  // stream C: a row that needs media this build cannot handle yet.
+  function unsupported(setting: Setting): boolean {
+    return !!setting.requires && watch.support !== null && !watch.support[setting.requires];
+  }
 
   async function takePane() {
     const request = await invoke<PaneRequest | null>('svc_settings_pane');
@@ -125,8 +132,12 @@
             <Row
               {setting}
               value={setting.path ? getPath(store.value, setting.path) : undefined}
-              disabled={lock !== null}
-              hint={lock ? t('settings.turn_on_first', { name: t(lock.label) }) : null}
+              disabled={lock !== null || unsupported(setting)}
+              hint={lock
+                ? t('settings.turn_on_first', { name: t(lock.label) })
+                : unsupported(setting)
+                  ? t('watch.unsupported')
+                  : null}
               highlight={highlighted === setting.id}
               onchange={(value) => setting.path && change(setting.path, value)}
             />

@@ -107,6 +107,12 @@ export function statusTone(state: DirState): 'ok' | 'warn' | 'off' | 'error' {
   }
 }
 
+/** The last part of a folder path, for the screen-reader labels. */
+export function folderName(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== '');
+  return parts[parts.length - 1] ?? path;
+}
+
 export function mediaLabel(media: Media): StringKey {
   return `watch.type.${media}`;
 }
