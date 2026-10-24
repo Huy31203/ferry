@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sniff::Format;
 
+pub mod cover;
 pub mod loudness;
 pub mod plan;
 pub mod probe;
