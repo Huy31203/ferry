@@ -590,6 +590,9 @@ impl Job {
 }
 
 #[cfg(test)]
+mod ffmpeg_tests;
+
+#[cfg(test)]
 mod tests {
     use std::{cell::RefCell, io};
 
