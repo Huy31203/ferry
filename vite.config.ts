@@ -20,6 +20,7 @@ export default defineConfig({
         settings: page('settings.html'),
         compare: page('compare.html'),
         batch: page('batch.html'),
+        drop: page('drop.html'),
       },
     },
   },

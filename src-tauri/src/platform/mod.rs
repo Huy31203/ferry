@@ -11,6 +11,9 @@ mod macos;
 #[path = "macos_preview.rs"]
 pub mod preview;
 #[cfg(target_os = "macos")]
+#[path = "macos_drop.rs"]
+pub mod drop; // Stream D
+#[cfg(target_os = "macos")]
 pub use macos::app_is_active;
 #[cfg(target_os = "macos")]
 pub use macos::set_stack_key;
@@ -23,6 +26,9 @@ pub mod clipboard;
 #[cfg(windows)]
 #[path = "windows_preview.rs"]
 pub mod preview;
+#[cfg(windows)]
+#[path = "windows_drop.rs"]
+pub mod drop; // Stream D
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
