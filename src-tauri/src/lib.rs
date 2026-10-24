@@ -45,6 +45,12 @@ pub fn run() {
             setup(app.handle())?;
             Ok(())
         })
+        // sI: hover keys stand down while a Ferry window takes typing
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(focused) = event {
+                hover_keys::window_focus(window.app_handle(), window.label(), *focused)
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
             compare::open_compare,
