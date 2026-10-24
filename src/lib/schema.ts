@@ -427,6 +427,25 @@ const all: Setting[] = [
     control: { kind: 'hotkey', action: 'scale' },
     depends_on: 'floating.hover_hotkeys',
   },
+  {
+    id: 'svc_rail',
+    pane: 'floating',
+    label: 'svc.rail.label',
+    help: 'svc.rail.help',
+    path: 'svc.rail.tools',
+    control: { kind: 'rail' },
+    depends_on: 'floating.enabled',
+    wide: true,
+  },
+  {
+    id: 'svc_update_pill',
+    pane: 'floating',
+    label: 'svc.updates.pill',
+    help: 'svc.updates.pill.help',
+    path: 'svc.updates.pill',
+    control: { kind: 'switch' },
+    depends_on: 'floating.enabled',
+  },
 ];
 
 /** The settings to show on this OS. */
