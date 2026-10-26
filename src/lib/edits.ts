@@ -2,14 +2,15 @@ import { t } from './i18n';
 import type { Edits, EditsPatch, Format, JobUpdate, Size } from './ipc';
 import { isVideo } from './video'; // stream A: video
 
-/** A Compression stop: an encoder quality 5–100, or Extreme (aggressive at quality 5). */
-export type Quality = number | 'extreme';
+/** A Compression stop: an encoder quality 5–100, Extreme (aggressive at quality 5), or Adaptive (stream F: the lowest quality that still looks like the original). */
+export type Quality = number | 'extreme' | 'adaptive';
 
 /** Downscale slider stops, top to bottom: 100 % (no downscale), then 90 % … 10 % in steps of 5. */
 export const SCALE_STOPS: number[] = [100, ...Array.from({ length: 17 }, (_, i) => 90 - i * 5)];
 
-/** Compression slider stops, top to bottom: quality 100 … 5 in steps of 5, then Extreme. */
+/** Compression slider stops, top to bottom: Adaptive, quality 100 … 5 in steps of 5, then Extreme. */
 export const QUALITY_STOPS: Quality[] = [
+  'adaptive',
   ...Array.from({ length: 20 }, (_, i) => 100 - i * 5),
   'extreme',
 ];
@@ -21,12 +22,14 @@ export function nextScale(scale: number | null): number {
 
 /** The card's quality: its own, else the settings' `fallback`. */
 export function currentQuality(edits: Edits, fallback: number): Quality {
+  if (edits.adaptive) return 'adaptive';
   if (edits.level === 'aggressive' && edits.compression === 5) return 'extreme';
   return edits.compression ?? fallback;
 }
 
 /** One click on Compression: 10 quality lower, then Extreme. */
 export function nextQuality(quality: Quality): Quality {
+  if (quality === 'adaptive') return 90;
   if (quality === 'extreme' || quality - 10 < 5) return 'extreme';
   return quality - 10;
 }
@@ -36,9 +39,10 @@ export function scalePatch(scale: number): EditsPatch {
 }
 
 export function qualityPatch(quality: Quality): EditsPatch {
+  if (quality === 'adaptive') return { adaptive: true, compression: null, fit_under: null, level: 'normal' };
   return quality === 'extreme'
-    ? { compression: 5, level: 'aggressive' }
-    : { compression: quality, level: 'normal' };
+    ? { compression: 5, level: 'aggressive', adaptive: false }
+    : { compression: quality, level: 'normal', adaptive: false };
 }
 
 /** `side × percent`, rounded like ferry_core's `scaled`, at least 1. */
@@ -62,6 +66,7 @@ export function scaleLabel(scale: number, dims: [number, number] | null, edits: 
 
 /** "q 60" or "Extreme". */
 export function qualityLabel(quality: Quality): string {
+  if (quality === 'adaptive') return t('pipe.slider.adaptive');
   return quality === 'extreme' ? t('slider.extreme') : t('slider.quality', { q: quality });
 }
 
@@ -88,9 +93,10 @@ export function bitrateLabel(kbps: number): string {
   return t('audio.slider.kbps', { n: kbps });
 }
 
-/** What the Compression button drives: encoder quality on images, bitrate on audio. */
+/** What the Compression button drives: encoder quality on images (with the Adaptive detent), on video without it, bitrate on audio. */
 export function compressionStops(card: JobUpdate): Quality[] {
-  return card.audio ? BITRATE_STOPS : QUALITY_STOPS;
+  if (card.audio) return BITRATE_STOPS;
+  return card.video ? QUALITY_STOPS.slice(1) : QUALITY_STOPS;
 }
 
 export function compressionStart(card: JobUpdate, fallback: number): Quality {
@@ -114,8 +120,8 @@ export function compressionRound(card: JobUpdate): (stop: Quality) => boolean {
   return card.audio ? (stop) => typeof stop === 'number' && stop % 64 === 0 : roundQuality;
 }
 
-/** A stop's place on the slider's value axis: its number, Extreme at 0. */
-const axisValue = (stop: Quality): number => (stop === 'extreme' ? 0 : stop);
+/** A stop's place on the slider's value axis: its number, Extreme at 0, Adaptive above 100. */
+const axisValue = (stop: Quality): number => (stop === 'extreme' ? 0 : stop === 'adaptive' ? 110 : stop);
 
 /** A stop's distance from the top of a `track` px rail. The rail is the value axis: the highest stop at the top, the lowest at the bottom. */
 export function stopY(stops: Quality[], i: number, track: number): number {

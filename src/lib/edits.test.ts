@@ -77,11 +77,11 @@ describe('downscale steps', () => {
 });
 
 describe('compression steps', () => {
-  it('runs from 100 to 5 in fives, then Extreme', () => {
-    expect(QUALITY_STOPS[0]).toBe(100);
+  it('runs from Adaptive, then 100 to 5 in fives, then Extreme', () => {
+    expect(QUALITY_STOPS.slice(0, 2)).toEqual(['adaptive', 100]);
     expect(QUALITY_STOPS.at(-2)).toBe(5);
     expect(QUALITY_STOPS.at(-1)).toBe('extreme');
-    expect(QUALITY_STOPS).toHaveLength(21);
+    expect(QUALITY_STOPS).toHaveLength(22);
   });
 
   it('starts from the card, else from the settings', () => {
@@ -98,8 +98,8 @@ describe('compression steps', () => {
   });
 
   it('sends Extreme as aggressive at quality 5', () => {
-    expect(qualityPatch('extreme')).toEqual({ compression: 5, level: 'aggressive' });
-    expect(qualityPatch(60)).toEqual({ compression: 60, level: 'normal' });
+    expect(qualityPatch('extreme')).toEqual({ compression: 5, level: 'aggressive', adaptive: false });
+    expect(qualityPatch(60)).toEqual({ compression: 60, level: 'normal', adaptive: false });
   });
 
   it('labels quality and Extreme', () => {
@@ -109,7 +109,7 @@ describe('compression steps', () => {
 });
 
 describe('slider drag', () => {
-  // A 90 px Downscale track puts each stop at y = 100 - value; a 100 px Compression track at y = 100 - q (Extreme 100).
+  // A 90 px Downscale track puts each stop at y = 100 - value; a 110 px Compression track at y = 110 - q (Adaptive 0, Extreme 110).
   it('follows the pointer and snaps to the nearest stop, 100 to 90 included', () => {
     expect(sliderIndex(SCALE_STOPS, 0, 0, 90)).toBe(0);
     expect(sliderIndex(SCALE_STOPS, 0, 4, 90)).toBe(0);
@@ -129,9 +129,9 @@ describe('slider drag', () => {
     expect(sliderIndex(SCALE_STOPS, 5, -400, 90)).toBe(0);
     expect(sliderIndex(SCALE_STOPS, 5, 400, 90)).toBe(17);
     expect(sliderIndex(SCALE_STOPS, 0, 90, 90)).toBe(17);
-    expect(sliderIndex(QUALITY_STOPS, 0, 100, 100)).toBe(20);
-    expect(sliderIndex(QUALITY_STOPS, 0, 96, 100)).toBe(19);
-    expect(sliderIndex(QUALITY_STOPS, 20, -400, 100)).toBe(0);
+    expect(sliderIndex(QUALITY_STOPS, 0, 110, 110)).toBe(21);
+    expect(sliderIndex(QUALITY_STOPS, 0, 106, 110)).toBe(20);
+    expect(sliderIndex(QUALITY_STOPS, 20, -400, 110)).toBe(0);
   });
 
   it('hands the slider one distinct, rising y per stop, from 0 to the track', () => {
@@ -151,16 +151,16 @@ describe('slider drag', () => {
     expect(stopY(SCALE_STOPS, 0, 90)).toBe(0);
     expect(stopY(SCALE_STOPS, 1, 90)).toBe(10);
     expect(stopY(SCALE_STOPS, 17, 90)).toBe(90);
-    expect(stopY(QUALITY_STOPS, 5, 100)).toBe(25);
-    expect(stopY(QUALITY_STOPS, 19, 100)).toBe(95);
-    expect(stopY(QUALITY_STOPS, 20, 100)).toBe(100);
+    expect(stopY(QUALITY_STOPS, 5, 110)).toBe(30);
+    expect(stopY(QUALITY_STOPS, 19, 110)).toBe(100);
+    expect(stopY(QUALITY_STOPS, 21, 110)).toBe(110);
   });
 
   it('finds where a value sits, or the stop just below it', () => {
     expect(stopIndex(SCALE_STOPS, 50)).toBe(9);
     expect(stopIndex(SCALE_STOPS, 100)).toBe(0);
-    expect(stopIndex(QUALITY_STOPS, 'extreme')).toBe(20);
-    expect(stopIndex(QUALITY_STOPS, 82)).toBe(4);
+    expect(stopIndex(QUALITY_STOPS, 'extreme')).toBe(21);
+    expect(stopIndex(QUALITY_STOPS, 82)).toBe(5);
   });
 });
 
@@ -173,13 +173,13 @@ describe('slider labels', () => {
   it('labels the first, the last and the multiples of 25 where they are 18 px or more apart', () => {
     // Downscale: 100 at 0, 75 at 25.6, 50 at 51.1, 25 at 76.7, 10 at 92: 25 is 15.3 px from 10 and goes
     expect(labelledStops(SCALE_STOPS, 92)).toEqual([0, 4, 9, 17]);
-    // Compression: q 100, 75, 50, 25, Extreme sit 25 px apart
-    expect(labelledStops(QUALITY_STOPS, 92)).toEqual([0, 5, 10, 15, 20]);
+    // Compression: Adaptive crowds q 100 (8 px) and keeps its place; q 75, 50, 25 and Extreme sit 21 px apart
+    expect(labelledStops(QUALITY_STOPS, 92)).toEqual([0, 6, 11, 16, 21]);
   });
 
   it('drops round stops that crowd on a compact card', () => {
     expect(labelledStops(SCALE_STOPS, 42)).toEqual([0, 9, 17]);
-    expect(labelledStops(QUALITY_STOPS, 42)).toEqual([0, 10, 20]);
+    expect(labelledStops(QUALITY_STOPS, 42)).toEqual([0, 11, 21]);
   });
 
   it('never labels two stops closer than 18 px', () => {
@@ -399,5 +399,29 @@ describe('audio cards', () => {
       ['Opus', false],
       ['WAV', false],
     ]);
+  });
+});
+
+describe('adaptive detent', () => {
+  it('sits at the top of the compression slider', () => {
+    expect(QUALITY_STOPS[0]).toBe('adaptive');
+    expect(stopY(QUALITY_STOPS, 0, 220)).toBe(0);
+    expect(stopY(QUALITY_STOPS, 1, 220)).toBe(20);
+    expect(stopY(QUALITY_STOPS, QUALITY_STOPS.length - 1, 220)).toBe(220);
+  });
+  it('reads, labels and patches as adaptive', () => {
+    expect(currentQuality({ ...card({ kind: 'done' }).edits, adaptive: true }, 80)).toBe('adaptive');
+    expect(qualityLabel('adaptive')).toBe('Adaptive');
+    expect(qualityPatch('adaptive')).toEqual({ adaptive: true, compression: null, fit_under: null, level: 'normal' });
+    expect(qualityPatch(60)).toEqual({ compression: 60, level: 'normal', adaptive: false });
+    expect(nextQuality('adaptive')).toBe(90);
+  });
+  it('leaves the downscale slider where it was', () => {
+    expect(stopY(SCALE_STOPS, 1, 180)).toBe(20); // 180 × (100 − 90) / (100 − 10)
+  });
+  it('offers no Adaptive on a video card', () => {
+    const clip = { ...card({ kind: 'done' }), video: { duration_ms: 1, codec: 'H.264', fps: 30, audio: true, original: null, original_duration_ms: 1, hevc_encoder: false } };
+    expect(compressionStops(clip)[0]).toBe(100);
+    expect(compressionStops(card({ kind: 'done' }))[0]).toBe('adaptive');
   });
 });
