@@ -1001,7 +1001,9 @@ impl Job {
             let reserved = self.twin.then_some(source.as_path());
             output::unique_except(&wanted, own.as_deref(), reserved)
         };
+        // Extracted pages never replace their PDF, signed or not.
         let trash_source = kind == OutputKind::Converted
+            && self.source_format != Format::Pdf
             && rules.converted.location == Location::InPlace
             && path != source
             && !self.twin;
@@ -3337,5 +3339,36 @@ mod tests {
             .update;
         assert_eq!(card.state, JobState::Done);
         assert!(path.with_file_name("doc").is_dir());
+    }
+
+    #[test]
+    fn extracting_pages_keeps_the_pdf_when_converted_results_go_in_place() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let extras = PdfExtras {
+            signed: true,
+            ..Default::default()
+        };
+        let mut settings = Settings::default();
+        settings.pdf.output.converted.location = Location::InPlace;
+        for pages in [
+            serde_json::json!({ "format": "png" }),
+            serde_json::json!({ "format": "png", "pages": { "first": 1, "last": 1 } }),
+        ] {
+            let (mut job, path, input) = pages_job(&env, 2, &extras);
+            extract(&mut job, pages);
+            let card = run(&mut job, Level::Normal, &options_with(&settings), &env)
+                .0
+                .unwrap()
+                .update;
+            assert_eq!(card.state, JobState::Done);
+            assert_eq!(fs::read(&path).unwrap(), input);
+            assert!(!env.dir.path().join(".trash/doc.pdf").exists());
+            // The next round starts clean.
+            let _ = fs::remove_dir_all(path.with_file_name("doc"));
+            let _ = fs::remove_file(path.with_file_name("doc.png"));
+        }
     }
 }
