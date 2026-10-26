@@ -15,6 +15,25 @@ export function autoHides(state: JobState): boolean {
   return ['done', 'already_optimal', 'larger', 'restored'].includes(state.kind);
 }
 
+/** Originals the webview cannot draw in an <img>: Rust renders a poster for them (`poster.rs`). */
+const POSTER_SOURCES = ['pdf', 'tiff', 'heic'];
+
+/**
+ * What a card's thumbnail draws: the poster, else the backup of a drawable original.
+ * Until the poster exists the backup of a PDF, TIFF or HEIC is the document itself,
+ * which an <img> cannot show (a broken-image frame on top of the card's own edge).
+ */
+export function thumbSrc(card: JobUpdate): string | null {
+  if (card.poster) return card.poster;
+  if (card.source_format && POSTER_SOURCES.includes(card.source_format)) return null;
+  return card.thumb_path;
+}
+
+/** Left edge of a tooltip that starts at `left` and is `width` wide: pulled left to stay `gutter` px inside a card `room` px wide. */
+export function tipLeft(left: number, width: number, room: number, gutter = 6): number {
+  return Math.max(gutter, Math.min(left, room - width - gutter));
+}
+
 /** The pipeline media a card belongs to. */
 export function cardMedia(card: JobUpdate): Media {
   if (card.video) return 'video';

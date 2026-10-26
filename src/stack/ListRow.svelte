@@ -1,7 +1,7 @@
 <script lang="ts">
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
-  import { autoHides, canDrag, isBusy, type Tool } from '../lib/cards';
+  import { autoHides, canDrag, isBusy, thumbSrc, type Tool } from '../lib/cards';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import type { JobUpdate } from '../lib/ipc';
@@ -152,8 +152,8 @@
   onfocusout={() => (focused = false)}
 >
   <span class="thumb">
-    {#if card.poster ?? card.thumb_path}
-      <img bind:this={thumb} src={convertFileSrc((card.poster ?? card.thumb_path)!)} alt="" width="32" height="32" crossorigin="anonymous" />
+    {#if thumbSrc(card)}
+      <img bind:this={thumb} src={convertFileSrc(thumbSrc(card)!)} alt="" width="32" height="32" crossorigin="anonymous" />
     {/if}
     {#if hovered || checked || focused || selecting}
       <input type="checkbox" {checked} aria-label={t('drop.list.select', { name: fileName })} onclick={(e) => ontoggle(e.shiftKey)} />

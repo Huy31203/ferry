@@ -10,6 +10,8 @@ import {
   openTool,
   railActions,
   remove,
+  thumbSrc,
+  tipLeft,
   upsert,
   type RailAction,
 } from './cards';
@@ -176,5 +178,37 @@ describe('popover tools', () => {
   it('knows which tools are popovers', () => {
     expect(isPopover('pages')).toBe(true);
     expect(isPopover('rename')).toBe(false);
+  });
+});
+
+describe('thumbSrc', () => {
+  it('draws the backup of an image', () => {
+    expect(thumbSrc(card({ kind: 'queued' }))).toBe('/b/shot.png');
+  });
+
+  it('draws the poster of a PDF once it exists', () => {
+    const pdf = card({ kind: 'queued' }, { source_format: 'pdf', thumb_path: '/b/a.pdf', poster: '/b/a.png' });
+    expect(thumbSrc(pdf)).toBe('/b/a.png');
+  });
+
+  it('draws nothing for a PDF, TIFF or HEIC before its poster exists', () => {
+    for (const source_format of ['pdf', 'tiff', 'heic'] as const) {
+      expect(thumbSrc(card({ kind: 'queued' }, { source_format, thumb_path: '/b/a.bin', poster: null }))).toBeNull();
+    }
+  });
+});
+
+describe('tipLeft', () => {
+  it('keeps a tooltip on the button when it fits', () => {
+    expect(tipLeft(40, 100, 300)).toBe(40);
+  });
+
+  it('pulls a tooltip left so its right edge stays 6 px inside the card', () => {
+    expect(tipLeft(200, 150, 300)).toBe(144);
+    expect(tipLeft(100, 150, 220)).toBe(64);
+  });
+
+  it('never leaves the left gutter, even for a tip as wide as the card', () => {
+    expect(tipLeft(10, 300, 300)).toBe(6);
   });
 });
