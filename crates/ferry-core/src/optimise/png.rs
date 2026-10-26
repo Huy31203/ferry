@@ -5,7 +5,7 @@ use std::io::Cursor;
 use imagequant::RGBA;
 use oxipng::{BitDepth, ColorType, Options, RGBA8, RawImage};
 
-use super::{OptimiseError, OptimiseOptions, quality};
+use super::{Encoder, OptimiseError, OptimiseOptions, quality};
 use crate::edit::raster::Raster;
 
 /// Chunks that change how the picture looks, kept whatever the metadata setting.
@@ -72,32 +72,37 @@ fn pack(
     icc: Option<&[u8]>,
     o: &OptimiseOptions,
 ) -> Result<Vec<u8>, OptimiseError> {
-    let mut attr = imagequant::new();
     let (speed, preset) = effort(o);
-    attr.set_speed(speed).map_err(encode_err)?;
-    attr.set_quality(0, quality(o)).map_err(encode_err)?;
-    let mut image = attr
-        .new_image(rgba, width as usize, height as usize, 0.0)
-        .map_err(encode_err)?;
-    let mut quantised = attr.quantize(&mut image).map_err(encode_err)?;
-    quantised.set_dithering_level(1.0).map_err(encode_err)?;
-    let (palette, indexed) = quantised.remapped(&mut image).map_err(encode_err)?;
-    if o.cancel.is_cancelled() {
-        return Err(OptimiseError::Cancelled);
-    }
-
-    let palette = palette
-        .iter()
-        .map(|c| RGBA8::new(c.r, c.g, c.b, c.a))
-        .collect();
-    let mut raw = RawImage::new(
-        width,
-        height,
-        ColorType::Indexed { palette },
-        BitDepth::Eight,
-        indexed,
-    )
-    .map_err(encode_err)?;
+    // stream F: pipelines (visually lossless keeps every pixel, so no quantising)
+    let mut raw = if o.encoder == Some(Encoder::VisuallyLossless) {
+        let bytes = rgba.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+        RawImage::new(width, height, ColorType::RGBA, BitDepth::Eight, bytes).map_err(encode_err)?
+    } else {
+        let mut attr = imagequant::new();
+        attr.set_speed(speed).map_err(encode_err)?;
+        attr.set_quality(0, quality(o)).map_err(encode_err)?;
+        let mut image = attr
+            .new_image(rgba, width as usize, height as usize, 0.0)
+            .map_err(encode_err)?;
+        let mut quantised = attr.quantize(&mut image).map_err(encode_err)?;
+        quantised.set_dithering_level(1.0).map_err(encode_err)?;
+        let (palette, indexed) = quantised.remapped(&mut image).map_err(encode_err)?;
+        if o.cancel.is_cancelled() {
+            return Err(OptimiseError::Cancelled);
+        }
+        let palette = palette
+            .iter()
+            .map(|c| RGBA8::new(c.r, c.g, c.b, c.a))
+            .collect();
+        RawImage::new(
+            width,
+            height,
+            ColorType::Indexed { palette },
+            BitDepth::Eight,
+            indexed,
+        )
+        .map_err(encode_err)?
+    };
     for (name, data) in chunks {
         raw.add_png_chunk(name, data);
     }
@@ -113,9 +118,13 @@ fn pack(
 /// speed 8 and preset 1: the same palette size and output about 1% bigger. Aggressive
 /// is a deliberate slower retry and keeps the spec's settings (speed 4, preset 4).
 fn effort(o: &OptimiseOptions) -> (i32, u8) {
-    match o.level {
-        super::Level::Normal => (8, 1),
-        super::Level::Aggressive => (4, 4),
+    match (o.encoder, o.level) {
+        // stream F: pipelines
+        (Some(Encoder::Fast), _) => (8, 1),
+        (Some(Encoder::Small), _) => (4, 4),
+        (Some(Encoder::VisuallyLossless), _) => (8, 2),
+        (None, super::Level::Normal) => (8, 1),
+        (None, super::Level::Aggressive) => (4, 4),
     }
 }
 
@@ -282,5 +291,20 @@ mod tests {
             optimise(&input, &OptimiseOptions::default()),
             Err(OptimiseError::Unsupported(_))
         ));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn visually_lossless_png_keeps_every_pixel() {
+        let input = testutil::png(64, 64);
+        let o = OptimiseOptions {
+            encoder: Some(Encoder::VisuallyLossless),
+            ..OptimiseOptions::default()
+        };
+        let out = optimise(&input, &o).unwrap();
+        assert_eq!(
+            decode_raster(&out).unwrap().rgba,
+            decode_raster(&input).unwrap().rgba
+        );
     }
 }

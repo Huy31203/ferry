@@ -1,7 +1,7 @@
 //! GIF: run the bundled gifsicle (stdin → stdout). gifsicle keeps every frame,
 //! so animated GIFs stay animated with the same frame count.
 
-use super::{OptimiseError, OptimiseOptions, quality};
+use super::{Encoder, OptimiseError, OptimiseOptions, quality};
 use crate::edit::geometry::Rect;
 use crate::sidecar::{self, DEFAULT_TIMEOUT, SidecarError};
 use crate::sniff::gif_is_complete;
@@ -32,12 +32,7 @@ pub fn edit(
         ));
     };
     let mut args = edit_args(crop, size);
-    args.extend([
-        "-O3".into(),
-        format!("--lossy={}", lossy(quality(o))),
-        "--colors".into(),
-        "256".into(),
-    ]);
+    args.extend(optimise_args(o));
     if o.strip_metadata {
         // gifsicle keeps comments and unknown extensions by default; the loop
         // count survives both flags.
@@ -51,6 +46,22 @@ pub fn edit(
         }
         other => OptimiseError::Encode(other.to_string()),
     })
+}
+
+/// The optimising flags: `-O…`, `--lossy` (not for visually lossless) and the palette.
+// stream F: pipelines
+pub(crate) fn optimise_args(o: &OptimiseOptions) -> Vec<String> {
+    let level = if o.encoder == Some(Encoder::Fast) {
+        "-O2"
+    } else {
+        "-O3"
+    };
+    let mut args = vec![level.to_owned()];
+    if o.encoder != Some(Encoder::VisuallyLossless) {
+        args.push(format!("--lossy={}", lossy(quality(o))));
+    }
+    args.extend(["--colors".into(), "256".into()]);
+    args
 }
 
 fn edit_args(crop: Option<Rect>, size: Option<(u32, u32)>) -> Vec<String> {
@@ -223,6 +234,26 @@ mod tests {
         assert_eq!(
             crate::sniff::dimensions(&out, crate::sniff::Format::Gif),
             Some((16, 12))
+        );
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn the_encoder_picks_the_gifsicle_flags() {
+        let args = |encoder| {
+            optimise_args(&OptimiseOptions {
+                encoder,
+                ..OptimiseOptions::default()
+            })
+        };
+        assert_eq!(args(None), ["-O3", "--lossy=30", "--colors", "256"]);
+        assert_eq!(
+            args(Some(Encoder::Fast)),
+            ["-O2", "--lossy=30", "--colors", "256"]
+        );
+        assert_eq!(
+            args(Some(Encoder::VisuallyLossless)),
+            ["-O3", "--colors", "256"]
         );
     }
 }

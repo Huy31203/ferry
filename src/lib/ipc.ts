@@ -42,6 +42,8 @@ export interface Edits {
   level: 'normal' | 'aggressive';
   // stream F: pipelines
   encoder: 'fast' | 'small' | 'visually_lossless' | null;
+  strip_metadata: boolean | null;
+  adaptive: boolean;
   // stream A: video
   speed: Speed | null;
   mute: boolean;
