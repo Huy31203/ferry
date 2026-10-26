@@ -629,6 +629,8 @@ impl Job {
             (true, Format::Jpeg) => "card.step.jpeg",
             (true, Format::WebP) => "card.step.webp",
             (true, Format::Gif) => "card.step.gif",
+            // sE pdf-formats (later tasks give each its own step)
+            (true, Format::Tiff | Format::Heic | Format::Avif | Format::Pdf) => "card.step.edit",
             // stream A: video (never reached once videos are dispatched earlier)
             (
                 true,

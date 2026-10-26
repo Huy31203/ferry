@@ -89,6 +89,8 @@ pub fn codec_for(target: Format, probe: &Probe) -> Option<Codec> {
             Codec::H264
         }),
         Format::Gif | Format::Png | Format::Jpeg | Format::WebP => None,
+        // sE pdf-formats
+        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => None,
         // stream B: audio
         Format::Mp3
         | Format::M4a

@@ -380,6 +380,74 @@ pub fn get_xattr(path: &std::path::Path, name: &std::ffi::CStr) -> Vec<u8> {
     buf
 }
 
+// ---- sE pdf-formats fixtures ----
+
+/// An ISO box: size, type, payload.
+fn boxed(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut out = (payload.len() as u32 + 8).to_be_bytes().to_vec();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// A `ftyp` box with a major brand and compatible brands.
+pub fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+    let mut payload = major.to_vec();
+    payload.extend_from_slice(&[0; 4]);
+    payload.extend(compatible.iter().flat_map(|b| b.iter().copied()));
+    boxed(b"ftyp", &payload)
+}
+
+/// `ftyp` + `meta` → `iprp` → `ipco` holding one `ispe` per size and an optional `irot`.
+pub fn heif(major: &[u8; 4], sizes: &[(u32, u32)], irot: Option<u8>) -> Vec<u8> {
+    let mut ipco = Vec::new();
+    for &(w, h) in sizes {
+        let mut ispe = vec![0; 4];
+        ispe.extend_from_slice(&w.to_be_bytes());
+        ispe.extend_from_slice(&h.to_be_bytes());
+        ipco.extend(boxed(b"ispe", &ispe));
+    }
+    if let Some(angle) = irot {
+        ipco.extend(boxed(b"irot", &[angle]));
+    }
+    let mut meta = vec![0; 4]; // version and flags
+    meta.extend(boxed(b"iprp", &boxed(b"ipco", &ipco)));
+    let mut out = ftyp(major, &[b"mif1"]);
+    out.extend(boxed(b"meta", &meta));
+    out
+}
+
+/// A little-endian TIFF header and one IFD per page, holding tags 256 and 257
+/// (LONG) and `extra_tag` (SHORT 1). No pixel data.
+pub fn tiff_ifds(pages: &[(u32, u32)], extra_tag: Option<u16>) -> Vec<u8> {
+    let entries = 2 + usize::from(extra_tag.is_some());
+    let ifd_len = 2 + 12 * entries + 4;
+    let mut out = b"II*\0".to_vec();
+    out.extend_from_slice(&8_u32.to_le_bytes());
+    for (i, &(w, h)) in pages.iter().enumerate() {
+        out.extend_from_slice(&(entries as u16).to_le_bytes());
+        for (tag, kind, value) in [(256_u16, 4_u16, w), (257, 4, h)] {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&1_u32.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        if let Some(tag) = extra_tag {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&3_u16.to_le_bytes());
+            out.extend_from_slice(&1_u32.to_le_bytes());
+            out.extend_from_slice(&[1, 0, 0, 0]);
+        }
+        let next = if i + 1 < pages.len() {
+            8 + ifd_len * (i + 1)
+        } else {
+            0
+        };
+        out.extend_from_slice(&(next as u32).to_le_bytes());
+    }
+    out
+}
+
 // ---- stream B: audio fixtures ----
 use crate::audio::tool::{AudioTool, ToolError};
 use std::{

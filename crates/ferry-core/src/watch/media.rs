@@ -21,7 +21,9 @@ pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "aif", "aiff", "mp3", "m4
 /// The content wins over the extension; `head` is the first bytes of the file.
 pub fn classify(name: &str, head: &[u8]) -> Option<Media> {
     if let Some(format) = sniff::sniff(head) {
-        return Some(if format.is_audio() {
+        return Some(if format == sniff::Format::Pdf {
+            Media::Pdf // sE pdf-formats: sniff knows PDFs now
+        } else if format.is_audio() {
             Media::Audio
         } else if format.is_video() {
             Media::Video

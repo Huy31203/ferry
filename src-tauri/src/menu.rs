@@ -52,11 +52,16 @@ pub enum Action {
     Integration(crate::integrations::menu::Item),
 }
 
-const FORMATS: [Format; 14] = [
+const FORMATS: [Format; 18] = [
     Format::Png,
     Format::Jpeg,
     Format::Gif,
     Format::WebP,
+    // sE pdf-formats
+    Format::Tiff,
+    Format::Heic,
+    Format::Avif,
+    Format::Pdf,
     // stream A: video
     Format::Mp4,
     Format::Hevc,

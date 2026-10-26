@@ -199,6 +199,11 @@ const FORMAT_LABELS: Record<Format, string> = {
   jpeg: 'JPEG',
   gif: 'GIF',
   webp: 'WebP',
+  // sE pdf-formats
+  tiff: 'TIFF',
+  heic: 'HEIC',
+  avif: 'AVIF',
+  pdf: 'PDF',
   // stream A: video
   mp4: 'MP4',
   hevc: 'HEVC',

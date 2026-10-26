@@ -9,7 +9,7 @@ export type JobState =
   | { kind: 'restored' };
 
 // stream A: video (the last six)
-export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv' | 'mp3' | 'm4a' | 'flac' | 'wav' | 'aiff' | 'ogg' | 'opus'; // stream B: audio (the last seven)
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'tiff' | 'heic' | 'avif' | 'pdf' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv' | 'mp3' | 'm4a' | 'flac' | 'wav' | 'aiff' | 'ogg' | 'opus'; // sE pdf-formats (tiff to pdf), stream B: audio (the last seven)
 
 // ---- stream B: audio ----
 export type Loudness = 'off' | 'streaming' | 'apple_music' | 'podcast' | 'broadcast';
