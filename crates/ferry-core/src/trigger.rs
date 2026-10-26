@@ -31,9 +31,13 @@ pub enum Skip {
     IgnoredApp,
     NoImage,
     MultipleFiles,
-    TooLarge { limit_mb: u32 },
+    TooLarge {
+        limit_mb: u32,
+    },
     IgnoredExtension(String),
     NeedsGifsicle,
+    /// A folder where a file was expected; folders go to the drop zone.
+    Folder(String),
 }
 
 impl Skip {
@@ -47,6 +51,7 @@ impl Skip {
             }
             Skip::IgnoredExtension(ext) => tf("error.ignored_extension", &[("ext", ext)]),
             Skip::NeedsGifsicle => t("error.gifsicle_missing"),
+            Skip::Folder(name) => tf("error.folder", &[("name", name)]),
             Skip::Disabled | Skip::NotRunning | Skip::IgnoredApp | Skip::NoImage => {
                 t("error.nothing_to_optimise")
             }

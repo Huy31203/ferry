@@ -349,6 +349,15 @@ impl Job {
     /// A copied file, to be optimised in place. `Err` is the card text for a
     /// file the settings exclude or that is not a supported image.
     pub fn file(path: &Path, settings: &Settings, has_gifsicle: bool) -> Result<Job, String> {
+        // A folder (or a symlink to one, or a macOS package) is not a file to read.
+        if fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+            let name = path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned();
+            return Err(Skip::Folder(name).reason());
+        }
         // stream A: video
         if let Some((container, len)) = video_job::video_container(path) {
             return Job::video_file(path, settings, container, len);
@@ -1765,6 +1774,41 @@ mod tests {
             }
         );
         assert_eq!(finished.cause.as_deref(), Some("busy"));
+    }
+
+    #[test]
+    fn a_folder_is_refused_with_a_friendly_reason_not_a_read_error() {
+        let env = Env::new();
+        let want = "batch is a folder. Drop it on Ferry's drop zone to optimise what is inside.";
+        let plain = env.dir.path().join("batch");
+        fs::create_dir(&plain).unwrap();
+        assert_eq!(
+            Job::file(&plain, &Settings::default(), true).unwrap_err(),
+            want
+        );
+
+        // A folder named like a video, audio file, PDF or image is still a folder.
+        for name in ["clip.mp4", "song.mp3", "doc.pdf", "pic.png"] {
+            let dir = env.dir.path().join(name);
+            fs::create_dir(&dir).unwrap();
+            let err = Job::file(&dir, &Settings::default(), true).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "{name} is a folder. Drop it on Ferry's drop zone to optimise what is inside."
+                )
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            let link = env.dir.path().join("shortcut");
+            std::os::unix::fs::symlink(&plain, &link).unwrap();
+            assert_eq!(
+                Job::file(&link, &Settings::default(), true).unwrap_err(),
+                "shortcut is a folder. Drop it on Ferry's drop zone to optimise what is inside."
+            );
+        }
     }
 
     #[test]
