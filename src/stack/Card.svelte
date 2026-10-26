@@ -2,7 +2,7 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { fade } from 'svelte/transition';
-  import { autoHides, canDrag, isBusy, needsOriginal, railActions, type RailAction, type Tool } from '../lib/cards';
+  import { autoHides, canDrag, isBusy, needsOriginal, thumbSrc, railActions, type RailAction, type Tool } from '../lib/cards';
   import {
     SCALE_STOPS,
     // stream B: audio (the Compression button drives bitrate on audio cards)
@@ -446,10 +446,10 @@
   onfocusout={() => (focused = false)}
   out:fade={{ duration: motionOut }}
 >
-  <div class="thumb" aria-hidden="true">
-    {#if card.poster ?? card.thumb_path}
+  <div class="thumb" class:document={card.source_format === 'pdf'} aria-hidden="true">
+    {#if thumbSrc(card)}
       <!-- sE pdf-formats: a poster stands in for originals the webview cannot draw -->
-      <img bind:this={thumb} src={convertFileSrc((card.poster ?? card.thumb_path)!)} alt="" crossorigin="anonymous" />
+      <img bind:this={thumb} src={convertFileSrc(thumbSrc(card)!)} alt="" crossorigin="anonymous" />
     {:else if card.audio}
       <!-- stream B: audio -->
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2" /></svg>
@@ -755,6 +755,10 @@
   .thumb:has(img) {
     background: #000;
     padding-bottom: 0;
+  }
+  /* A white page against black bars reads as a second frame inside the card's edge. */
+  .thumb.document:has(img) {
+    background: #2c2c2e;
   }
   .thumb img {
     position: absolute;
