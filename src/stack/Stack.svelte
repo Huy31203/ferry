@@ -145,7 +145,8 @@ import { shareAnchor } from '../lib/share'; // Stream H
       if (isBusy(card.state)) invoke('card_cancel', { id });
       close(id);
     } else if (action === 'share') {
-      const el = root?.querySelector<HTMLElement>(`article[data-card-id="${id}"]`);
+      // A card is an article, a compact-list row a div; the popovers carry the id too.
+      const el = root?.querySelector<HTMLElement>(`[data-card-id="${id}"]:not([data-popover])`);
       if (el) invoke('card_share', { id, anchor: shareAnchor(el.getBoundingClientRect(), railRight) }).catch((e) => console.warn('share', e));
     } else {
       setTool(id, action);
