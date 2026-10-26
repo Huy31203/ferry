@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::selfwrite::{self, Stamp};
 use crate::settings::{Location, Output};
 use crate::sniff::{self, Format};
 
@@ -108,6 +109,9 @@ pub struct ScanOptions {
     pub max_files: usize,
     /// Folders (Ferry's own backups and working folders) the scan never enters.
     pub exclude: Vec<PathBuf>,
+    /// Files this session's jobs hold as their current file (Ferry's own
+    /// results); a folder scan leaves them out, as it does files in the self-write ledger.
+    pub own: Vec<PathBuf>,
 }
 
 impl Default for ScanOptions {
@@ -115,6 +119,7 @@ impl Default for ScanOptions {
         Self {
             max_files: MAX_FILES,
             exclude: Vec::new(),
+            own: Vec::new(),
         }
     }
 }
@@ -144,10 +149,18 @@ struct Walk {
     scan: Scan,
     seen: HashSet<PathBuf>,
     exclude: Vec<PathBuf>,
+    own: HashSet<PathBuf>,
     max_files: usize,
 }
 
 impl Walk {
+    /// A file inside a folder that Ferry wrote: a known job output, or a write
+    /// the self-write ledger still remembers (and the user has not edited).
+    fn own_result(&self, canonical: &Path) -> bool {
+        self.own.contains(canonical)
+            || Stamp::of(canonical).is_some_and(|stamp| selfwrite::is_own(canonical, &stamp))
+    }
+
     fn excluded(&self, canonical: &Path) -> bool {
         self.exclude.iter().any(|e| canonical.starts_with(e))
     }
@@ -159,6 +172,10 @@ impl Walk {
             return Ok(());
         };
         if self.excluded(&canonical) || self.seen.contains(&canonical) {
+            return Ok(());
+        }
+        // A file dropped by name is the user's call (the drop handler tells them); one found in a folder is skipped.
+        if !top && self.own_result(&canonical) {
             return Ok(());
         }
         let found = classify_file(&canonical)
@@ -254,6 +271,7 @@ pub fn scan(paths: &[PathBuf], o: &ScanOptions) -> Scan {
             .iter()
             .map(|e| fs::canonicalize(e).unwrap_or_else(|_| e.clone()))
             .collect(),
+        own: o.own.iter().map(|p| selfwrite::key(p)).collect(),
         max_files: o.max_files,
     };
     for path in paths {
@@ -599,6 +617,22 @@ mod tests {
         };
         let scan = scan(&[dir.path().join("d")], &o);
         assert_eq!(names(&scan), ["y.png"]);
+    }
+
+    #[test]
+    fn a_folder_scan_skips_ferrys_own_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = put(dir.path(), "d/a_optimised.png", &png(8, 8));
+        let written = put(dir.path(), "d/b_optimised.png", &png(9, 9));
+        put(dir.path(), "d/a.png", &png(8, 8));
+        put(dir.path(), "d/c_optimised.png", &png(10, 10)); // the user's own file, by name alone
+        selfwrite::record(&written);
+        let o = ScanOptions {
+            own: vec![known],
+            ..ScanOptions::default()
+        };
+        let scan = scan(&[dir.path().join("d")], &o);
+        assert_eq!(names(&scan), ["a.png", "c_optimised.png"]);
     }
 
     #[test]
