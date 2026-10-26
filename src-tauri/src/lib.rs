@@ -354,7 +354,12 @@ mod asset_scope_tests {
                 Pattern::new(&pattern).unwrap().matches_with(&path, options)
             })
         };
-        for name in ["a.png", ".ferry-poster.png", ".ferry-thumb.jpg", ".ferry-cover.jpg"] {
+        for name in [
+            "a.png",
+            ".ferry-poster.png",
+            ".ferry-thumb.jpg",
+            ".ferry-cover.jpg",
+        ] {
             assert!(served(name), "{name} is outside the asset scope");
         }
     }
