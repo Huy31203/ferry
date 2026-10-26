@@ -143,3 +143,11 @@ export function statusLine(status: BatchStatus, locale?: string): string {
       return '';
   }
 }
+
+const FORM_TAGS = ['INPUT', 'SELECT', 'BUTTON', 'TEXTAREA'];
+
+/** Whether a key event came from a control that has keys of its own (Space on a checkbox, arrows in a select). */
+export function isFormTarget(target: EventTarget | { tagName: string } | null): boolean {
+  const tag = target && 'tagName' in target ? target.tagName : '';
+  return FORM_TAGS.includes(tag);
+}

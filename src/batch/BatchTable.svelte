@@ -1,11 +1,12 @@
 <script lang="ts">
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
+  import { untrack } from 'svelte';
   import { t, type StringKey } from '../lib/i18n';
   import { formatBytes, savingPercent } from '../lib/format';
   import { isMac } from '../lib/ipc';
   import { visibleRange } from '../lib/virtual';
-  import { orderRows, type Filter, type SortKey } from '../lib/batchview';
+  import { isFormTarget, orderRows, type Filter, type SortKey } from '../lib/batchview';
   import type { BatchRow, MediaKind, RowStatus } from '../lib/drop-ipc';
 
   const ROW = 32;
@@ -37,10 +38,16 @@
 
   // The order is recomputed when the user sorts or filters, or rows are added, never on a status change.
   let order = $state<number[]>([]);
+  // `rows` is replaced on every batch:rows, so it is read untracked; its length is the one thing
+  // that must follow (a cleared batch leaves no rows for `order` to point at).
+  const count = $derived(rows.length);
   $effect(() => {
     added;
+    count;
     const filter: Filter = { kind, status: statusFilter };
-    order = orderRows(rows, sortKey, descending, filter);
+    const key = sortKey;
+    const down = descending;
+    order = untrack(() => orderRows(rows, key, down, filter));
   });
 
   const range = $derived(visibleRange(scrollTop, viewport, ROW, order.length));
@@ -83,6 +90,7 @@
     row.job && invoke(action, { id: row.job }).catch((e) => console.warn(action, e));
 
   function keydown(event: KeyboardEvent) {
+    if (isFormTarget(event.target)) return;
     const mod = isMac ? event.metaKey : event.ctrlKey;
     const row = rows[order[cursor]];
     if (mod && event.key.toLowerCase() === 'a') {
