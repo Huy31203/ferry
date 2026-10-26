@@ -6,6 +6,7 @@ export type PaneId =
   | 'general'
   | 'clipboard'
   | 'images'
+  | 'pdf' // sE pdf-formats
   | 'videos' // stream A: video
   | 'audio' // stream B: audio
   | 'files'
@@ -21,6 +22,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'general', label: 'pane.general' },
   { id: 'clipboard', label: 'pane.clipboard' },
   { id: 'images', label: 'pane.images' },
+  { id: 'pdf', label: 'pdf.pane' }, // sE pdf-formats
   { id: 'videos', label: 'video.pane' }, // stream A: video
   { id: 'audio', label: 'audio.pane' }, // stream B: audio
   { id: 'files', label: 'pane.files' },
@@ -42,9 +44,12 @@ export type Control =
   | { kind: 'extensions' }
   | { kind: 'apps' }
   | { kind: 'tray_style' }
-  | { kind: 'output'; converted: boolean; media?: 'video' | 'audio' }
+  | { kind: 'output'; converted: boolean; media?: 'video' | 'audio' | 'pdf' }
   | { kind: 'encoder' } // stream A: video
   | { kind: 'sizes' }
+  // sE pdf-formats
+  | { kind: 'dpi' }
+  | { kind: 'devices' }
   | { kind: 'action'; action: 'open_backups' | 'open_work' | 'force_clean'; button: StringKey }
   // svc (stream G)
   | { kind: 'hotkey'; action: HotkeyId }
@@ -80,6 +85,17 @@ export interface Setting {
 }
 
 const SIZE_UNIT: StringKey = 'unit.mb';
+
+/** sE pdf-formats: what a HEIC, TIFF or AVIF becomes when optimised. */
+const CONVERT_TO: Control = {
+  kind: 'select',
+  options: [
+    { value: 'keep', label: 'pdf.formats.keep' },
+    { value: 'jpeg', label: 'pdf.formats.jpeg' },
+    { value: 'png', label: 'pdf.formats.png' },
+    { value: 'webp', label: 'pdf.formats.webp' },
+  ],
+};
 
 const all: Setting[] = [
   {
@@ -314,6 +330,77 @@ const all: Setting[] = [
     help: 'images.crop_sizes.help',
     path: 'images.crop_sizes',
     control: { kind: 'sizes' },
+  },
+  // sE pdf-formats: conversions of formats Ferry reads but does not keep by default
+  {
+    id: 'heic_to',
+    pane: 'images',
+    group: 'pdf.formats.group',
+    label: 'pdf.formats.heic_to',
+    help: 'pdf.formats.help',
+    path: 'formats.heic_to',
+    control: CONVERT_TO,
+    mac_only: true, // HEIC is read and written through macOS only
+  },
+  {
+    id: 'tiff_to',
+    pane: 'images',
+    group: 'pdf.formats.group',
+    label: 'pdf.formats.tiff_to',
+    help: 'pdf.formats.help',
+    path: 'formats.tiff_to',
+    control: CONVERT_TO,
+  },
+  {
+    id: 'avif_to',
+    pane: 'images',
+    group: 'pdf.formats.group',
+    label: 'pdf.formats.avif_to',
+    help: 'pdf.formats.help',
+    path: 'formats.avif_to',
+    control: CONVERT_TO,
+  },
+
+  // sE pdf-formats
+  {
+    id: 'pdf_dpi',
+    pane: 'pdf',
+    label: 'pdf.settings.dpi',
+    help: 'pdf.settings.dpi.help',
+    path: 'pdf.dpi',
+    control: { kind: 'dpi' },
+  },
+  {
+    id: 'pdf_dpi_aggressive',
+    pane: 'pdf',
+    label: 'pdf.settings.dpi_aggressive',
+    help: 'pdf.settings.dpi_aggressive.help',
+    path: 'pdf.dpi_aggressive',
+    control: { kind: 'dpi' },
+  },
+  {
+    id: 'pdf_extract_dpi',
+    pane: 'pdf',
+    label: 'pdf.settings.extract_dpi',
+    help: 'pdf.settings.extract_dpi.help',
+    path: 'pdf.extract_dpi',
+    control: { kind: 'dpi' },
+  },
+  {
+    id: 'pdf_max_size',
+    pane: 'pdf',
+    label: 'pdf.settings.max_size',
+    help: 'pdf.settings.max_size.help',
+    path: 'pdf.max_size_mb',
+    control: { kind: 'number', min: 1, max: 10000, unit: SIZE_UNIT },
+  },
+  {
+    id: 'pdf_devices',
+    pane: 'pdf',
+    label: 'pdf.settings.devices',
+    help: 'pdf.settings.devices.help',
+    path: 'pdf.devices',
+    control: { kind: 'devices' },
   },
 
   // stream A: video
@@ -588,6 +675,26 @@ const all: Setting[] = [
     help: 'output.converted.help',
     path: 'audio.output.converted',
     control: { kind: 'output', converted: true, media: 'audio' },
+  },
+
+  // sE pdf-formats
+  {
+    id: 'output_pdf_optimised',
+    pane: 'files',
+    group: 'pdf.group',
+    label: 'output.optimised',
+    help: 'output.optimised.help',
+    path: 'pdf.output.optimised',
+    control: { kind: 'output', converted: false, media: 'pdf' },
+  },
+  {
+    id: 'output_pdf_converted',
+    pane: 'files',
+    group: 'pdf.group',
+    label: 'output.converted',
+    help: 'output.converted.help',
+    path: 'pdf.output.converted',
+    control: { kind: 'output', converted: true, media: 'pdf' },
   },
 
   {

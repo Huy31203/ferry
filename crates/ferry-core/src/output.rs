@@ -116,6 +116,13 @@ impl Sample {
         converted_ext: "mp3",
         dims: (0, 0),
     };
+    // sE pdf-formats
+    pub const PDF: Sample = Sample {
+        folder: "Desktop",
+        file: "report.pdf",
+        converted_ext: "png",
+        dims: (0, 0),
+    };
 }
 
 /// The File handling pane's live example: where `~/Desktop/shot.png`
@@ -451,6 +458,32 @@ mod tests {
         assert_eq!(
             of(OutputKind::Converted, &rule(Location::InPlace, "%f.%e")).unwrap(),
             "~/Music/track.mp3"
+        );
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_pdf_example_names_a_report() {
+        let of = |kind, rule: &OutputRule| {
+            example_for(
+                kind,
+                rule,
+                Path::new("/Users/me"),
+                Path::new("/w"),
+                today(),
+                &Sample::PDF,
+            )
+        };
+        assert_eq!(
+            of(
+                OutputKind::Optimised,
+                &rule(Location::SameFolder, "%f_optimised.%e")
+            ),
+            Ok("~/Desktop/report_optimised.pdf".into())
+        );
+        assert_eq!(
+            of(OutputKind::Converted, &rule(Location::SameFolder, "%f.%e")),
+            Ok("~/Desktop/report.png".into())
         );
     }
 }

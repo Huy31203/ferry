@@ -19,6 +19,14 @@ describe('the list of settings', () => {
     expect(panes.map((p) => p.id)).toContain('sharing');
   });
 
+  it('every PDF and conversion setting points at a real field', () => {
+    for (const id of ['pdf_dpi', 'pdf_devices', 'output_pdf_converted', 'heic_to']) {
+      const row = all.find((s) => s.id === id)!;
+      expect(getPath(sample, row.path!), id).not.toBeUndefined();
+    }
+    expect(panes.map((p) => p.id)).toContain('pdf');
+  });
+
   it('has unique ids', () => {
     const ids = all.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -104,6 +112,8 @@ describe('the list of settings', () => {
       'video.output.converted',
       'audio.output.optimised',
       'audio.output.converted',
+      'pdf.output.optimised',
+      'pdf.output.converted',
     ]);
     expect(at('hover_hotkeys')?.path).toBe('floating.hover_hotkeys');
     expect(at('crop_sizes')?.control.kind).toBe('sizes');
