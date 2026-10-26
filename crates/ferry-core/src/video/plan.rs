@@ -112,6 +112,18 @@ pub fn muxer(ext: &str) -> &'static str {
     }
 }
 
+/// The extension of the temporary file an encode writes, which picks the muxer.
+/// A kept container keeps the source's (AV1 in an `.mp4` stays MP4, not
+/// Matroska); anything else takes the target's own.
+pub fn temp_extension(target: Format, source: Format, source_ext: &str) -> String {
+    let ext = source_ext.to_ascii_lowercase();
+    if target == source && matches!(ext.as_str(), "mp4" | "m4v" | "mov" | "mkv" | "webm") {
+        ext
+    } else {
+        target.extension().to_owned()
+    }
+}
+
 /// A `Mov` becomes HEVC or MP4 when converting MOV is on; anything else stays.
 pub fn plain_target(source: Format, probe: &Probe, settings: &settings::Video) -> Format {
     match source {
@@ -937,6 +949,24 @@ pub(crate) mod tests {
         assert_eq!(plan.encoder, "libsvtav1");
         assert!(has(&plan.args, &["-crf", "27"]) && has(&plan.args, &["-preset", "10"]));
         assert!(has(&plan.args, &["-f", "matroska"]));
+    }
+
+    #[test]
+    fn av1_in_an_mp4_is_muxed_as_mp4_when_the_container_is_kept() {
+        let ext = temp_extension(Format::Av1, Format::Av1, "MP4");
+        assert_eq!(ext, "mp4");
+        let mut c = case();
+        c.target = Format::Av1;
+        c.same_container = true;
+        c.out_file = "/w/out.mp4";
+        let plan = run(&c);
+        assert_eq!(plan.encoder, "libsvtav1");
+        assert!(has(&plan.args, &["-f", "mp4"]));
+        // an AV1 MKV stays Matroska; a converted target takes its own container
+        assert_eq!(temp_extension(Format::Av1, Format::Av1, "mkv"), "mkv");
+        assert_eq!(temp_extension(Format::Av1, Format::Mp4, "mp4"), "mkv");
+        assert_eq!(temp_extension(Format::Av1, Format::Av1, "video"), "mkv");
+        assert_eq!(temp_extension(Format::Hevc, Format::Hevc, "m4v"), "m4v");
     }
 
     #[test]
