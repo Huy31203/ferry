@@ -33,7 +33,9 @@ pub mod watch; // stream C
 pub mod workdir;
 
 // stream F: pipelines
+pub mod image_steps;
 pub mod metric;
+pub mod pipeline_steps;
 
 // stream A: video
 pub mod error;
