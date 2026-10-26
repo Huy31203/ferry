@@ -281,16 +281,8 @@ pub async fn list_save_to(app: AppHandle, ids: Vec<JobId>) -> Result<Option<Save
             failed: 0,
         };
         for from in ids.iter().filter_map(|id| jobs::output(&app, id)) {
-            let to = ferry_core::output::unique_except(
-                &folder.join(from.file_name().unwrap_or_default()),
-                None,
-                None,
-            );
-            match std::fs::copy(&from, &to) {
-                Ok(_) => {
-                    let _ = ferry_core::fsutil::copy_times(&from, &to);
-                    report.copied += 1;
-                }
+            match save_copy(&from, &folder) {
+                Ok(()) => report.copied += 1,
                 Err(e) => {
                     warn!(from = %from.display(), "could not save a copy: {e}");
                     report.failed += 1;
@@ -303,10 +295,39 @@ pub async fn list_save_to(app: AppHandle, ids: Vec<JobId>) -> Result<Option<Save
     .map_err(|e| e.to_string())
 }
 
+/// Copy `from` into `folder` under a free name, with its times.
+fn save_copy(from: &std::path::Path, folder: &std::path::Path) -> std::io::Result<()> {
+    let to = ferry_core::output::unique_except(
+        &folder.join(from.file_name().unwrap_or_default()),
+        None,
+        None,
+    );
+    // Through the ledger, so a watched folder does not optimise the copy again.
+    ferry_core::fsutil::atomic_replace_from(&to, from)?;
+    let _ = ferry_core::fsutil::copy_times(from, &to);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ferry_core::pipeline;
+
+    #[test]
+    fn a_saved_copy_is_known_to_the_self_write_ledger() {
+        use ferry_core::selfwrite::{Stamp, is_own};
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("a.png");
+        std::fs::write(&from, b"png").unwrap();
+        let watched = dir.path().join("watched");
+        std::fs::create_dir(&watched).unwrap();
+        save_copy(&from, &watched).unwrap();
+        save_copy(&from, &watched).unwrap();
+        for name in ["a.png", "a (2).png"] {
+            let copy = watched.join(name);
+            assert!(is_own(&copy, &Stamp::of(&copy).unwrap()), "{name}");
+        }
+    }
 
     fn editable(format: Format, source: Format) -> JobUpdate {
         let mut card = pipeline::notice(String::new());
