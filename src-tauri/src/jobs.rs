@@ -392,12 +392,13 @@ fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
 
 fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     let options = run_options(app, cancel.clone());
-    // Stream D: a job dropped with the keep modifier writes beside its original.
     let id = entry.last.lock().unwrap().id.clone();
-    let options = crate::drop_batch::with_keep(app, &id, options);
     let started = Instant::now();
     let mut job = relock(&entry.job);
     let options = crate::pipe_jobs::options(app, &job.id, options); // stream F: pipelines
+    // Stream D: a job dropped with the keep modifier writes beside its original,
+    // whatever the pipeline named.
+    let options = crate::drop_batch::with_keep(app, &id, options);
     info!(
         job = job.id.as_str(),
         source = ?job.source,
