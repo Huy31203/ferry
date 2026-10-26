@@ -1,9 +1,11 @@
 //! Optimise one image from memory (spec §4.2). Never worse than the input:
 //! the caller keeps the original unless the result is `Smaller`.
 
+pub mod adaptive; // stream F: pipelines
 pub(crate) mod gif;
 pub(crate) mod jpeg;
 pub(crate) mod png;
+pub mod switch; // stream F: pipelines
 pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
@@ -38,6 +40,11 @@ pub struct OptimiseOptions {
     /// Resolved sidecar path; `None` makes GIF return `Unsupported`.
     pub gifsicle: Option<PathBuf>,
     pub cancel: CancelToken,
+    // stream F: pipelines
+    /// `None` keeps each format's own effort.
+    pub encoder: Option<Encoder>,
+    /// Search for the lowest quality that still looks like the original.
+    pub adaptive: bool,
 }
 
 impl Default for OptimiseOptions {
@@ -48,6 +55,8 @@ impl Default for OptimiseOptions {
             strip_metadata: true,
             gifsicle: None,
             cancel: CancelToken::new(),
+            encoder: None,
+            adaptive: false,
         }
     }
 }
@@ -87,9 +96,15 @@ impl std::error::Error for OptimiseError {}
 /// below 5) when aggressive.
 pub fn quality(o: &OptimiseOptions) -> u8 {
     let q = o.compression.clamp(5, 100);
-    match o.level {
+    let q = match o.level {
         Level::Normal => q,
         Level::Aggressive => q.saturating_sub(20).max(5),
+    };
+    // stream F: pipelines
+    if o.encoder == Some(Encoder::VisuallyLossless) {
+        q.max(90)
+    } else {
+        q
     }
 }
 
@@ -115,6 +130,13 @@ pub fn optimise(
     }
     if crate::sniff::is_animated(input, format) && format != Format::Gif {
         return Ok(Outcome::AlreadyOptimal);
+    }
+    // stream F: pipelines (a decode error here falls back to the plain encode)
+    if adaptive::applies(format, o)
+        && let Ok(reference) = crate::edit::raster::decode(input, format)
+    {
+        let adapted = adaptive::search(&reference, format, o, |opts| encode(input, format, opts))?;
+        return Ok(classify(input.len(), adapted.bytes));
     }
     let output = encode(input, format, o)?;
     Ok(classify(input.len(), output))
@@ -296,5 +318,75 @@ mod tests {
         let out = encode(&tiny, Format::Png, &OptimiseOptions::default()).unwrap();
         assert!(out.len() > tiny.len());
         assert_eq!(crate::sniff::sniff(&out), Some(Format::Png));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn visually_lossless_floors_quality_at_90() {
+        let vl = |level, q| OptimiseOptions {
+            level,
+            compression: q,
+            encoder: Some(Encoder::VisuallyLossless),
+            ..OptimiseOptions::default()
+        };
+        assert_eq!(quality(&vl(Level::Normal, 40)), 90);
+        assert_eq!(quality(&vl(Level::Aggressive, 80)), 90);
+        assert_eq!(quality(&vl(Level::Normal, 95)), 95);
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn adaptive_jpeg_is_smaller_than_q95_and_still_scores_80() {
+        let input = testutil::photo_jpeg(384, 256, 98);
+        let o = OptimiseOptions {
+            adaptive: true,
+            ..OptimiseOptions::default()
+        };
+        let Outcome::Smaller { bytes } = optimise(&input, Format::Jpeg, &o).unwrap() else {
+            panic!("should shrink")
+        };
+        let q95 = encode(
+            &input,
+            Format::Jpeg,
+            &OptimiseOptions {
+                compression: 95,
+                ..OptimiseOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(bytes.len() < q95.len());
+        let reference = crate::edit::raster::decode(&input, Format::Jpeg).unwrap();
+        let result = crate::edit::raster::decode(&bytes, Format::Jpeg).unwrap();
+        assert!(crate::metric::score(&reference, &result).unwrap() >= 80.0);
+    }
+
+    #[test]
+    fn a_tiny_image_falls_back_instead_of_failing() {
+        let tiny = testutil::png(4, 4);
+        let o = OptimiseOptions {
+            adaptive: true,
+            ..OptimiseOptions::default()
+        };
+        assert!(optimise(&tiny, Format::Png, &o).is_ok());
+    }
+
+    #[test]
+    fn gif_ignores_adaptive() {
+        let Some(gifsicle) = testutil::gifsicle() else {
+            return;
+        };
+        let gif = testutil::gif(2);
+        let plain = OptimiseOptions {
+            gifsicle: Some(gifsicle),
+            ..OptimiseOptions::default()
+        };
+        let adaptive = OptimiseOptions {
+            adaptive: true,
+            ..plain.clone()
+        };
+        assert_eq!(
+            optimise(&gif, Format::Gif, &plain).unwrap(),
+            optimise(&gif, Format::Gif, &adaptive).unwrap()
+        );
     }
 }

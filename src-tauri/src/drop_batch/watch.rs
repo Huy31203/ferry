@@ -111,6 +111,9 @@ fn run(app: &AppHandle) {
 }
 
 fn handle(app: &AppHandle, signal: Signal) {
+    if signal == Signal::DragEnded {
+        let _ = app.emit("drag:ended", ()); // stream F: pipelines (preset zones hide with the drag)
+    }
     let state = app.state::<AppState>();
     let zone_settings = state.settings.read().unwrap().drop_zone.clone();
     // The drag pasteboard and the frontmost app are read only when a signal needs them.

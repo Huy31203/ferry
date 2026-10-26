@@ -4,7 +4,7 @@
 
 use webp::{Decoder, Encoder, WebPConfig};
 
-use super::{OptimiseError, OptimiseOptions, quality};
+use super::{Encoder as Choice, OptimiseError, OptimiseOptions, quality};
 use crate::edit::raster::Raster;
 
 const ICC_FLAG: u8 = 0x20;
@@ -47,13 +47,18 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
     ))
 }
 
-/// Lossy, method 4, alpha kept at full quality.
+/// Lossy, method 4 (the encoder choice changes it), alpha kept at full quality.
 fn config(o: &OptimiseOptions) -> Result<WebPConfig, OptimiseError> {
     let mut config =
         WebPConfig::new().map_err(|()| OptimiseError::Encode("libwebp config".into()))?;
     config.lossless = 0;
     config.quality = f32::from(quality(o));
-    config.method = 4;
+    // stream F: pipelines
+    config.method = match o.encoder {
+        Some(Choice::Fast) => 2,
+        Some(Choice::Small | Choice::VisuallyLossless) => 6,
+        None => 4,
+    };
     config.alpha_compression = 1;
     config.alpha_quality = 100;
     Ok(config)
@@ -278,5 +283,27 @@ mod tests {
             optimise(b"RIFF\x04\0\0\0WEBP", &OptimiseOptions::default()),
             Err(OptimiseError::Decode(_))
         ));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn the_encoder_picks_the_webp_method() {
+        let method = |encoder| {
+            config(&OptimiseOptions {
+                encoder,
+                ..OptimiseOptions::default()
+            })
+            .unwrap()
+            .method
+        };
+        assert_eq!(
+            (
+                method(None),
+                method(Some(Choice::Fast)),
+                method(Some(Choice::Small)),
+                method(Some(Choice::VisuallyLossless))
+            ),
+            (4, 2, 6, 6)
+        );
     }
 }
