@@ -11,6 +11,8 @@ use std::sync::Mutex;
 
 use ferry_core::edit::EditsPatch;
 use ferry_core::job::JobId;
+use ferry_core::optimise::Level;
+use ferry_core::sniff::Format;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{debug, warn};
@@ -101,6 +103,15 @@ fn plan(held: bool, card: bool, enabled: bool, keyed: bool, typing: bool) -> Opt
 fn step_down(scale: Option<u8>) -> Option<u8> {
     let next = scale.unwrap_or(100).saturating_sub(10).max(10);
     (Some(next) != scale).then_some(next)
+}
+
+/// The DPI `-` steps a PDF card to: the next stop below the card's own DPI
+/// (else `default`); `None` at the lowest stop (sE pdf-formats).
+fn dpi_step_down(current: Option<u16>, default: u16) -> Option<u16> {
+    let now = current.unwrap_or(default);
+    ferry_core::pdf::DPI_STOPS
+        .into_iter()
+        .find(|&stop| stop < now)
 }
 
 /// The page's hovered idle card, or `None` when the pointer left it.
@@ -228,7 +239,7 @@ fn pressed(app: &AppHandle, key: Key) {
     let Some(id) = STATE.lock().unwrap().card.clone() else {
         return;
     };
-    let scale = match key {
+    let patch = match key {
         Key::EditWith | Key::Upload => {
             let app = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
@@ -255,27 +266,52 @@ fn pressed(app: &AppHandle, key: Key) {
         // Ferry has the keyboard (the compare window or Quick Look): digits
         // and `-` are not ours to take (spec §1).
         _ if platform::app_is_active() => return,
-        Key::Scale(percent) => Some(percent),
-        Key::StepDown => {
-            let current = app
-                .state::<AppState>()
-                .jobs
-                .lock()
-                .unwrap()
-                .get(&id)
-                .map(|entry| entry.last.lock().unwrap().edits.scale);
-            current.and_then(step_down)
+        Key::Scale(_) | Key::StepDown => {
+            let state = app.state::<AppState>();
+            let card = state.jobs.lock().unwrap().get(&id).map(|entry| {
+                let last = entry.last.lock().unwrap();
+                (
+                    last.source_format == Some(Format::Pdf),
+                    last.edits.scale,
+                    last.edits.dpi,
+                    last.edits.level == Level::Aggressive,
+                )
+            });
+            let Some((pdf, scale, dpi, aggressive)) = card else {
+                return;
+            };
+            if pdf {
+                // sE pdf-formats: a PDF has no scale; `-` steps its DPI, digits do nothing.
+                let settings = state.settings.read().unwrap();
+                let default = if aggressive {
+                    settings.pdf.dpi_aggressive
+                } else {
+                    settings.pdf.dpi
+                };
+                (key == Key::StepDown)
+                    .then(|| dpi_step_down(dpi, default))
+                    .flatten()
+                    .map(|dpi| EditsPatch {
+                        dpi: Some(Some(dpi)),
+                        ..EditsPatch::default()
+                    })
+            } else {
+                match key {
+                    Key::Scale(percent) => Some(percent),
+                    _ => step_down(scale),
+                }
+                .map(|scale| EditsPatch {
+                    scale: Some(Some(scale)),
+                    ..EditsPatch::default()
+                })
+            }
         }
     };
-    let Some(scale) = scale else {
+    let Some(patch) = patch else {
         return;
     };
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let patch = EditsPatch {
-            scale: Some(Some(scale)),
-            ..EditsPatch::default()
-        };
         if let Err(e) = jobs::edit(&app, &id, patch) {
             debug!("hover downscale: {e}");
         }
@@ -346,6 +382,14 @@ mod tests {
                 "{accelerator}"
             );
         }
+    }
+
+    #[test]
+    fn minus_on_a_pdf_lowers_the_dpi_one_stop() {
+        assert_eq!(dpi_step_down(None, 150), Some(100));
+        assert_eq!(dpi_step_down(Some(300), 150), Some(250));
+        assert_eq!(dpi_step_down(Some(160), 150), Some(150));
+        assert_eq!(dpi_step_down(Some(48), 150), None);
     }
 
     #[test]

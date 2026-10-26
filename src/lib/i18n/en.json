@@ -277,6 +277,8 @@
   "pdf.pages.invalid": "Choose pages from 1 to {n}",
   "pdf.pages.apply": "Extract",
   "pdf.dpi.label": "{n} dpi",
+  "pdf.dpi.tip": "Image resolution — click for the next lower DPI, drag for a slider",
+  "pdf.menu.dpi": "Change DPI",
   "format.tip.mac": "Convert to {format} · ⌥-click keeps both",
   "format.tip.windows": "Convert to {format} · Alt-click keeps both",
   "card.downscale": "Downscale — click for −10 %, drag for a slider",

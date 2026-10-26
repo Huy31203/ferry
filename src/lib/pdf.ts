@@ -60,6 +60,22 @@ export function dpiLabel(n: number): string {
   return t('pdf.dpi.label', { n });
 }
 
+/** The resolution a PDF card's images are at: its recipe, else extraction's, else the level's (mirrors ferry_core::pdf::target_dpi). */
+export function currentDpi(card: JobUpdate, cfg: PdfConfig): number {
+  if (card.edits.dpi !== null) return card.edits.dpi;
+  if (card.format !== 'pdf') return cfg.extract_dpi;
+  return card.edits.level === 'aggressive' ? cfg.dpi_aggressive : cfg.dpi;
+}
+
+/** One click on DPI: the next lower stop; null at the lowest. */
+export function nextDpi(dpi: number): number | null {
+  return DPI_STOPS.find((stop) => stop < dpi) ?? null;
+}
+
+export function dpiPatch(dpi: number): EditsPatch {
+  return { dpi };
+}
+
 export interface PagesForm {
   format: 'png' | 'jpeg';
   all: boolean;
