@@ -1,9 +1,11 @@
 <script lang="ts">
   import { t, type StringKey } from '../lib/i18n';
   import { usage, usageLabel, type PipeMeta, type Pipeline, type Pipelines } from '../lib/pipelines';
+  import type { WatchedFolder } from '../lib/settings';
 
   let {
     pipelines,
+    folders,
     selected,
     meta,
     starters,
@@ -14,6 +16,7 @@
     ondelete,
   }: {
     pipelines: Pipelines;
+    folders: WatchedFolder[];
     selected: number | null;
     meta: PipeMeta;
     starters: Pipeline[];
@@ -66,7 +69,7 @@
             <span class="name">{pipeline.name}</span>
             <span class="badge">{t(`pipe.media.${pipeline.media}` as StringKey)}</span>
           </span>
-          <span class="usage">{usageLabel(usage(pipelines, pipeline.id))}</span>
+          <span class="usage">{usageLabel(usage(pipelines, pipeline.id, folders))}</span>
           <span class="usage">
             {meta.last_run[pipeline.id]
               ? t('pipe.last_run', { time: meta.last_run[pipeline.id] })

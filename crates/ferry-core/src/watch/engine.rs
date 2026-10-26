@@ -64,6 +64,8 @@ pub struct Ready {
     pub media: Media,
     pub origin: Origin,
     pub show_results: bool,
+    /// The watched folder's pipeline at the time the plan was made.
+    pub pipeline: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +217,7 @@ impl Engine {
                         media,
                         origin: Origin::Capture { capture: kind },
                         show_results: captures.show_results,
+                        pipeline: None,
                     })]);
                 }
                 Role::Folder { index } => {
@@ -232,6 +235,7 @@ impl Engine {
                         media,
                         origin: Origin::Folder { index },
                         show_results: folder.show_results,
+                        pipeline: folder.pipeline,
                     };
                     self.bursts
                         .entry(index)
@@ -449,6 +453,7 @@ mod tests {
                 media,
                 origin,
                 show_results: show,
+                pipeline: None,
             })
         }
     }
@@ -540,6 +545,17 @@ mod tests {
             r.arrive(path, 0);
         }
         assert!(r.run_to(10_000).is_empty());
+    }
+
+    #[test]
+    fn a_ready_file_carries_its_folders_pipeline() {
+        let mut watch = in_folder();
+        watch.folders[0].pipeline = Some(4);
+        let mut r = Rig::new(watch, vec![]);
+        r.fs.put("/Users/me/In/a.png", 10, png_head());
+        r.arrive("/Users/me/In/a.png", 0);
+        let out = r.run_to(4000);
+        assert!(matches!(&out[..], [Notice::Ready(ready)] if ready.pipeline == Some(4)));
     }
 
     #[test]
