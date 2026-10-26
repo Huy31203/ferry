@@ -58,11 +58,14 @@ and `jrevdct.c`, unchanged.)
 - nv-codec-headers 12.1.14.0 (https://github.com/FFmpeg/nv-codec-headers.git, tag `n12.1.14.0`, commit `1889e62e2d35ff7aa9baca2bceb14f053785e6f1`): MIT. File in the bundle: `licenses/nv-codec-headers/LICENSE`
 - AMF headers 1.5.2 (https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git, tag `v1.5.2`, commit `eadd00804d5f7e5cd8c85d540073198312870776`): MIT. File in the bundle: `licenses/amf/LICENSE.txt`
 - libvpl 2.17.0 (https://github.com/intel/libvpl.git, tag `v2.17.0`, commit `d77f9195cf495b937631607333288fd917ae8939`): MIT. File in the bundle: `licenses/libvpl/LICENSE`
+- zlib 1.3.2 (https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz, SHA-256 `bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16`): zlib licence, linked statically into `ffmpeg.exe`. File in the bundle: `licenses/zlib/LICENSE`
+- winpthreads and the MinGW-w64 C runtime, linked statically into `ffmpeg.exe` from the MSYS2 MINGW64 toolchain (`-static`). winpthreads is under permissive licences (the mingw-w64 project's MIT-style licence; some files carry BSD-style or ZPL-2.1 notices, see `mingw-w64-libraries/winpthreads/COPYING`); the C runtime is public domain / ZPL-2.1. Source: https://github.com/mingw-w64/mingw-w64 (`mingw-w64-libraries/winpthreads`), at the release shipped in the MSYS2 package `mingw-w64-x86_64-winpthreads` used for the build; the package names and versions are recorded in `licenses/mingw-w64/PACKAGES.txt`, with the licence files MSYS2 ships for winpthreads alongside it.
+- GCC runtime libraries (libgcc, static): GPL-3.0-or-later **with the GCC Runtime Library Exception 3.1**, https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html. The exception lets the combined `ffmpeg.exe` be conveyed under GPL-3.0-or-later. Source: the GCC release shipped in the MSYS2 package `mingw-w64-x86_64-gcc` (version in `licenses/mingw-w64/PACKAGES.txt`; https://gcc.gnu.org/git.html).
 
 ## System components (not shipped)
 
 macOS: VideoToolbox and AudioToolbox frameworks (hardware H.264 and HEVC encoders, `aac_at`). Windows: the NVIDIA, Intel
-and AMD drivers provide the NVENC, Quick Sync and AMF runtimes. Zlib is linked statically on Windows (zlib licence).
+and AMD drivers provide the NVENC, Quick Sync and AMF runtimes.
 
 ## Patents
 
