@@ -1348,6 +1348,7 @@ version = "0.2.0"
 dependencies = [
  "chrono",
  "fast_image_resize",
+ "flate2",
  "gif",
  "imagequant",
  "libc",
@@ -1358,6 +1359,7 @@ dependencies = [
  "oxipng",
  "pdfium-render",
  "png 0.18.1",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",

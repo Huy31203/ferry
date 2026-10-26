@@ -2885,4 +2885,36 @@ mod tests {
         job.edit(scale(50));
         assert_eq!(job.edits.scale, None);
     }
+
+    #[test]
+    fn aggressive_and_the_dpi_recipe_choose_the_resolution() {
+        let env = Env::new();
+        let image = testutil::PdfImage {
+            px: (1200, 1500),
+            drawn: (288.0, 360.0),
+            kind: testutil::ImageKind::DctRgb,
+        };
+        let page = PdfPage {
+            media: [0.0, 0.0, 288.0, 360.0],
+            images: vec![image],
+            ..PdfPage::default()
+        };
+        let (path, _) = pdf_file(&env, "scan.pdf", &[page], &PdfExtras::default());
+        let width = |path: &Path| {
+            let doc = lopdf::Document::load_mem(&fs::read(path).unwrap()).unwrap();
+            doc.objects
+                .values()
+                .filter_map(|o| o.as_stream().ok())
+                .find_map(|s| s.dict.get(b"Width").ok()?.as_i64().ok())
+                .unwrap()
+        };
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        run(&mut job, Level::Aggressive, &options(), &env);
+        assert!((399..=401).contains(&width(&path))); // 100 dpi
+        job.edit(
+            serde_json::from_value(serde_json::json!({ "dpi": 72, "level": "normal" })).unwrap(),
+        );
+        run(&mut job, Level::Normal, &options(), &env);
+        assert!((287..=289).contains(&width(&path))); // 72 dpi
+    }
 }
