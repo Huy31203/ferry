@@ -58,3 +58,9 @@ export function zoneText(view: ZoneView): ZoneText {
     dim: unsupported,
   };
 }
+
+/** The tip that a Ctrl tap opens the preset zones: only while there are zones to open, and the zone is not busy with a drop. */
+export function presetsHint(view: ZoneView, zones: number): string | null {
+  const showing = view.state === 'idle' || view.state === 'hover';
+  return zones > 0 && showing ? t('pipe.zones.hint_tap') : null;
+}
