@@ -21,8 +21,9 @@ pub const LOCAL: &[&str] = &[
     "general.show_dock_icon",
     "svc.sync",
     "svc.updates.skipped_version",
-    "watch.folders", // stream C: machine-specific folder paths
-    "share",         // Stream H: chosen editor, uploader and shelf app paths
+    "watch.folders",  // stream C: machine-specific folder paths
+    "watch.captures", // stream C: watching screenshots is a choice per computer
+    "share",          // Stream H: chosen editor, uploader and shelf app paths
 ];
 /// Path prefixes that sync only between computers with the same OS.
 pub const PER_OS: &[&str] = &[
@@ -484,6 +485,9 @@ mod tests {
             "general.launch_at_login",
             "svc.sync.folder",
             "svc.updates.skipped_version",
+            "watch.folders",
+            "watch.captures.screenshots",
+            "watch.captures.recordings",
         ] {
             assert_eq!(scope(path), Scope::Local, "{path}");
         }
