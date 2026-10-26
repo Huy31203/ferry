@@ -2615,6 +2615,31 @@ mod tests {
     }
 
     #[test]
+    fn a_tiff_file_becomes_a_jpeg_beside_it_and_gets_a_poster() {
+        let env = Env::new();
+        let path = env.file(
+            "scan.tiff",
+            &testutil::tiff(&[testutil::TiffPage {
+                size: (300, 200),
+                ..testutil::TiffPage::default()
+            }]),
+        );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+        let card = finished.unwrap().update;
+        assert_eq!(
+            (card.state, card.format, card.converted),
+            (JobState::Done, Some(Format::Jpeg), true)
+        );
+        assert!(path.with_extension("jpg").exists());
+        let poster = card.poster.expect("a TIFF card has a poster");
+        assert_eq!(
+            crate::sniff::dimensions(&fs::read(poster).unwrap(), Format::Png),
+            Some((300, 200))
+        );
+    }
+
+    #[test]
     fn a_multi_page_tiff_is_not_converted_by_default() {
         let env = Env::new();
         let path = env.file("fax.tiff", &testutil::tiff_ifds(&[(8, 8), (8, 8)], None));

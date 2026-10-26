@@ -7,7 +7,7 @@ use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer
 
 use super::geometry::Rect;
 use crate::i18n::tf;
-use crate::optimise::{OptimiseError, OptimiseOptions, jpeg, png, webp};
+use crate::optimise::{OptimiseError, OptimiseOptions, jpeg, png, tiff, webp};
 use crate::sniff::{self, Format};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,8 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
         Format::WebP => webp::decode_raster(bytes),
         Format::Gif => first_gif_frame(bytes),
         // sE pdf-formats
-        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_read(format)),
+        Format::Tiff => tiff::decode_raster(bytes),
+        Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_read(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))

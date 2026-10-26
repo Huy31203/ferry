@@ -448,6 +448,96 @@ pub fn tiff_ifds(pages: &[(u32, u32)], extra_tag: Option<u16>) -> Vec<u8> {
     out
 }
 
+/// The colour layouts `tiff` can write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TiffColour {
+    Rgb8,
+    Rgba8,
+    Gray8,
+    Gray16,
+    Cmyk8,
+}
+
+/// One page of a `tiff` fixture.
+#[derive(Debug, Clone)]
+pub struct TiffPage {
+    pub size: (u32, u32),
+    pub colour: TiffColour,
+    pub orientation: u16,
+    pub icc: Option<Vec<u8>>,
+}
+
+impl Default for TiffPage {
+    fn default() -> Self {
+        Self {
+            size: (64, 48),
+            colour: TiffColour::Rgb8,
+            orientation: 1,
+            icc: None,
+        }
+    }
+}
+
+/// An uncompressed TIFF with one IFD per page, from `screenshot_rgba` pixels.
+pub fn tiff(pages: &[TiffPage]) -> Vec<u8> {
+    use tiff::encoder::{TiffEncoder, colortype};
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut enc = TiffEncoder::new(&mut out).unwrap();
+    for page in pages {
+        let (w, h) = page.size;
+        let rgba = screenshot_rgba(w, h);
+        let px = rgba.as_chunks::<4>().0;
+        macro_rules! write {
+            ($colour:ty, $data:expr) => {{
+                let mut image = enc.new_image::<$colour>(w, h).unwrap();
+                if page.colour == TiffColour::Rgba8 {
+                    image
+                        .extra_samples(&[tiff::tags::ExtraSamples::UnassociatedAlpha])
+                        .unwrap();
+                }
+                image
+                    .encoder()
+                    .write_tag(tiff::tags::Tag::Orientation, page.orientation)
+                    .unwrap();
+                if let Some(icc) = &page.icc {
+                    image
+                        .encoder()
+                        .write_tag(tiff::tags::Tag::IccProfile, &icc[..])
+                        .unwrap();
+                }
+                image.write_data(&$data).unwrap();
+            }};
+        }
+        match page.colour {
+            TiffColour::Rgb8 => write!(
+                colortype::RGB8,
+                px.iter()
+                    .flat_map(|p| [p[0], p[1], p[2]])
+                    .collect::<Vec<u8>>()
+            ),
+            // The encoder counts alpha as an extra sample of RGB8.
+            TiffColour::Rgba8 => write!(colortype::RGB8, rgba),
+            TiffColour::Gray8 => write!(
+                colortype::Gray8,
+                px.iter().map(|p| p[0]).collect::<Vec<u8>>()
+            ),
+            TiffColour::Gray16 => write!(
+                colortype::Gray16,
+                px.iter()
+                    .map(|p| u16::from(p[0]) * 257)
+                    .collect::<Vec<u16>>()
+            ),
+            TiffColour::Cmyk8 => write!(
+                colortype::CMYK8,
+                px.iter()
+                    .flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
+                    .collect::<Vec<u8>>()
+            ),
+        }
+    }
+    out.into_inner()
+}
+
 // ---- stream B: audio fixtures ----
 use crate::audio::tool::{AudioTool, ToolError};
 use std::{

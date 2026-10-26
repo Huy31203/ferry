@@ -23,6 +23,7 @@ oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tiff = "0.11"
 # Default features pull in the `image` crate, which Ferry does not use.
 webp = { version = "0.3", default-features = false }
 
