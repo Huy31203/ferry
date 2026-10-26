@@ -72,6 +72,9 @@ pub fn normalise_ext(ext: &str) -> String {
         "jpeg" | "jpe" => "jpg".into(),
         // stream B: audio
         "aif" | "aifc" => "aiff".into(),
+        // sE pdf-formats
+        "tif" => "tiff".into(),
+        "heif" => "heic".into(),
         _ => ext,
     }
 }
@@ -300,6 +303,14 @@ mod tests {
         // stream B: audio
         assert_eq!(normalise_ext(".AIF"), "aiff");
         assert_eq!(normalise_ext("aifc"), "aiff");
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn tif_and_heif_count_as_tiff_and_heic() {
+        assert_eq!(normalise_ext(".TIF"), "tiff");
+        assert_eq!(normalise_ext("heif"), "heic");
+        assert!(is_ignored_extension(&["tif".into()], "tiff"));
     }
 
     #[test]

@@ -9,6 +9,11 @@ pub enum Format {
     Jpeg,
     Gif,
     WebP,
+    // sE pdf-formats
+    Tiff,
+    Heic,
+    Avif,
+    Pdf,
     // stream A: video
     Mp4,
     Hevc,
@@ -30,6 +35,19 @@ pub enum Format {
 pub const HEAD: usize = 64 * 1024;
 
 impl Format {
+    // sE pdf-formats
+    /// The still-image and document formats, as opposed to video and audio.
+    pub const ALL: [Format; 8] = [
+        Format::Png,
+        Format::Jpeg,
+        Format::Gif,
+        Format::WebP,
+        Format::Tiff,
+        Format::Heic,
+        Format::Avif,
+        Format::Pdf,
+    ];
+
     /// File extension used when Ferry writes this format.
     pub fn extension(self) -> &'static str {
         match self {
@@ -37,6 +55,11 @@ impl Format {
             Format::Jpeg => "jpg",
             Format::Gif => "gif",
             Format::WebP => "webp",
+            // sE pdf-formats
+            Format::Tiff => "tiff",
+            Format::Heic => "heic",
+            Format::Avif => "avif",
+            Format::Pdf => "pdf",
             // stream A: video
             Format::Mp4 | Format::Hevc => "mp4",
             Format::Av1 | Format::Mkv => "mkv",
@@ -60,6 +83,11 @@ impl Format {
             Format::Jpeg => "JPEG",
             Format::Gif => "GIF",
             Format::WebP => "WebP",
+            // sE pdf-formats
+            Format::Tiff => "TIFF",
+            Format::Heic => "HEIC",
+            Format::Avif => "AVIF",
+            Format::Pdf => "PDF",
             // stream A: video
             Format::Mp4 => "MP4",
             Format::Hevc => "HEVC",
@@ -114,8 +142,108 @@ pub fn sniff(bytes: &[u8]) -> Option<Format> {
         Some(Format::WebP)
     } else {
         // stream B: audio (before video: an M4A is an `ftyp` file too)
-        sniff_audio(bytes).or_else(|| sniff_video(bytes))
+        sniff_audio(bytes)
+            .or_else(|| sniff_video(bytes))
+            // sE pdf-formats (HEIC and AVIF are `ftyp` files that are neither)
+            .or_else(|| sniff_documents(bytes))
     }
+}
+
+// sE pdf-formats
+/// TIFF (but not the camera RAW files built on it), HEIC, AVIF and PDF.
+fn sniff_documents(bytes: &[u8]) -> Option<Format> {
+    if matches!(
+        bytes.get(..4),
+        Some(b"II*\0" | b"MM\0*" | b"II+\0" | b"MM\0+")
+    ) {
+        // Canon CR2 says "CR" at byte 8; DNG and most other RAW files carry
+        // DNGVersion (50706) or SubIFDs (330) in the first IFD.
+        let raw = bytes.get(8..10) == Some(b"CR")
+            || [50706, 330]
+                .iter()
+                .any(|&tag| tiff_tag(bytes, tag).is_some());
+        return (!raw).then_some(Format::Tiff);
+    }
+    if let Some(format) = crate::isobmff::image_format(bytes) {
+        return Some(format);
+    }
+    let head = &bytes[..bytes.len().min(1024)];
+    head.windows(5)
+        .any(|w| w == b"%PDF-")
+        .then_some(Format::Pdf)
+}
+
+/// A classic TIFF's byte order (true = little endian) and its IFD offsets, as
+/// far as they lie in `bytes`. BigTIFF has no readable IFDs here.
+fn tiff_ifds(bytes: &[u8]) -> Option<(bool, Vec<usize>)> {
+    let le = match bytes.get(..4)? {
+        b"II*\0" => true,
+        b"MM\0*" => false,
+        _ => return None,
+    };
+    let mut offsets = Vec::new();
+    let mut next = tiff_u32(bytes, le, 4)? as usize;
+    while next != 0 && offsets.len() < 10_000 && !offsets.contains(&next) {
+        let Some(count) = tiff_u16(bytes, le, next) else {
+            break;
+        };
+        offsets.push(next);
+        next = tiff_u32(bytes, le, next + 2 + 12 * usize::from(count)).unwrap_or(0) as usize;
+    }
+    Some((le, offsets))
+}
+
+fn tiff_u16(bytes: &[u8], le: bool, at: usize) -> Option<u16> {
+    let b = bytes.get(at..at + 2)?.try_into().ok()?;
+    Some(if le {
+        u16::from_le_bytes(b)
+    } else {
+        u16::from_be_bytes(b)
+    })
+}
+
+fn tiff_u32(bytes: &[u8], le: bool, at: usize) -> Option<u32> {
+    let b = bytes.get(at..at + 4)?.try_into().ok()?;
+    Some(if le {
+        u32::from_le_bytes(b)
+    } else {
+        u32::from_be_bytes(b)
+    })
+}
+
+/// The value of `tag` in the first IFD when it is a single SHORT or LONG.
+fn tiff_tag(bytes: &[u8], tag: u16) -> Option<u32> {
+    let (le, offsets) = tiff_ifds(bytes)?;
+    let ifd = *offsets.first()?;
+    (0..usize::from(tiff_u16(bytes, le, ifd)?)).find_map(|i| {
+        let entry = ifd + 2 + 12 * i;
+        if tiff_u16(bytes, le, entry)? != tag {
+            return None;
+        }
+        match tiff_u16(bytes, le, entry + 2)? {
+            3 => tiff_u16(bytes, le, entry + 8).map(u32::from),
+            4 => tiff_u32(bytes, le, entry + 8),
+            _ => None,
+        }
+    })
+}
+
+/// The number of pages (IFDs) of a TIFF: 0 when `bytes` is not a TIFF, 1 for
+/// BigTIFF or when the first IFD lies outside `bytes`.
+pub fn tiff_page_count(bytes: &[u8]) -> u32 {
+    match tiff_ifds(bytes) {
+        Some((_, offsets)) => offsets.len().max(1) as u32,
+        None if matches!(bytes.get(..4), Some(b"II+\0" | b"MM\0+")) => 1,
+        None => 0,
+    }
+}
+
+/// The EXIF orientation (1-8) of a TIFF's first page; 1 when it has none.
+pub fn tiff_orientation(bytes: &[u8]) -> u16 {
+    tiff_tag(bytes, 274)
+        .and_then(|o| u16::try_from(o).ok())
+        .filter(|o| (1..=8).contains(o))
+        .unwrap_or(1)
 }
 
 // ---- stream B: audio ----
@@ -235,6 +363,9 @@ pub fn is_animated(bytes: &[u8], format: Format) -> bool {
         Format::Gif => gif_frame_count(bytes) > 1,
         Format::WebP => webp_has_animation(bytes),
         Format::Jpeg => false,
+        // sE pdf-formats
+        Format::Tiff | Format::Pdf => false,
+        Format::Heic | Format::Avif => crate::isobmff::is_sequence(bytes),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             false
@@ -373,6 +504,10 @@ pub fn dimensions(bytes: &[u8], format: Format) -> Option<(u32, u32)> {
         Format::Gif => Some((le16(bytes, 6)?, le16(bytes, 8)?)),
         Format::Jpeg => jpeg_dimensions(bytes),
         Format::WebP => webp_dimensions(bytes),
+        // sE pdf-formats
+        Format::Tiff => Some((tiff_tag(bytes, 256)?, tiff_tag(bytes, 257)?)),
+        Format::Heic | Format::Avif => crate::isobmff::primary_size(bytes),
+        Format::Pdf => None,
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => None,
         // ---- stream B: audio ----
@@ -453,8 +588,9 @@ mod tests {
             sniff(&[&[0, 0, 0, 8][..], b"wide", &[0; 8]].concat()),
             Some(Format::Mov)
         );
-        assert_eq!(sniff(&ftyp(b"heic")), None);
-        assert_eq!(sniff(&ftyp(b"avif")), None);
+        // sE pdf-formats: these two are images now
+        assert_eq!(sniff(&ftyp(b"heic")), Some(Format::Heic));
+        assert_eq!(sniff(&ftyp(b"avif")), Some(Format::Avif));
         assert_eq!(sniff(&ftyp(b"M4A ")), Some(Format::M4a)); // stream B: audio
         let ebml = |doc: &[u8]| {
             [
@@ -702,5 +838,114 @@ mod tests {
             assert!(!is_animated(b"", f) && dimensions(b"", f).is_none());
         }
         assert!(!Format::Png.is_audio());
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn detects_tiff_in_both_byte_orders() {
+        use crate::testutil;
+        assert_eq!(
+            sniff(&testutil::tiff_ifds(&[(4, 3)], None)),
+            Some(Format::Tiff)
+        );
+        let mut be = b"MM\0*\0\0\0\x08".to_vec();
+        be.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        assert_eq!(sniff(&be), Some(Format::Tiff));
+    }
+
+    #[test]
+    fn camera_raw_files_are_not_tiff() {
+        use crate::testutil;
+        assert_eq!(sniff(b"II*\0\x10\0\0\0CR\x02\0\0\0\0\0"), None);
+        assert_eq!(sniff(&testutil::tiff_ifds(&[(4, 3)], Some(50706))), None);
+        assert_eq!(sniff(&testutil::tiff_ifds(&[(4, 3)], Some(330))), None);
+    }
+
+    #[test]
+    fn detects_heic_and_avif_by_brand() {
+        use crate::testutil::ftyp;
+        assert_eq!(
+            sniff(&ftyp(b"heic", &[b"mif1", b"heic"])),
+            Some(Format::Heic)
+        );
+        assert_eq!(
+            sniff(&ftyp(b"avif", &[b"mif1", b"miaf"])),
+            Some(Format::Avif)
+        );
+        assert_eq!(sniff(&ftyp(b"mif1", &[b"avif"])), Some(Format::Avif));
+        // An MP4 is a video (stream A), never a HEIC.
+        assert_eq!(sniff(&ftyp(b"isom", &[b"mp41"])), Some(Format::Mp4));
+    }
+
+    #[test]
+    fn detects_pdf_even_after_leading_bytes() {
+        assert_eq!(sniff(b"%PDF-1.7\n%\xE2\xE3"), Some(Format::Pdf));
+        let mut junk = vec![b' '; 100];
+        junk.extend_from_slice(b"%PDF-1.4\n");
+        assert_eq!(sniff(&junk), Some(Format::Pdf));
+        let mut late = vec![b' '; 1100];
+        late.extend_from_slice(b"%PDF-1.4\n");
+        assert_eq!(sniff(&late), None);
+    }
+
+    #[test]
+    fn image_sequences_are_animated() {
+        use crate::testutil::{ftyp, tiff_ifds};
+        assert!(is_animated(&ftyp(b"avis", &[b"avif"]), Format::Avif));
+        assert!(is_animated(&ftyp(b"msf1", &[b"heic"]), Format::Heic));
+        assert!(!is_animated(&ftyp(b"heic", &[b"mif1"]), Format::Heic));
+        assert!(!is_animated(
+            &tiff_ifds(&[(4, 3), (4, 3)], None),
+            Format::Tiff
+        ));
+    }
+
+    #[test]
+    fn every_image_and_document_format_has_a_name_an_extension_and_a_serde_name() {
+        let names: Vec<_> = Format::ALL
+            .iter()
+            .map(|f| serde_json::to_value(f).unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["png", "jpeg", "gif", "webp", "tiff", "heic", "avif", "pdf"]
+        );
+        assert_eq!(
+            (
+                Format::Tiff.extension(),
+                Format::Heic.label(),
+                Format::Pdf.extension()
+            ),
+            ("tiff", "HEIC", "pdf")
+        );
+    }
+
+    #[test]
+    fn tiff_size_pages_and_orientation_come_from_the_ifds() {
+        use crate::testutil;
+        let two = testutil::tiff_ifds(&[(40, 30), (20, 10)], None);
+        assert_eq!(dimensions(&two, Format::Tiff), Some((40, 30)));
+        assert_eq!(tiff_page_count(&two), 2);
+        assert_eq!(tiff_orientation(&two), 1);
+        assert_eq!(
+            tiff_orientation(&testutil::tiff_ifds(&[(4, 3)], Some(274))),
+            1
+        );
+        assert_eq!(tiff_page_count(b"not a tiff"), 0);
+        assert_eq!(tiff_page_count(b"II+\0\x08\0\x08\0"), 1);
+    }
+
+    #[test]
+    fn a_cut_short_or_looping_tiff_is_not_a_panic() {
+        use crate::testutil;
+        let full = testutil::tiff_ifds(&[(40, 30), (20, 10)], None);
+        for len in 0..full.len() {
+            let _ = (sniff(&full[..len]), tiff_page_count(&full[..len]));
+        }
+        // The first IFD points back at itself.
+        let mut looped = testutil::tiff_ifds(&[(40, 30)], None);
+        let end = looped.len();
+        looped[end - 4..].copy_from_slice(&8_u32.to_le_bytes());
+        assert_eq!(tiff_page_count(&looped), 1);
     }
 }

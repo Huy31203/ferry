@@ -16,6 +16,7 @@ pub mod glyph;
 pub mod i18n;
 pub mod intake;
 pub mod integrations; // stream H
+pub mod isobmff; // sE pdf-formats
 pub mod job;
 pub mod optimise;
 pub mod output;

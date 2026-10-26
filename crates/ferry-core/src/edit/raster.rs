@@ -6,6 +6,7 @@ use fast_image_resize::images::{Image, ImageRef};
 use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 
 use super::geometry::Rect;
+use crate::i18n::tf;
 use crate::optimise::{OptimiseError, OptimiseOptions, jpeg, png, webp};
 use crate::sniff::{self, Format};
 
@@ -34,6 +35,8 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
         Format::Jpeg => jpeg::decode_raster(bytes).map(|(r, o)| orient(r, o)),
         Format::WebP => webp::decode_raster(bytes),
         Format::Gif => first_gif_frame(bytes),
+        // sE pdf-formats
+        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_read(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
@@ -49,6 +52,15 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
     }?;
     r.icc = rgb_profile(r.icc);
     Ok(r)
+}
+
+// sE pdf-formats
+fn unsupported_read(format: Format) -> OptimiseError {
+    OptimiseError::Unsupported(tf("pdf.read_unsupported", &[("format", format.label())]))
+}
+
+fn unsupported_write(format: Format) -> OptimiseError {
+    OptimiseError::Unsupported(tf("pdf.write_unsupported", &[("format", format.label())]))
 }
 
 /// The pixels are always RGBA, so a grey profile (colour space `GRAY` at bytes
@@ -146,6 +158,8 @@ pub fn encode(r: &Raster, format: Format, o: &OptimiseOptions) -> Result<Vec<u8>
         Format::Gif => Err(OptimiseError::Unsupported(
             "GIF output comes only from gifsicle".into(),
         )),
+        // sE pdf-formats
+        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_write(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
