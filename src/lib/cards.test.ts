@@ -11,6 +11,7 @@ import {
   railActions,
   remove,
   thumbSrc,
+  tipLeft,
   upsert,
   type RailAction,
 } from './cards';
@@ -194,5 +195,20 @@ describe('thumbSrc', () => {
     for (const source_format of ['pdf', 'tiff', 'heic'] as const) {
       expect(thumbSrc(card({ kind: 'queued' }, { source_format, thumb_path: '/b/a.bin', poster: null }))).toBeNull();
     }
+  });
+});
+
+describe('tipLeft', () => {
+  it('keeps a tooltip on the button when it fits', () => {
+    expect(tipLeft(40, 100, 300)).toBe(40);
+  });
+
+  it('pulls a tooltip left so its right edge stays 6 px inside the card', () => {
+    expect(tipLeft(200, 150, 300)).toBe(144);
+    expect(tipLeft(100, 150, 220)).toBe(64);
+  });
+
+  it('never leaves the left gutter, even for a tip as wide as the card', () => {
+    expect(tipLeft(10, 300, 300)).toBe(6);
   });
 });
