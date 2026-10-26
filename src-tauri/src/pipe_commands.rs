@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use chrono::{Local, NaiveDate, NaiveDateTime};
-use ferry_core::i18n::t;
+use ferry_core::i18n::{t, tf};
+use ferry_core::intake::without_own;
 use ferry_core::job::JobId;
 use ferry_core::optimise::{Level, OptimiseOptions};
 use ferry_core::pipeline::Job;
@@ -165,7 +166,8 @@ pub async fn pipe_run(app: AppHandle, id: JobId, pipeline: u32) -> Result<(), St
     blocking(app, move |app| pipe_jobs::run_on_card(app, &id, pipeline)).await
 }
 
-#[tauri::command]
+/// Async: building a window inside a sync command deadlocks on Windows.
+#[tauri::command(async)]
 pub fn pipe_open_editor(app: AppHandle, pipeline: Option<u32>, tab: Option<String>) {
     pipe_windows::open_editor(&app, pipeline, tab.as_deref());
 }
@@ -208,27 +210,36 @@ pub fn pipe_classify(paths: Vec<String>) -> Vec<Option<Media>> {
 #[tauri::command]
 pub async fn pipe_zone_drop(app: AppHandle, zone: u32, paths: Vec<String>) -> Result<(), String> {
     blocking(app, move |app| {
-        let (settings, has_gifsicle) = {
+        let (settings, has_gifsicle, own) = {
             let state = app.state::<AppState>();
             (
                 state.settings.read().unwrap().clone(),
                 state.gifsicle.is_some(),
+                crate::state::own_outputs(&state.jobs.lock().unwrap()),
             )
         };
         for path in paths.into_iter().map(PathBuf::from) {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
             if path.is_dir() {
                 jobs::notice(app, t("pipe.zones.folder_skipped"));
                 continue;
             }
+            // Ferry's own results are not input.
+            if without_own(std::slice::from_ref(&path), &own).is_empty() {
+                jobs::notice(app, tf("drop.error.own_result", &[("name", &name)]));
+                continue;
+            }
             match Job::file(&path, &settings, has_gifsicle) {
                 Ok(job) => {
-                    pipe_jobs::start_assigned(
+                    if !pipe_jobs::start_assigned(
                         app,
                         job,
                         pipe_jobs::Trigger::Zone(zone),
                         Level::Normal,
                         None,
-                    );
+                    ) {
+                        jobs::notice(app, tf("error.busy", &[("name", &name)]));
+                    }
                 }
                 Err(reason) => jobs::notice(app, reason),
             }
