@@ -66,7 +66,12 @@ export function dragAllFiles(cards: JobUpdate[]): string[] {
 }
 
 /** A card tool that needs the keyboard (or, for the slider, Esc). */
-export type Tool = 'rename' | 'crop' | 'fit' | 'slider' | 'speed'; // 'speed': stream A: video
+export type Tool = 'rename' | 'crop' | 'fit' | 'pages' | 'slider' | 'speed'; // 'pages': sE pdf-formats, 'speed': stream A: video
+
+/** A tool shown as a popover: a click elsewhere closes it. */
+export function isPopover(kind: Tool): boolean {
+  return kind === 'crop' || kind === 'fit' || kind === 'pages' || kind === 'speed';
+}
 
 /** The one tool open in the stack, and the card it belongs to. */
 export interface OpenTool {

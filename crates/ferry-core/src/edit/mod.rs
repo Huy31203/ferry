@@ -20,6 +20,18 @@ use raster::Raster;
 /// The largest width, height or long edge a card may ask for.
 pub const MAX_SIDE: u32 = 30_000;
 
+// sE pdf-formats
+/// The range of a recipe's `dpi`.
+pub const MIN_DPI: u16 = 36;
+pub const MAX_DPI: u16 = 1200;
+
+/// Pages to extract from a PDF: 1-based, inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageRange {
+    pub first: u32,
+    pub last: u32,
+}
+
 /// Where an aspect crop or an exact size cuts from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +106,13 @@ pub struct Edits {
     /// Bytes.
     pub fit_under: Option<u64>,
     pub level: Level,
+    // sE pdf-formats
+    /// PDF image resolution, or the resolution extracted pages are rendered at.
+    pub dpi: Option<u16>,
+    /// The pages to extract; `None` is all of them.
+    pub pages: Option<PageRange>,
+    /// Show whole PDF pages again, also where an earlier tool cropped them.
+    pub uncrop: bool,
     // stream F: pipelines
     /// `None`: the settings' encoder.
     pub encoder: Option<Encoder>,
@@ -133,6 +152,9 @@ impl Edits {
             // stream F: pipelines
             && self.strip_metadata.is_none()
             && !self.adaptive
+            // sE pdf-formats (a page range alone changes nothing)
+            && self.dpi.is_none()
+            && !self.uncrop
             && self.speed.is_none()
             && !self.mute
             // stream B: audio
@@ -194,6 +216,16 @@ impl Edits {
         }
         if let Some(level) = patch.level {
             self.level = level;
+        }
+        // sE pdf-formats
+        if let Some(dpi) = patch.dpi {
+            self.dpi = dpi.map(|d| d.clamp(MIN_DPI, MAX_DPI));
+        }
+        if let Some(pages) = patch.pages {
+            self.pages = pages.filter(|p| p.first >= 1 && p.last >= p.first);
+        }
+        if let Some(uncrop) = patch.uncrop {
+            self.uncrop = uncrop;
         }
         // stream F: pipelines
         if let Some(encoder) = patch.encoder {
@@ -260,6 +292,12 @@ pub struct EditsPatch {
     #[serde(deserialize_with = "present")]
     pub fit_under: Option<Option<u64>>,
     pub level: Option<Level>,
+    // sE pdf-formats
+    #[serde(deserialize_with = "present")]
+    pub dpi: Option<Option<u16>>,
+    #[serde(deserialize_with = "present")]
+    pub pages: Option<Option<PageRange>>,
+    pub uncrop: Option<bool>,
     // stream F: pipelines
     #[serde(deserialize_with = "present")]
     pub encoder: Option<Option<Encoder>>,
@@ -292,6 +330,9 @@ impl EditsPatch {
             compression: Some(e.compression),
             fit_under: Some(e.fit_under),
             level: Some(e.level),
+            dpi: Some(e.dpi),
+            pages: Some(e.pages),
+            uncrop: Some(e.uncrop),
             encoder: Some(e.encoder),
             strip_metadata: Some(e.strip_metadata),
             adaptive: Some(e.adaptive),
@@ -685,6 +726,9 @@ mod tests {
                 "compression": null,
                 "fit_under": null,
                 "level": "normal",
+                "dpi": null,
+                "pages": null,
+                "uncrop": false,
                 "encoder": null,
                 "strip_metadata": null,
                 "adaptive": false,
@@ -694,6 +738,55 @@ mod tests {
                 "loudness": null,
                 "cover": null
             })
+        );
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn dpi_pages_and_uncrop_merge_and_clamp() {
+        let mut e = Edits::default();
+        e.merge(patch(json!({ "dpi": 10 })));
+        assert_eq!(e.dpi, Some(36));
+        e.merge(patch(json!({ "dpi": 5000 })));
+        assert_eq!(e.dpi, Some(1200));
+        e.merge(patch(
+            json!({ "dpi": null, "pages": { "first": 2, "last": 5 }, "uncrop": true }),
+        ));
+        assert_eq!(
+            (e.dpi, e.pages, e.uncrop),
+            (None, Some(PageRange { first: 2, last: 5 }), true)
+        );
+        for bad in [
+            json!({ "first": 0, "last": 2 }),
+            json!({ "first": 3, "last": 1 }),
+        ] {
+            e.merge(patch(json!({ "pages": bad })));
+            assert_eq!(e.pages, None);
+        }
+    }
+
+    #[test]
+    fn dpi_and_uncrop_are_explicit_edits_but_a_page_range_alone_is_not() {
+        assert!(
+            !Edits {
+                dpi: Some(150),
+                ..Edits::default()
+            }
+            .is_plain()
+        );
+        assert!(
+            !Edits {
+                uncrop: true,
+                ..Edits::default()
+            }
+            .is_plain()
+        );
+        assert!(
+            Edits {
+                pages: Some(PageRange { first: 1, last: 1 }),
+                ..Edits::default()
+            }
+            .is_plain()
         );
     }
 

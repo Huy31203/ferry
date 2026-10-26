@@ -1,0 +1,6 @@
+{
+  "bundle": {
+    "macOS": { "frameworks": ["binaries/libpdfium.dylib"] },
+    "resources": { "binaries/pdfium-NOTICE.txt": "pdfium-NOTICE.txt" }
+  }
+}

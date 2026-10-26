@@ -15,11 +15,14 @@ use serde::Serialize;
 use crate::backup::Backups;
 use crate::cancel::CancelToken;
 use crate::edit::{self, Edits, EditsPatch};
+use crate::formats;
 use crate::fsutil::{self, Times};
 use crate::i18n::{t, tf};
 use crate::job::{JobId, JobState, JobUpdate, Source};
 use crate::optimise::{self, Level, OptimiseError, OptimiseOptions, Outcome};
+use crate::oscodec;
 use crate::output::{self, OutputKind};
+use crate::pdf;
 use crate::settings::{self as settings_model, Location, Settings, contract_home};
 use crate::sniff::{self, Format};
 use crate::template;
@@ -30,6 +33,9 @@ use video_job::VideoState;
 
 mod video_job;
 
+// sE pdf-formats
+mod pdf_job;
+
 // ---- stream B: audio ----
 mod audio;
 use audio::AudioJob;
@@ -37,6 +43,10 @@ pub use audio::AudioRunOptions;
 
 /// Puts an image on the clipboard: format, bytes and the working file holding them.
 pub type Deliver<'a> = &'a mut dyn FnMut(Format, &[u8], &Path) -> Result<(), String>;
+
+// sE pdf-formats
+/// Makes a file job's result at a path (see `place_result`).
+type Write<'a> = &'a mut dyn FnMut(&Job, &Path) -> Result<(), (String, String)>;
 
 /// A result or an original: bytes in memory, or a file (a video is never read
 /// into memory).
@@ -85,6 +95,9 @@ pub struct RunOptions {
     pub adaptive: bool,
     /// A plain run may switch PNG and JPEG (`images.switch_png_jpeg`).
     pub switch_png_jpeg: bool,
+    // sE pdf-formats
+    pub pdf_output: settings_model::Output,
+    pub pdf: pdf::Defaults,
 }
 
 impl RunOptions {
@@ -112,6 +125,9 @@ impl RunOptions {
             audio: AudioRunOptions::new(settings),
             adaptive: settings.images.adaptive, // stream F: pipelines
             switch_png_jpeg: settings.images.switch_png_jpeg, // stream F: pipelines
+            // sE pdf-formats
+            pdf_output: settings.pdf.output.clone(),
+            pdf: pdf::Defaults::from(&settings.pdf),
         }
     }
 }
@@ -169,10 +185,18 @@ pub struct Job {
     /// A "Convert and keep both" twin: the source belongs to the parent's
     /// card, so the twin never overwrites, trashes or restores it.
     twin: bool,
+    // sE pdf-formats
+    /// The resolution of a PDF's latest run, for the card's line.
+    pdf_dpi: Option<u16>,
     // stream A: video
     video: Option<VideoState>,
     // stream B: audio
     audio: Option<AudioJob>,
+    // sE pdf-formats
+    /// A PNG of the original for formats the webviews cannot draw.
+    poster: Option<PathBuf>,
+    /// A PDF's page count, or a multi-page TIFF's.
+    pages: Option<u32>,
 }
 
 /// A file job's result on disk (spec §4.4: one result per job).
@@ -280,6 +304,7 @@ impl Job {
         let ext = format.extension();
         let dims = edit::raster::display_dims(&bytes, format);
         let animated = sniff::is_animated(&bytes, format);
+        let pages = tiff_pages(&bytes, format); // sE pdf-formats
         let name = template::clipboard_name(file_template, ext, dims.unwrap_or_default(), now);
         let output = work_dir
             .join("clipboard")
@@ -312,8 +337,11 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            pdf_dpi: None,
             video: None,
             audio: None,
+            poster: None,
+            pages,
         }
     }
 
@@ -346,7 +374,12 @@ impl Job {
             )
         };
         let len = fs::metadata(path).map_err(cant_read)?.len();
-        let limit_mb = settings.images.max_size_mb;
+        // sE pdf-formats (a PDF has its own limit; the head tells without reading it all)
+        let limit_mb = if looks_like_pdf(path) {
+            settings.pdf.max_size_mb
+        } else {
+            settings.images.max_size_mb
+        };
         if len > u64::from(limit_mb) * MB {
             return Err(Skip::TooLarge { limit_mb }.reason());
         }
@@ -356,6 +389,7 @@ impl Job {
         if format == Format::Gif && !has_gifsicle {
             return Err(Skip::NeedsGifsicle.reason());
         }
+        let pages = tiff_pages(&bytes, format); // sE pdf-formats
         Ok(Job {
             id: JobId::generate(),
             source: Source::File,
@@ -383,9 +417,13 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            pdf_dpi: None,
             video: None,
             audio: None,
-        })
+            poster: None,
+            pages,
+        }
+        .with_default_conversion(&settings.formats))
     }
 
     /// This job's card in `state`.
@@ -436,6 +474,14 @@ impl Job {
             video: self.video_meta(),
             // stream B: audio
             audio: self.audio.as_ref().map(|_| self.audio_card()),
+            // sE pdf-formats
+            poster: self.poster.clone(),
+            pages: self.pages,
+            choices: if self.video.is_some() || self.audio.is_some() {
+                Vec::new()
+            } else {
+                self.choices()
+            },
         }
     }
 
@@ -484,6 +530,27 @@ impl Job {
         Ok(())
     }
 
+    // sE pdf-formats
+    /// The formats this job's card can convert to.
+    fn choices(&self) -> Vec<formats::ConvertChoice> {
+        formats::choices(
+            self.source_format,
+            self.animated,
+            self.pages.unwrap_or(1),
+            oscodec::can_encode(Format::Heic),
+        )
+    }
+
+    /// Start with the conversion the settings give this source (a HEIC photo
+    /// becomes a JPEG), when the card offers it.
+    pub fn with_default_conversion(mut self, f: &settings_model::Formats) -> Job {
+        let wanted = formats::default_target(self.source_format, self.pages.unwrap_or(1), f);
+        if let Some(format) = wanted.filter(|w| self.choices().iter().any(|c| c.format == *w)) {
+            self.edits.format = Some(format);
+        }
+        self
+    }
+
     /// Merge what the card asked for. Asking for the source format, or for
     /// GIF, clears the conversion.
     pub fn edit(&mut self, patch: EditsPatch) {
@@ -508,13 +575,20 @@ impl Job {
                 edits.format,
                 Some(f) if !crate::audio::TARGETS.contains(&f)
             ),
+            // sE pdf-formats (only the card's own choices are kept)
             (None, None) => matches!(
                 edits.format,
-                Some(f) if f == self.source_format || f == Format::Gif || f.is_audio()
+                Some(f) if f == self.source_format || !self.choices().iter().any(|c| c.format == f)
             ),
         };
         if cleared {
             edits.format = None;
+        }
+        // sE pdf-formats
+        if self.source_format == Format::Pdf {
+            (edits.size, edits.scale) = (None, None);
+        } else {
+            (edits.dpi, edits.pages, edits.uncrop) = (None, None, false);
         }
         edits
     }
@@ -570,8 +644,11 @@ impl Job {
             times: self.times,
             changed: false,
             twin: true,
+            pdf_dpi: self.pdf_dpi,
             video: self.video.clone(),
             audio: self.audio.clone(),
+            poster: self.poster.clone(),
+            pages: self.pages,
         }
     }
 
@@ -637,6 +714,10 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return Some(self.fail(tf("error.backup", &[("why", &describe(&e))]), e)),
         };
+        // sE pdf-formats
+        if let Err(reason) = self.capture_facts(&original) {
+            return Some(self.fail(reason.clone(), reason));
+        }
         // A twin is a copy the user asked for: it always writes, never "no gain".
         let plain = self.edits.is_plain() && !self.twin;
         let step = t(match (plain, self.source_format) {
@@ -645,6 +726,9 @@ impl Job {
             (true, Format::Jpeg) => "card.step.jpeg",
             (true, Format::WebP) => "card.step.webp",
             (true, Format::Gif) => "card.step.gif",
+            // sE pdf-formats (later tasks give each its own step)
+            (true, Format::Tiff | Format::Heic | Format::Avif) => "card.step.edit",
+            (true, Format::Pdf) => "pdf.step.pdf",
             // stream A: video (never reached once videos are dispatched earlier)
             (
                 true,
@@ -678,6 +762,10 @@ impl Job {
             encoder: self.edits.encoder, // stream F: pipelines
             adaptive: false,             // stream F: pipelines
         };
+        // sE pdf-formats
+        if self.source_format == Format::Pdf {
+            return self.finish_pdf(&original, &options, o, emit, deliver);
+        }
         // (state, Some((bytes, format, size after, fit target missed)))
         let (state, result) = if plain {
             // stream F: pipelines (switch_png_jpeg may pick the other format)
@@ -831,83 +919,114 @@ impl Job {
                     .map_err(|e| (t("error.clipboard_write"), e))?;
             }
             Source::File => {
-                let source = self
-                    .source_path
-                    .clone()
-                    .unwrap_or_else(|| self.output.clone());
                 let kind = if format == self.source_format {
                     OutputKind::Optimised
                 } else {
                     OutputKind::Converted
                 };
-                let dims = self.dims_after.or(self.dims).unwrap_or_default();
-                let target = output::Target {
-                    source: &source,
-                    job: self.id.as_str(),
-                    ext: &ext,
-                    dims,
-                    kind,
-                    stem: self.stem.as_deref(),
-                };
-                // stream A: video
-                let rules = if self.video.is_some() {
-                    &o.video.output
-                } else {
-                    &o.output
-                };
-                let wanted = output::resolve(
-                    &target,
-                    rules,
-                    &o.work_dir,
-                    &o.home,
-                    Local::now().date_naive(),
-                );
-                let own = self.last.as_ref().map(|w| w.path.clone());
-                // Over the source, unless that is gone to the Trash and
-                // something else has taken its place.
-                let source_taken = self.source_state == SourceState::Trashed && source.exists();
-                let path = if wanted == source && !self.twin && !source_taken {
-                    wanted
-                } else {
-                    // A twin's source is its parent's: free or not, never its result's.
-                    let reserved = self.twin.then_some(source.as_path());
-                    output::unique_except(&wanted, own.as_deref(), reserved)
-                };
-                let trash_source = kind == OutputKind::Converted
-                    && rules.converted.location == Location::InPlace
-                    && path != source
-                    && !self.twin;
-                self.check_source(path == source || trash_source)?;
-                if let Some(last) = self.last.clone().filter(|w| w.path != path) {
-                    self.trash_result(&last, o);
-                    self.last = None;
-                    // The result leaves the source: it gets the original back.
-                    if matches!(self.source_state, SourceState::Overwritten(_)) && path != source {
-                        self.restore_source(original, o)?;
-                    }
-                }
-                self.write_file(&path, result, &source, o)?;
-                if trash_source && self.source_state != SourceState::Trashed {
-                    // Only the original, which this job has not trashed yet.
-                    let trashed = !source.exists() || (o.trash)(&source).is_ok();
-                    if trashed {
-                        self.source_state = SourceState::Trashed;
-                    }
-                } else if path == source {
-                    // After write_file, which may set the dates back.
-                    self.source_state = SourceState::Overwritten(Stamp::of(&path));
-                }
-                self.last = Some(Written {
-                    path: path.clone(),
-                    created: path != source,
-                });
-                self.output = path;
+                self.place_result(&ext, kind, false, original, o, &mut |job, path| {
+                    let source = job
+                        .source_path
+                        .clone()
+                        .unwrap_or_else(|| job.output.clone());
+                    job.write_file(path, result, &source, o)
+                })?;
             }
         }
         self.format = format;
         self.ext = ext;
         self.changed = true;
         Ok(())
+    }
+
+    /// Choose where a file job's result goes, make room for it (the previous
+    /// result goes to the Trash, a conversion may trash the source) and have
+    /// `write` make it there. Returns the path, which is now the job's output.
+    /// A `folder` result takes the name the rules give a file, without its
+    /// extension.
+    fn place_result(
+        &mut self,
+        ext: &str,
+        kind: OutputKind,
+        folder: bool,
+        original: Content,
+        o: &RunOptions,
+        write: Write,
+    ) -> Result<PathBuf, (String, String)> {
+        let source = self
+            .source_path
+            .clone()
+            .unwrap_or_else(|| self.output.clone());
+        let dims = self.dims_after.or(self.dims).unwrap_or_default();
+        let target = output::Target {
+            source: &source,
+            job: self.id.as_str(),
+            ext,
+            dims,
+            kind,
+            stem: self.stem.as_deref(),
+        };
+        // stream A: video, sE pdf-formats
+        let rules = if self.video.is_some() {
+            &o.video.output
+        } else if self.source_format == Format::Pdf {
+            &o.pdf_output
+        } else {
+            &o.output
+        };
+        let wanted = output::resolve(
+            &target,
+            rules,
+            &o.work_dir,
+            &o.home,
+            Local::now().date_naive(),
+        );
+        let wanted = if folder && wanted.extension().is_some_and(|e| e == ext) {
+            wanted.with_extension("")
+        } else {
+            wanted
+        };
+        let own = self.last.as_ref().map(|w| w.path.clone());
+        // Over the source, unless that is gone to the Trash and
+        // something else has taken its place.
+        let source_taken = self.source_state == SourceState::Trashed && source.exists();
+        let path = if wanted == source && !self.twin && !source_taken {
+            wanted
+        } else {
+            // A twin's source is its parent's: free or not, never its result's.
+            let reserved = self.twin.then_some(source.as_path());
+            output::unique_except(&wanted, own.as_deref(), reserved)
+        };
+        let trash_source = kind == OutputKind::Converted
+            && rules.converted.location == Location::InPlace
+            && path != source
+            && !self.twin;
+        self.check_source(path == source || trash_source)?;
+        if let Some(last) = self.last.clone().filter(|w| w.path != path) {
+            self.trash_result(&last, o);
+            self.last = None;
+            // The result leaves the source: it gets the original back.
+            if matches!(self.source_state, SourceState::Overwritten(_)) && path != source {
+                self.restore_source(original, o)?;
+            }
+        }
+        write(self, &path)?;
+        if trash_source && self.source_state != SourceState::Trashed {
+            // Only the original, which this job has not trashed yet.
+            let trashed = !source.exists() || (o.trash)(&source).is_ok();
+            if trashed {
+                self.source_state = SourceState::Trashed;
+            }
+        } else if path == source {
+            // After write_file, which may set the dates back.
+            self.source_state = SourceState::Overwritten(Stamp::of(&path));
+        }
+        self.last = Some(Written {
+            path: path.clone(),
+            created: path != source,
+        });
+        self.output = path.clone();
+        Ok(path)
     }
 
     /// Leave the original as the result: a clipboard job's working file holds
@@ -1093,6 +1212,10 @@ impl Job {
         if self.audio.is_some() {
             return self.audio_detail();
         }
+        // sE pdf-formats
+        if self.source_format == Format::Pdf {
+            return self.pdf_detail();
+        }
         let mut parts = Vec::new();
         match (self.dims, self.dims_after) {
             (Some((w, h)), Some((aw, ah))) => parts.push(format!("{w}×{h} → {aw}×{ah}")),
@@ -1138,7 +1261,29 @@ pub fn notice(reason: String) -> JobUpdate {
         video: None,
         // stream B: audio
         audio: None,
+        // sE pdf-formats
+        poster: None,
+        pages: None,
+        choices: Vec::new(),
     }
+}
+
+// sE pdf-formats
+/// Whether the file's first kilobyte holds `%PDF-`, the rule `sniff` uses.
+fn looks_like_pdf(path: &Path) -> bool {
+    use io::Read;
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .and_then(|f| f.take(1024).read_to_end(&mut head))
+        .is_ok_and(|_| head.windows(5).any(|w| w == b"%PDF-"))
+}
+
+// sE pdf-formats
+/// A multi-page TIFF's page count; `None` for any other file.
+fn tiff_pages(bytes: &[u8], format: Format) -> Option<u32> {
+    (format == Format::Tiff)
+        .then(|| sniff::tiff_page_count(bytes))
+        .filter(|&n| n > 1)
 }
 
 /// "1 MB", "250 KB", "1.5 MB": decimal units, like formatBytes in src/lib/format.ts.
@@ -1180,7 +1325,7 @@ mod tests {
     use super::*;
     use crate::edit::EditsPatch;
     use crate::settings::Location;
-    use crate::testutil;
+    use crate::testutil::{self, PdfExtras, PdfPage};
     use chrono::NaiveDate;
     use std::cell::RefCell;
 
@@ -2639,5 +2784,486 @@ mod tests {
         assert_eq!(job.edits, Edits::default());
         job.edit(patch);
         assert_eq!((job.edits.clone(), job.edits.format), (predicted, None));
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_heic_file_starts_with_its_default_conversion() {
+        let env = Env::new();
+        let path = env.file("photo.heic", &testutil::heif(b"heic", &[(64, 48)], None));
+        let job = Job::file(&path, &Settings::default(), true).unwrap();
+        assert_eq!(job.edits.format, Some(Format::Jpeg));
+        let card = job.update(JobState::Queued, None);
+        assert_eq!(card.choices[0].format, Format::Heic);
+        assert_eq!(card.dims_before, Some((64, 48)));
+    }
+
+    #[test]
+    fn a_multi_page_tiff_is_not_converted_by_default() {
+        let env = Env::new();
+        let path = env.file("fax.tiff", &testutil::tiff_ifds(&[(8, 8), (8, 8)], None));
+        let job = Job::file(&path, &Settings::default(), true).unwrap();
+        assert_eq!(
+            (job.edits.format, job.update(JobState::Queued, None).pages),
+            (None, Some(2))
+        );
+    }
+
+    #[test]
+    fn a_conversion_the_source_cannot_take_is_dropped() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        job.edit(convert(Format::Pdf));
+        assert_eq!(job.edits.format, None);
+        job.edit(convert(Format::Avif)); // read-only for now
+        assert_eq!(job.edits.format, None);
+        job.edit(convert(Format::WebP));
+        assert_eq!(job.edits.format, Some(Format::WebP));
+    }
+
+    #[test]
+    fn pdf_only_edits_are_dropped_on_images() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        job.edit(
+            serde_json::from_value(serde_json::json!({ "dpi": 150, "uncrop": true })).unwrap(),
+        );
+        assert_eq!((job.edits.dpi, job.edits.uncrop), (None, false));
+    }
+
+    // sE pdf-formats
+    fn pdf_file(
+        env: &Env,
+        name: &str,
+        pages: &[PdfPage],
+        extras: &PdfExtras,
+    ) -> (PathBuf, Vec<u8>) {
+        let bytes = testutil::pdf(pages, extras);
+        (env.file(name, &bytes), bytes)
+    }
+
+    fn bloated(pages: usize) -> Vec<PdfPage> {
+        vec![
+            PdfPage {
+                padding: 200_000,
+                ..PdfPage::default()
+            };
+            pages
+        ]
+    }
+
+    #[test]
+    fn a_bloated_pdf_is_optimised_in_place() {
+        let env = Env::new();
+        let (path, input) = pdf_file(&env, "doc.pdf", &bloated(3), &PdfExtras::default());
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            (card.state, card.pages, card.dims_before),
+            (JobState::Done, Some(3), Some((612, 792)))
+        );
+        assert_eq!(card.detail, "3 pages · 150 dpi");
+        assert!(fs::read(&path).unwrap().len() < input.len());
+    }
+
+    #[test]
+    fn an_already_tight_pdf_is_already_optimal() {
+        let env = Env::new();
+        let (path, _) = pdf_file(
+            &env,
+            "doc.pdf",
+            &[PdfPage::default()],
+            &PdfExtras::default(),
+        );
+        let tight = pdf::optimise(
+            &fs::read(&path).unwrap(),
+            150,
+            &OptimiseOptions::default(),
+            &mut |_| {},
+        )
+        .unwrap();
+        fs::write(&path, &tight).unwrap();
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        assert_eq!(
+            run(&mut job, Level::Normal, &options(), &env)
+                .0
+                .unwrap()
+                .update
+                .state,
+            JobState::AlreadyOptimal
+        );
+    }
+
+    #[test]
+    fn an_encrypted_pdf_is_refused_and_left_alone() {
+        let env = Env::new();
+        let extras = PdfExtras {
+            encrypt_dict: true,
+            ..Default::default()
+        };
+        let (path, input) = pdf_file(&env, "doc.pdf", &[PdfPage::default()], &extras);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            card.state,
+            JobState::Error {
+                reason: t("pdf.error.encrypted")
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn a_signed_pdf_is_never_rewritten() {
+        let env = Env::new();
+        let extras = PdfExtras {
+            signed: true,
+            ..Default::default()
+        };
+        let pages = [PdfPage {
+            padding: 100_000,
+            ..PdfPage::default()
+        }];
+        let (path, input) = pdf_file(&env, "doc.pdf", &pages, &extras);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            card.state,
+            JobState::Error {
+                reason: t("pdf.error.signed")
+            }
+        );
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn a_damaged_pdf_is_an_error() {
+        let env = Env::new();
+        let path = env.file("doc.pdf", b"%PDF-1.7\nthis is not a PDF body");
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        assert_eq!(
+            run(&mut job, Level::Normal, &options(), &env)
+                .0
+                .unwrap()
+                .update
+                .state,
+            JobState::Error {
+                reason: t("pdf.error.read")
+            }
+        );
+    }
+
+    #[test]
+    fn pdfs_have_their_own_size_limit() {
+        let env = Env::new();
+        let pages = [PdfPage {
+            padding: 1_200_000,
+            ..PdfPage::default()
+        }];
+        let (path, _) = pdf_file(&env, "doc.pdf", &pages, &PdfExtras::default());
+        let mut settings = Settings::default();
+        settings.images.max_size_mb = 1;
+        assert!(Job::file(&path, &settings, true).is_ok());
+        settings.pdf.max_size_mb = 1;
+        assert!(Job::file(&path, &settings, true).is_err());
+    }
+
+    #[test]
+    fn pdf_results_follow_the_pdf_output_rules() {
+        let env = Env::new();
+        let (path, input) = pdf_file(&env, "doc.pdf", &bloated(1), &PdfExtras::default());
+        let mut settings = Settings::default();
+        settings.pdf.output.optimised.location = Location::SameFolder;
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        run(&mut job, Level::Normal, &options_with(&settings), &env);
+        assert!(path.with_file_name("doc_optimised.pdf").exists());
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn image_only_edits_are_dropped_on_pdfs() {
+        let env = Env::new();
+        let (path, _) = pdf_file(
+            &env,
+            "doc.pdf",
+            &[PdfPage::default()],
+            &PdfExtras::default(),
+        );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        job.edit(scale(50));
+        assert_eq!(job.edits.scale, None);
+    }
+
+    #[test]
+    fn aggressive_and_the_dpi_recipe_choose_the_resolution() {
+        let env = Env::new();
+        let image = testutil::PdfImage {
+            px: (1200, 1500),
+            drawn: (288.0, 360.0),
+            kind: testutil::ImageKind::DctRgb,
+        };
+        let page = PdfPage {
+            media: [0.0, 0.0, 288.0, 360.0],
+            images: vec![image],
+            ..PdfPage::default()
+        };
+        let (path, _) = pdf_file(&env, "scan.pdf", &[page], &PdfExtras::default());
+        let width = |path: &Path| {
+            let doc = lopdf::Document::load_mem(&fs::read(path).unwrap()).unwrap();
+            doc.objects
+                .values()
+                .filter_map(|o| o.as_stream().ok())
+                .find_map(|s| s.dict.get(b"Width").ok()?.as_i64().ok())
+                .unwrap()
+        };
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        run(&mut job, Level::Aggressive, &options(), &env);
+        assert!((399..=401).contains(&width(&path))); // 100 dpi
+        job.edit(
+            serde_json::from_value(serde_json::json!({ "dpi": 72, "level": "normal" })).unwrap(),
+        );
+        run(&mut job, Level::Normal, &options(), &env);
+        assert!((287..=289).contains(&width(&path))); // 72 dpi
+    }
+
+    #[test]
+    fn cropping_a_pdf_to_a_device_sets_every_page_and_restore_undoes_it() {
+        let env = Env::new();
+        let (path, input) = pdf_file(
+            &env,
+            "doc.pdf",
+            &vec![PdfPage::default(); 2],
+            &PdfExtras::default(),
+        );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        run(&mut job, Level::Normal, &options(), &env);
+        job.edit(serde_json::from_value(serde_json::json!({ "aspect": [1640, 2360] })).unwrap());
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert!(card.detail.ends_with("cropped"));
+        let doc = lopdf::Document::load_mem(&fs::read(&path).unwrap()).unwrap();
+        for id in doc.get_pages().values() {
+            let [x0, y0, x1, y1] = pdf::crop::page_box(&doc, *id, b"CropBox").unwrap();
+            assert!(((x1 - x0) / (y1 - y0) - 1640.0 / 2360.0).abs() < 0.01);
+        }
+        job.restore(&options(), &mut |_, _, _| Ok(()));
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    fn extract(job: &mut Job, patch: serde_json::Value) {
+        job.edit(serde_json::from_value(patch).unwrap());
+    }
+
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn pages_job(env: &Env, count: usize, extras: &PdfExtras) -> (Job, PathBuf, Vec<u8>) {
+        let (path, input) = pdf_file(env, "doc.pdf", &vec![PdfPage::default(); count], extras);
+        (
+            Job::file(&path, &Settings::default(), true).unwrap(),
+            path,
+            input,
+        )
+    }
+
+    #[test]
+    fn extracting_pages_writes_a_folder_beside_the_pdf() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, input) = pages_job(&env, 3, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        let folder = path.with_file_name("doc");
+        assert_eq!(names(&folder), ["doc-1.png", "doc-2.png", "doc-3.png"]);
+        assert_eq!(
+            (card.output.as_deref(), card.ext.as_str(), card.converted),
+            (Some(folder.as_path()), "", true)
+        );
+        assert_eq!(card.detail, "3 × PNG · 150 dpi");
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn twelve_pages_are_numbered_with_two_digits() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 12, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "jpeg", "dpi": 48 }));
+        run(&mut job, Level::Normal, &options(), &env);
+        let found = names(&path.with_file_name("doc"));
+        assert_eq!(found.len(), 12);
+        assert_eq!(
+            (found[0].as_str(), found[11].as_str()),
+            ("doc-01.jpg", "doc-12.jpg")
+        );
+    }
+
+    #[test]
+    fn a_single_page_becomes_one_image_file() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(
+            &mut job,
+            serde_json::json!({ "format": "jpeg", "pages": { "first": 2, "last": 2 } }),
+        );
+        run(&mut job, Level::Normal, &options(), &env);
+        let image = path.with_file_name("doc.jpg");
+        assert_eq!(sniff::sniff(&fs::read(&image).unwrap()), Some(Format::Jpeg));
+        assert!(!path.with_file_name("doc").exists());
+    }
+
+    #[test]
+    fn a_page_past_the_end_says_how_many_there_are() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, _, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(
+            &mut job,
+            serde_json::json!({ "format": "png", "pages": { "first": 5, "last": 6 } }),
+        );
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            card.state,
+            JobState::Error {
+                reason: tf("pdf.error.no_page", &[("count", "3")])
+            }
+        );
+    }
+
+    #[test]
+    fn re_extracting_replaces_its_own_folder() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        run(&mut job, Level::Normal, &options(), &env);
+        extract(&mut job, serde_json::json!({ "dpi": 72 }));
+        run(&mut job, Level::Normal, &options(), &env);
+        assert_eq!(names(&path.with_file_name("doc")).len(), 3);
+        assert!(!path.with_file_name("doc (2)").exists());
+        assert!(env.dir.path().join(".trash/doc").is_dir());
+    }
+
+    #[test]
+    fn a_taken_folder_name_gets_a_number() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 2, &PdfExtras::default());
+        let taken = path.with_file_name("doc");
+        fs::create_dir(&taken).unwrap();
+        fs::write(taken.join("mine.txt"), b"keep").unwrap();
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            card.output.as_deref(),
+            Some(path.with_file_name("doc (2)").as_path())
+        );
+        assert_eq!(names(&taken), ["mine.txt"]);
+        assert_eq!(
+            names(&path.with_file_name("doc (2)")),
+            ["doc (2)-1.png", "doc (2)-2.png"]
+        );
+    }
+
+    #[test]
+    fn a_cancelled_extraction_leaves_nothing_behind() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let o = options();
+        let token = o.cancel.clone();
+        let finished = job.run(
+            Level::Normal,
+            &o,
+            &env.backups,
+            &mut |u| {
+                if matches!(&u.state, JobState::Optimising { step, .. } if step == &tf("pdf.step.page", &[("n", "2"), ("total", "3")]))
+                {
+                    token.cancel();
+                }
+            },
+            &mut |_, _, _| Ok(()),
+        );
+        assert!(finished.is_none());
+        assert!(!path.with_file_name("doc").exists());
+        assert!(!path.with_file_name("doc.ferry-tmp").exists());
+    }
+
+    #[test]
+    fn restore_trashes_the_extracted_pages() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, input) = pages_job(&env, 2, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        run(&mut job, Level::Normal, &options(), &env);
+        let card = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+        assert_eq!(card.state, JobState::Restored);
+        assert!(!path.with_file_name("doc").exists());
+        assert!(env.dir.path().join(".trash/doc").is_dir());
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn a_signed_pdf_can_still_be_extracted() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let extras = PdfExtras {
+            signed: true,
+            ..Default::default()
+        };
+        let (mut job, path, _) = pages_job(&env, 2, &extras);
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(card.state, JobState::Done);
+        assert!(path.with_file_name("doc").is_dir());
     }
 }

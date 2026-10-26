@@ -47,6 +47,11 @@ pub fn format_id(f: Format) -> &'static str {
         Format::Jpeg => "jpeg",
         Format::Gif => "gif",
         Format::WebP => "webp",
+        // sE pdf-formats
+        Format::Tiff => "tiff",
+        Format::Heic => "heic",
+        Format::Avif => "avif",
+        Format::Pdf => "pdf",
         Format::Mp4 => "mp4",
         Format::Hevc => "hevc",
         Format::Av1 => "av1",

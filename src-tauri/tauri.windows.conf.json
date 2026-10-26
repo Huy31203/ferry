@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "binaries/pdfium.dll": "pdfium.dll",
+      "binaries/pdfium-NOTICE.txt": "pdfium-NOTICE.txt"
+    }
+  }
+}
