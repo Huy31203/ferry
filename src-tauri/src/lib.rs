@@ -80,6 +80,7 @@ pub fn run() {
             compare::open_compare,
             compare::compare_ready,
             compare::compare_close,
+            compare::compare_page, // sE pdf-formats
             preview::quick_preview,
             commands::stack_ready,
             commands::card_copy,

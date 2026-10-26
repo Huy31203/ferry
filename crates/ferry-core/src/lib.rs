@@ -24,6 +24,7 @@ pub mod oscodec; // sE pdf-formats
 pub mod output;
 pub mod pdf; // sE pdf-formats
 pub mod pipeline;
+pub mod poster; // sE pdf-formats
 pub mod run_state;
 pub mod selfwrite; // stream C
 pub mod settings;
