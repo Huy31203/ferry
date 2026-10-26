@@ -1,3 +1,5 @@
+import type { RailPipeline } from './rail';
+
 /** Mirrors ferry_core::job (Rust serialises with serde; sizes are bytes). */
 export type JobState =
   | { kind: 'queued' }
@@ -140,6 +142,8 @@ export interface StackConfig {
   hover_hotkeys: boolean;
   /** The rail's tool ids in order (svc.rail.tools). */
   rail: string[];
+  /** Stream F: the library pipelines a `pipeline:<id>` rail button can run. */
+  pipelines: RailPipeline[];
   // stream A: video
   video_compression: number;
   speed_frames: 'keep' | 'drop';

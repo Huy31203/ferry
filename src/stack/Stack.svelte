@@ -31,6 +31,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
     crop_sizes: [],
     hover_hotkeys: true,
     rail: [...DEFAULT_RAIL_TOOLS],
+    pipelines: [], // stream F
     // stream A: video
     video_compression: 80,
     speed_frames: 'keep',
@@ -226,6 +227,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
           crop_sizes: images.crop_sizes,
           hover_hotkeys: floating.hover_hotkeys,
           rail: event.payload.svc.rail.tools,
+          pipelines: event.payload.pipelines.library, // stream F
           // stream A: video
           video_compression: video.compression,
           speed_frames: video.speed_frames,
@@ -365,6 +367,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
         autoHideSecs={config.auto_hide_secs}
         compression={isVideo(card.format) ? config.video_compression : config.compression}
         railTools={config.rail}
+        railPipelines={config.pipelines}
         tool={open}
         onclose={() => close(card.id)}
         ondrag={dragState}

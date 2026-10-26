@@ -27,7 +27,7 @@
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
-  import { DEFAULT_RAIL_TOOLS, MAX_TOOLS, addable, knownCount, toolLabel } from '../lib/rail';
+  import { DEFAULT_RAIL_TOOLS, MAX_TOOLS, addable, knownCount, pipelineFor, toolLabel, type RailPipeline } from '../lib/rail';
   import { extLabel, formatDuration, isVideo, ringDash } from '../lib/video'; // stream A: video
   import FormatBar from './FormatBar.svelte';
   import Slider from './Slider.svelte';
@@ -42,6 +42,7 @@
     autoHideSecs,
     compression,
     railTools = DEFAULT_RAIL_TOOLS,
+    railPipelines = [],
     tool = null,
     frame = null,
     onclose,
@@ -61,6 +62,8 @@
     compression: number;
     /** svc: the tool ids the rail shows, in the user's order. */
     railTools?: string[];
+    /** stream F: the library pipelines a `pipeline:<id>` tool runs. */
+    railPipelines?: RailPipeline[];
     /** This card's open tool, if any. */
     tool?: Tool | null;
     /** The crop popover's live frame, drawn over the thumbnail. */
@@ -83,7 +86,7 @@
   const busy = $derived(isBusy(card.state));
   const notice = $derived(card.name === '' && card.ext === '');
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
-  const rail = $derived(railActions(card, compact, railTools));
+  const rail = $derived(railActions(card, compact, railTools, railPipelines));
   const canRename = $derived(canDrag(card));
 
   const frameRect = $derived(
@@ -277,6 +280,7 @@
   function tipText(action: string): string {
     if (action.startsWith('format-')) return formatTip(action.slice('format-'.length));
     if (needsOriginal(action as RailAction) && !card.can_edit) return card.edit_hint ?? t('card.no_original');
+    if (pipelineFor(action, railPipelines)) return toolLabel(action, isMac, railPipelines);
     switch (action) {
       case 'downscale':
         return card.audio ? t('audio.card.cover_downscale') : t('card.downscale'); // stream B: audio
@@ -347,10 +351,10 @@
   // svc: the + button lists the tools that are not on the rail; full means none can be added
   function openAddMenu(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const full = knownCount(railTools) >= MAX_TOOLS;
-    const items = addable(railTools).map((tool) => ({
+    const full = knownCount(railTools, railPipelines) >= MAX_TOOLS;
+    const items = addable(railTools, railPipelines).map((tool) => ({
       id: tool.id,
-      label: toolLabel(tool.id, isMac),
+      label: toolLabel(tool.id, isMac, railPipelines),
       enabled: !full,
     }));
     invoke('svc_rail_menu', { x: rect.left, y: rect.bottom + 4, items }).catch((e) =>
@@ -542,6 +546,11 @@
       {:else if action === 'fit'}
         <button type="button" data-action="fit" class:hot={hotAction === 'fit'} aria-label={tipText('fit')} disabled={!card.can_edit} onclick={() => ontool(tool === 'fit' ? null : 'fit')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M12 18v-6" /><path d="m9 15 3 3 3-3" /></svg>
+        </button>
+      {:else if pipelineFor(action, railPipelines)}
+        <!-- stream F: a pipeline from the library, run on this card's original -->
+        <button type="button" data-action={action} class:hot={hotAction === action} aria-label={tipText(action)} disabled={!card.can_edit} onclick={() => act('pipe_run', { pipeline: pipelineFor(action, railPipelines)?.id })}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="12" r="2.5" /><circle cx="6" cy="18" r="2.5" /><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5" /></svg>
         </button>
       {:else if action === 'more'}
         <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} onclick={(event) => openMenu(event)}>
