@@ -400,9 +400,8 @@ impl Job {
         emit: &mut dyn FnMut(JobUpdate),
     ) -> Result<(Plan, PathBuf), Stop> {
         loop {
-            let out = e
-                .tmp
-                .join(format!("out{tag}.{}", attempt.target.extension()));
+            let ext = plan::temp_extension(attempt.target, self.source_format, &self.source_ext);
+            let out = e.tmp.join(format!("out{tag}.{ext}"));
             let planned = plan::plan(&PlanInput {
                 input: e.backup,
                 output: &out,
