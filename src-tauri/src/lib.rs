@@ -11,6 +11,7 @@ mod logging;
 mod menu;
 mod pipe_commands; // stream F
 mod pipe_jobs; // stream F
+mod pipe_menu; // stream F
 mod pipe_windows; // stream F
 mod platform;
 mod prefs;
