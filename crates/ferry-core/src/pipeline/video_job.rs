@@ -161,6 +161,8 @@ impl Job {
             twin: false,
             video: Some(VideoState::default()),
             audio: None,
+            poster: None,
+            pages: None,
         })
     }
 

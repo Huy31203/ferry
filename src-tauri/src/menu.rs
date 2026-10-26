@@ -226,7 +226,14 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         | Action::Preview => file,
         Action::Integration(_) => file,
         Action::Restore => idle && card.can_restore,
-        Action::Convert(format) => card.can_edit && card.format != Some(format),
+        // sE pdf-formats (an image or PDF card converts only to its own choices)
+        Action::Convert(format) => {
+            card.can_edit
+                && card.format != Some(format)
+                && (card.video.is_some()
+                    || card.audio.is_some()
+                    || card.choices.iter().any(|c| c.format == format))
+        }
         Action::Scale(percent) => card.can_edit && card.edits.scale.unwrap_or(100) != percent,
         Action::Rerun | Action::Aggressive | Action::Fit | Action::Crop | Action::KeepBoth(_) => {
             card.can_edit
@@ -243,8 +250,7 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
     }
 }
 
-/// "Convert to ▸": PNG, JPEG, WebP, and GIF first on a card that started as a
-/// GIF (like the format bar).
+/// "Convert to ▸": the card's own choices (like the format bar).
 pub fn convert_formats(card: &JobUpdate) -> Vec<Format> {
     // stream B: audio
     if card.audio.is_some() {
@@ -264,10 +270,8 @@ pub fn convert_formats(card: &JobUpdate) -> Vec<Format> {
         .filter(|&f| f != Format::Hevc || hevc)
         .collect();
     }
-    let gif = (card.source_format == Some(Format::Gif)).then_some(Format::Gif);
-    gif.into_iter()
-        .chain([Format::Png, Format::Jpeg, Format::WebP])
-        .collect()
+    // sE pdf-formats
+    card.choices.iter().map(|c| c.format).collect()
 }
 
 /// Pop the card's menu at `(x, y)`, in the stack page's CSS pixels.
@@ -590,6 +594,7 @@ mod tests {
         card.source_format = Some(Format::Png);
         card.can_edit = true;
         card.can_restore = true;
+        card.choices = ferry_core::formats::choices(Format::Png, false, 1, false);
         card
     }
 
@@ -749,6 +754,7 @@ mod tests {
 
     #[test]
     fn a_gif_card_can_convert_back_to_gif() {
+        use ferry_core::formats::choices;
         let mut card = done();
         assert_eq!(
             convert_formats(&card),
@@ -756,11 +762,18 @@ mod tests {
         );
         card.source_format = Some(Format::Gif);
         card.format = Some(Format::WebP);
+        card.choices = choices(Format::Gif, true, 1, false);
         assert_eq!(
             convert_formats(&card),
             [Format::Gif, Format::Png, Format::Jpeg, Format::WebP]
         );
         assert!(enabled(&card, Action::Convert(Format::Gif)));
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_format_the_card_does_not_offer_is_disabled() {
+        assert!(!enabled(&done(), Action::Convert(Format::Pdf)));
     }
 
     // ---- stream B: audio ----

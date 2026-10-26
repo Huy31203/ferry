@@ -31,6 +31,18 @@ export type Size =
   | { kind: 'long_edge'; edge: number };
 
 /** Mirrors ferry_core::edit::Edits: the recipe every run applies to the original. */
+/** Mirrors ferry_core::edit::PageRange: 1-based, inclusive. */
+export interface PageRange {
+  first: number;
+  last: number;
+}
+
+/** Mirrors ferry_core::formats::ConvertChoice. */
+export interface ConvertChoice {
+  format: Format;
+  first_only: boolean;
+}
+
 export interface Edits {
   aspect: [number, number] | null;
   framing: 'centre' | 'smart';
@@ -40,6 +52,10 @@ export interface Edits {
   compression: number | null;
   fit_under: number | null;
   level: 'normal' | 'aggressive';
+  // sE pdf-formats
+  dpi: number | null;
+  pages: PageRange | null;
+  uncrop: boolean;
   // stream F: pipelines
   encoder: 'fast' | 'small' | 'visually_lossless' | null;
   // stream A: video
@@ -86,6 +102,10 @@ export interface JobUpdate {
   video: VideoMeta | null;
   // stream B: audio
   audio: AudioCard | null;
+  // sE pdf-formats
+  poster: string | null;
+  pages: number | null;
+  choices: ConvertChoice[];
 }
 
 // stream A: video (mirrors ferry_core::job::VideoMeta)
