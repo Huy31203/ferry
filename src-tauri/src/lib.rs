@@ -9,6 +9,7 @@ mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
+mod pdf_commands; // sE pdf-formats
 mod platform;
 mod prefs;
 mod preview;
@@ -101,6 +102,7 @@ pub fn run() {
             commands::card_hover,
             commands::output_preview,
             commands::pick_folder,
+            pdf_commands::pdf_config, // sE pdf-formats
             // stream C (watch)
             watch::commands::watch_status,
             watch::commands::watch_support,

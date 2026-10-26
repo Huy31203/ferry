@@ -16,6 +16,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
   import CompactList from './CompactList.svelte'; // Stream D
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
+  import PdfCropPopover from './PdfCropPopover.svelte'; // sE pdf-formats
   import SpeedPopover from './SpeedPopover.svelte'; // stream A: video
   import DragAllBar from './DragAllBar.svelte';
   import UpdatePill from './UpdatePill.svelte';
@@ -318,7 +319,15 @@ import { shareAnchor } from '../lib/share'; // Stream H
         ondrag={dragState}
         ontool={setTool}
       />
-      {#if owner && tool?.kind === 'crop'}
+      {#if owner && tool?.kind === 'crop' && owner.source_format === 'pdf'}
+        <!-- sE pdf-formats -->
+        <PdfCropPopover
+          card={owner}
+          onapply={(edits) => apply(owner.id, edits)}
+          onclose={() => setTool(owner.id, null)}
+          onframe={(next) => (frame = next)}
+        />
+      {:else if owner && tool?.kind === 'crop'}
         <CropPopover
           card={owner}
           sizes={config.crop_sizes}
@@ -358,7 +367,15 @@ import { shareAnchor } from '../lib/share'; // Stream H
         ontool={(kind) => setTool(card.id, kind)}
         frame={open === 'crop' ? frame : null}
       />
-      {#if open === 'crop'}
+      {#if open === 'crop' && card.source_format === 'pdf'}
+        <!-- sE pdf-formats -->
+        <PdfCropPopover
+          {card}
+          onapply={(edits) => apply(card.id, edits)}
+          onclose={() => setTool(card.id, null)}
+          onframe={(next) => (frame = next)}
+        />
+      {:else if open === 'crop'}
         <CropPopover
           {card}
           sizes={config.crop_sizes}

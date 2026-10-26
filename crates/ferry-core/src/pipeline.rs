@@ -2917,4 +2917,30 @@ mod tests {
         run(&mut job, Level::Normal, &options(), &env);
         assert!((287..=289).contains(&width(&path))); // 72 dpi
     }
+
+    #[test]
+    fn cropping_a_pdf_to_a_device_sets_every_page_and_restore_undoes_it() {
+        let env = Env::new();
+        let (path, input) = pdf_file(
+            &env,
+            "doc.pdf",
+            &vec![PdfPage::default(); 2],
+            &PdfExtras::default(),
+        );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        run(&mut job, Level::Normal, &options(), &env);
+        job.edit(serde_json::from_value(serde_json::json!({ "aspect": [1640, 2360] })).unwrap());
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert!(card.detail.ends_with("cropped"));
+        let doc = lopdf::Document::load_mem(&fs::read(&path).unwrap()).unwrap();
+        for id in doc.get_pages().values() {
+            let [x0, y0, x1, y1] = pdf::crop::page_box(&doc, *id, b"CropBox").unwrap();
+            assert!(((x1 - x0) / (y1 - y0) - 1640.0 / 2360.0).abs() < 0.01);
+        }
+        job.restore(&options(), &mut |_, _, _| Ok(()));
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
 }
