@@ -66,7 +66,9 @@ fn on_change(app: &AppHandle, seq: u64) {
                 tray::rebuild(app); // Paused has been spent: back to Running
             }
         }
-        Err(Skip::NoImage) if !snap.files.is_empty() => optimise_copied_files(app, &snap, &settings),
+        Err(Skip::NoImage) if !snap.files.is_empty() => {
+            optimise_copied_files(app, &snap, &settings)
+        }
         Err(skip) => debug!(?skip, "clipboard change left alone"),
     }
 }
