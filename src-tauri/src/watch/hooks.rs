@@ -1,5 +1,5 @@
 //! Stream C's hand-off points for media other streams add. Each `*_job`
-//! returns `None` ("unsupported") until its stream is merged.
+//! returns `None` ("unsupported") while its flag is off.
 
 use std::path::Path;
 
@@ -12,8 +12,7 @@ use crate::state::AppState;
 
 pub const VIDEO: bool = true;
 pub const AUDIO: bool = true;
-/// Stream E (PDF) is not merged yet.
-pub const PDF: bool = false;
+pub const PDF: bool = true;
 
 /// Which media types the Settings pane may offer.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -42,13 +41,8 @@ pub fn audio_job(app: &AppHandle, path: &Path, settings: &Settings) -> Option<Re
     AUDIO.then(|| Job::file(path, settings, has_gifsicle(app)))
 }
 
-/// Replaced when stream E merges.
-pub fn pdf_job(
-    _app: &AppHandle,
-    _path: &Path,
-    _settings: &Settings,
-) -> Option<Result<Job, String>> {
-    None
+pub fn pdf_job(app: &AppHandle, path: &Path, settings: &Settings) -> Option<Result<Job, String>> {
+    PDF.then(|| Job::file(path, settings, has_gifsicle(app)))
 }
 
 fn has_gifsicle(app: &AppHandle) -> bool {
