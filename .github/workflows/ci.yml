@@ -69,6 +69,14 @@ jobs:
         if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: bash scripts/build-ffmpeg.sh x86_64-pc-windows-msvc
+      # Save now, not at job end, so a later failing step does not throw the 30-minute build away.
+      - if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            src-tauri/binaries/ffmpeg-*
+            src-tauri/binaries/licenses
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'THIRD-PARTY-NOTICES.md') }}
       # sE pdf-formats: rav1d (AVIF decode) builds assembly with NASM on x86_64
       - uses: ilammy/setup-nasm@v1
       - name: Build gifsicle sidecar
