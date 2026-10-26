@@ -2,7 +2,7 @@
 // pipeline_plan, pipeline_text, pipeline_test}; the pure helpers keep the
 // library edits out of the components.
 import { t, type StringKey } from './i18n';
-import { MEDIA, type Media } from './watch';
+import { MEDIA, folderName, type Media } from './watch';
 
 export { MEDIA };
 export type { Media };
@@ -133,16 +133,18 @@ export function removePipeline(lib: Pipelines, id: number): Pipelines {
 
 export type Usage =
   | { kind: 'clipboard' | 'drop_zone'; media: Media }
-  | { kind: 'zone'; media: Media; zone: string };
+  | { kind: 'zone'; media: Media; zone: string }
+  | { kind: 'folder'; folder: string };
 
-/** Where pipeline `id` runs: the clipboard, the drop zone, then the zones in list order. */
-export function usage(lib: Pipelines, id: number): Usage[] {
+/** Where pipeline `id` runs: the clipboard, the drop zone, the zones in list order, then watched folders. */
+export function usage(lib: Pipelines, id: number, folders: { path: string; pipeline: number | null }[] = []): Usage[] {
   const out: Usage[] = [];
   for (const media of MEDIA) if (lib.clipboard[media] === id) out.push({ kind: 'clipboard', media });
   for (const media of MEDIA) if (lib.drop_zone[media] === id) out.push({ kind: 'drop_zone', media });
   for (const zone of lib.zones)
     for (const media of MEDIA)
       if (zone.pipelines[media] === id) out.push({ kind: 'zone', media, zone: zone.name });
+  for (const f of folders) if (f.pipeline === id) out.push({ kind: 'folder', folder: folderName(f.path) });
   return out;
 }
 
@@ -152,6 +154,7 @@ export function usageLabel(list: Usage[]): string {
   const parts = list.map((u) => {
     if (u.kind === 'drop_zone') return t('pipe.assign.drop_zone');
     if (u.kind === 'zone') return t('pipe.assign.zone', { name: u.zone });
+    if (u.kind === 'folder') return t('pipe.assign.folder', { name: u.folder });
     return t('pipe.assign.clipboard', { media: t(`pipe.media.${u.media}` as StringKey).toLowerCase() });
   });
   return [...new Set(parts)].join(' · ');

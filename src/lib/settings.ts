@@ -125,6 +125,8 @@ export interface WatchedFolder {
   ignore: string[];
   max_files_at_once: number;
   paused: boolean;
+  /** Stream F: the library pipeline its files run through; null is the plain optimise. */
+  pipeline: number | null;
 }
 
 /** Stream C: mirrors ferry_core::settings::Watch. */

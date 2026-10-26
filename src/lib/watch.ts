@@ -37,7 +37,13 @@ export function newFolder(path: string): WatchedFolder {
     ignore: [],
     max_files_at_once: 10,
     paused: false,
+    pipeline: null,
   };
+}
+
+/** The `<select>` value of the pipeline picker as a pipeline id; '' is none. */
+export function pipelineId(value: string): number | null {
+  return value === '' ? null : Number(value);
 }
 
 export function addFolder(
