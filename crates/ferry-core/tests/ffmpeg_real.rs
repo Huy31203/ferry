@@ -96,7 +96,7 @@ fn a_real_encode_reports_progress_to_the_end() {
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=size=320x240:rate=30:duration=2",
+            "testsrc2=size=1280x720:rate=30:duration=20",
             "-c:v",
             "libx264",
             "-preset",
@@ -105,7 +105,7 @@ fn a_real_encode_reports_progress_to_the_end() {
             "null",
             "-",
         ]),
-        Duration::from_secs(2),
+        Duration::from_secs(20),
         &CancelToken::new(),
         &mut |p| seen.push(p),
     )
