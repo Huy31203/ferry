@@ -157,7 +157,9 @@
 
 {#if view && view.now.kind === 'video'}
   <!-- stream A: video -->
-  <VideoCompare {view} />
+  {#key view.id}
+    <VideoCompare {view} />
+  {/key}
 {:else if view}
   <div class="compare">
     <header class:single>

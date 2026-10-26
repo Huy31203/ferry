@@ -228,8 +228,9 @@
                 step = null;
               }}
               onadd={(kind) => {
-                setSteps(addStep(current.steps, kind));
-                step = current.steps.length;
+                const steps = addStep(current.steps, kind);
+                setSteps(steps);
+                step = steps.length - 1; // the new step, last
               }}
             />
             <Inspector
