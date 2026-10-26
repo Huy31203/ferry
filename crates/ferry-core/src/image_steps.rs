@@ -10,11 +10,9 @@ use crate::{
     optimise::{Encoder, Level},
     pipeline_steps::{
         Branch, Control, Effect, Media, Param, Params, Phase, Registry, StepKind, choice, flag,
-        number, text,
+        number, output_rule, text, with_location,
     },
-    settings::{Location, OutputRule},
     sniff::Format,
-    template,
 };
 
 /// What `convert` can write.
@@ -23,6 +21,9 @@ pub const CONVERT_TARGETS: &[(&str, &str)] = &[
     ("jpeg", "pipe.choice.jpeg"),
     ("webp", "pipe.choice.webp"),
 ];
+
+/// Where an image step sends a result when it names the folder location without a folder.
+const FOLDER: &str = "~/Pictures/Ferry";
 
 const LEVELS: &[(&str, &str)] = &[
     ("normal", "pipe.choice.normal"),
@@ -33,13 +34,6 @@ const ENCODERS: &[(&str, &str)] = &[
     ("fast", "pipe.choice.fast"),
     ("small", "pipe.choice.small"),
     ("visually_lossless", "pipe.choice.visually_lossless"),
-];
-const LOCATIONS: &[(&str, &str)] = &[
-    ("keep", "pipe.choice.keep"),
-    ("in_place", "pipe.choice.in_place"),
-    ("same_folder", "pipe.choice.same_folder"),
-    ("folder", "pipe.choice.folder"),
-    ("temporary", "pipe.choice.temporary"),
 ];
 const SIDES: &[(&str, &str)] = &[
     ("percent", "pipe.choice.percent"),
@@ -55,38 +49,6 @@ const ASPECTS: &[(&str, &str)] = &[
     ("1.91:1", "pipe.choice.r1_91_1"),
     ("9:16", "pipe.choice.r9_16"),
 ];
-
-const DEFAULT_FOLDER: &str = "~/Pictures/Ferry";
-
-/// A param list followed by the three params that say where a result goes.
-macro_rules! with_location {
-    ($($before:expr),* $(,)?) => {
-        &[
-            $($before,)*
-            Param {
-                name: "location",
-                label: "pipe.param.location",
-                control: Control::Choice { options: LOCATIONS },
-                required: false,
-                shown_when: None,
-            },
-            Param {
-                name: "folder",
-                label: "pipe.param.folder",
-                control: Control::Folder,
-                required: false,
-                shown_when: Some(("location", &["folder"])),
-            },
-            Param {
-                name: "template",
-                label: "pipe.param.template",
-                control: Control::Template,
-                required: false,
-                shown_when: Some(("location", &["same_folder", "folder"])),
-            },
-        ]
-    };
-}
 
 const OPTIMISE_PARAMS: &[Param] = with_location!(
     Param {
@@ -204,34 +166,6 @@ fn obj(v: serde_json::Value) -> Params {
     v.as_object().cloned().unwrap_or_default()
 }
 
-/// `location`/`folder`/`template` as an output rule; `None` keeps the File handling rule.
-fn output_rule(p: &Params, default_template: &str) -> Result<Option<OutputRule>, String> {
-    let Some(pick) = choice(p, "location", "pipe.param.location", LOCATIONS)? else {
-        return Ok(None);
-    };
-    let location = match pick {
-        "in_place" => Location::InPlace,
-        "same_folder" => Location::SameFolder,
-        "folder" => Location::Folder,
-        "temporary" => Location::Temporary,
-        _ => return Ok(None),
-    };
-    let template = text(p, "template")
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or(default_template);
-    template::validate(template)
-        .map_err(|tokens| tf("pipe.error.template", &[("tokens", &tokens.join(", "))]))?;
-    Ok(Some(OutputRule {
-        location,
-        folder: text(p, "folder")
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(DEFAULT_FOLDER)
-            .to_owned(),
-        template: template.to_owned(),
-        ..OutputRule::default()
-    }))
-}
-
 // ---- optimise ----
 
 fn optimise_fold(p: &Params, b: &mut Branch) -> Result<(), String> {
@@ -257,7 +191,7 @@ fn optimise_fold(p: &Params, b: &mut Branch) -> Result<(), String> {
     } else if let Some(q) = quality {
         patch.compression = Some(Some(q.round() as u8));
     }
-    let rule = output_rule(p, "%f_optimised.%e")?;
+    let rule = output_rule(p, FOLDER, "%f_optimised.%e")?;
     b.recipe.merge(patch);
     if rule.is_some() {
         b.optimised = rule;
@@ -302,7 +236,7 @@ fn convert_fold(p: &Params, b: &mut Branch) -> Result<(), String> {
             &[("name", &t("pipe.param.convert_to"))],
         )
     })?;
-    let rule = output_rule(p, "%f.%e")?;
+    let rule = output_rule(p, FOLDER, "%f.%e")?;
     b.recipe.merge(EditsPatch {
         format: Some(Some(target_format(to))),
         ..EditsPatch::default()
@@ -451,6 +385,38 @@ fn strip_fold(_: &Params, b: &mut Branch) -> Result<(), String> {
     Ok(())
 }
 
+/// Shared with the other media that have pixels to cut.
+pub(crate) fn downscale_kind(media: Media) -> StepKind {
+    StepKind {
+        id: "downscale",
+        media,
+        label: "pipe.step.downscale",
+        phase: Phase::Transform,
+        params: DOWNSCALE_PARAMS,
+        defaults: || obj(json!({ "by": "percent", "value": 50 })),
+        summary: downscale_summary,
+        effect: Effect::Fold(downscale_fold),
+    }
+}
+
+/// Shared with the other media that have pixels to cut.
+pub(crate) fn crop_kind(media: Media) -> StepKind {
+    StepKind {
+        id: "crop",
+        media,
+        label: "pipe.step.crop",
+        phase: Phase::Transform,
+        params: CROP_PARAMS,
+        defaults: || {
+            obj(
+                json!({ "aspect": "16:9", "width": 0, "height": 0, "long_edge": false, "smart": true }),
+            )
+        },
+        summary: crop_summary,
+        effect: Effect::Fold(crop_fold),
+    }
+}
+
 pub fn register(r: &mut Registry) {
     let kinds = [
         StepKind {
@@ -477,30 +443,8 @@ pub fn register(r: &mut Registry) {
             summary: convert_summary,
             effect: Effect::Fold(convert_fold),
         },
-        StepKind {
-            id: "downscale",
-            media: Media::Image,
-            label: "pipe.step.downscale",
-            phase: Phase::Transform,
-            params: DOWNSCALE_PARAMS,
-            defaults: || obj(json!({ "by": "percent", "value": 50 })),
-            summary: downscale_summary,
-            effect: Effect::Fold(downscale_fold),
-        },
-        StepKind {
-            id: "crop",
-            media: Media::Image,
-            label: "pipe.step.crop",
-            phase: Phase::Transform,
-            params: CROP_PARAMS,
-            defaults: || {
-                obj(
-                    json!({ "aspect": "16:9", "width": 0, "height": 0, "long_edge": false, "smart": true }),
-                )
-            },
-            summary: crop_summary,
-            effect: Effect::Fold(crop_fold),
-        },
+        downscale_kind(Media::Image),
+        crop_kind(Media::Image),
         StepKind {
             id: "strip_exif",
             media: Media::Image,
@@ -520,7 +464,7 @@ pub fn register(r: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{edit::Size, pipeline_steps::Media};
+    use crate::{edit::Size, pipeline_steps::Media, settings::Location};
 
     fn fold(id: &str, v: serde_json::Value) -> Result<Branch, String> {
         let mut r = Registry::new();
