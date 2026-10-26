@@ -134,6 +134,7 @@
     padding: 2px 8px;
     font: inherit;
     color: #fff;
+    color-scheme: dark;
     background: rgba(255, 255, 255, 0.1);
     border: 1px solid rgba(255, 255, 255, 0.25);
     border-radius: 6px;

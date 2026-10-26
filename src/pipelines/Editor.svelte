@@ -323,7 +323,7 @@
     display: flex;
     gap: 8px;
   }
-  .head select {
+  select {
     padding: 4px 8px;
     font: inherit;
     color: var(--fg);
