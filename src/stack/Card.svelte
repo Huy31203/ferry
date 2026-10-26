@@ -2,7 +2,7 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { fade } from 'svelte/transition';
-  import { autoHides, canDrag, isBusy, needsOriginal, thumbSrc, railActions, type RailAction, type Tool } from '../lib/cards';
+  import { autoHides, canDrag, isBusy, needsOriginal, thumbSrc, tipLeft, railActions, type RailAction, type Tool } from '../lib/cards';
   import {
     SCALE_STOPS,
     // stream B: audio (the Compression button drives bitrate on audio cards)
@@ -82,7 +82,7 @@
   let cardEl = $state<HTMLElement>();
   let copied = $state<'ok' | 'failed' | null>(null);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
-  let tip = $state<{ text: string; left: number; top: number; room: number } | null>(null);
+  let tip = $state<{ text: string; left: number; top: number | null; bottom: number | null; room: number } | null>(null);
   let tipWidth = $state(0);
   let renameError = $state<string | null>(null);
 
@@ -360,11 +360,14 @@
     const box = cardEl.getBoundingClientRect();
     const rect = button.getBoundingClientRect();
     // Under the button, or above it near the bottom edge (the format bar) so the card does not clip it.
+    // A long tip wraps onto several lines, so above it hangs from its bottom edge.
     const below = rect.bottom - box.top + 6;
+    const above = below + 24 > box.height;
     tip = {
       text: tipText(action),
       left: Math.max(8, rect.left - box.left),
-      top: below + 24 > box.height ? rect.top - box.top - 28 : below,
+      top: above ? null : below,
+      bottom: above ? box.height - (rect.top - box.top) + 4 : null,
       room: box.width,
     };
   });
@@ -715,7 +718,7 @@
     <div
       class="tip"
       role="tooltip"
-      style="left: {Math.max(6, Math.min(tip.left, tip.room - tipWidth - 6))}px; top: {tip.top}px"
+      style="left: {tipLeft(tip.left, tipWidth, tip.room)}px; {tip.top !== null ? `top: ${tip.top}px` : `bottom: ${tip.bottom}px`}"
       bind:clientWidth={tipWidth}
     >{tip.text}</div>
   {/if}
@@ -1036,7 +1039,10 @@
   .tip {
     position: absolute;
     z-index: 5;
-    max-width: 240px;
+    /* max-content keeps the width independent of `left`; it wraps only at the card's edge less the gutters. */
+    width: max-content;
+    max-width: min(240px, calc(100% - 12px));
+    box-sizing: border-box;
     padding: 4px 8px;
     border-radius: 6px;
     background: rgba(20, 20, 22, 0.94);
@@ -1044,7 +1050,8 @@
     font-size: 11px;
     font-weight: 500;
     line-height: 1.3;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
     pointer-events: none;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.15);
   }

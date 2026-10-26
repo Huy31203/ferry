@@ -29,6 +29,11 @@ export function thumbSrc(card: JobUpdate): string | null {
   return card.thumb_path;
 }
 
+/** Left edge of a tooltip that starts at `left` and is `width` wide: pulled left to stay `gutter` px inside a card `room` px wide. */
+export function tipLeft(left: number, width: number, room: number, gutter = 6): number {
+  return Math.max(gutter, Math.min(left, room - width - gutter));
+}
+
 /** The pipeline media a card belongs to. */
 export function cardMedia(card: JobUpdate): Media {
   if (card.video) return 'video';
