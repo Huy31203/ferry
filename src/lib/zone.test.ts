@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Summary, ZoneView } from './drop-ipc';
-import { kindsText, zoneText } from './zone';
+import { kindsText, presetsHint, zoneText } from './zone';
 
 const none: Summary = {
   files: 0,
@@ -51,5 +51,16 @@ describe('zone text', () => {
 
   it('counts files not read yet as files', () => {
     expect(kindsText({ ...none, files: 30, images: 2 })).toBe('2 images, 28 files');
+  });
+});
+
+describe('presetsHint', () => {
+  it('tells about the Ctrl tap only when there are zones to open', () => {
+    expect(presetsHint(view({}, { state: 'idle' }), 2)).toBe('Tap Ctrl for presets');
+    expect(presetsHint(view({}, { state: 'idle' }), 0)).toBeNull();
+  });
+  it('stays quiet while the zone is hidden, dropped on or refusing', () => {
+    for (const state of ['hidden', 'dropped', 'unsupported'] as const)
+      expect(presetsHint(view({}, { state }), 2)).toBeNull();
   });
 });

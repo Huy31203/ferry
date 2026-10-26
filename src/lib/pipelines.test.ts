@@ -4,6 +4,7 @@ import {
   assign,
   applySuggestion,
   duplicate,
+  mediaName,
   moveStep,
   moveZone,
   newPipeline,
@@ -164,5 +165,19 @@ describe('zones', () => {
     const b = newZone(a.lib, 'B');
     expect(moveZone(b.lib, 0, 1).zones.map((z) => z.name)).toEqual(['B', 'A']);
     expect(removeZone(b.lib, a.id).zones.map((z) => z.id)).toEqual([b.id]);
+  });
+});
+
+describe('mediaName', () => {
+  it('names the known media', () => {
+    expect(mediaName('pdf')).toBe('PDFs');
+    expect(mediaName('pdf', true)).toBe('PDF');
+  });
+  it('does not throw for a media this build does not know', () => {
+    expect(() => mediaName('other')).not.toThrow();
+    expect(() => mediaName('hologram')).not.toThrow();
+    expect(mediaName('hologram')).toBe(mediaName('other'));
+    expect(assign(empty(), { kind: 'clipboard' }, 'other' as never, 1)).toEqual(empty());
+    expect(usageLabel([{ kind: 'clipboard', media: 'other' as never }])).toContain(mediaName('other').toLowerCase());
   });
 });

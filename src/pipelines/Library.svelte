@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { t, type StringKey } from '../lib/i18n';
-  import { usage, usageLabel, type PipeMeta, type Pipeline, type Pipelines } from '../lib/pipelines';
+  import { t } from '../lib/i18n';
+  import { mediaName, usage, usageLabel, type PipeMeta, type Pipeline, type Pipelines } from '../lib/pipelines';
   import type { WatchedFolder } from '../lib/settings';
 
   let {
@@ -67,7 +67,7 @@
         >
           <span class="top">
             <span class="name">{pipeline.name}</span>
-            <span class="badge">{t(`pipe.media.${pipeline.media}` as StringKey)}</span>
+            <span class="badge">{mediaName(pipeline.media)}</span>
           </span>
           <span class="usage">{usageLabel(usage(pipelines, pipeline.id, folders))}</span>
           <span class="usage">
