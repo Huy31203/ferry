@@ -277,7 +277,7 @@
   "pdf.pages.invalid": "Choose pages from 1 to {n}",
   "pdf.pages.apply": "Extract",
   "pdf.dpi.label": "{n} dpi",
-  "pdf.dpi.tip": "Image resolution — click for the next lower DPI, drag for a slider",
+  "pdf.dpi.tip": "Image resolution (dpi): click to step down, drag for a slider",
   "pdf.menu.dpi": "Change DPI",
   "pdf.compare.page": "Page {n} of {total}",
   "pdf.compare.prev": "Previous page",
