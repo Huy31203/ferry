@@ -13,6 +13,10 @@ use crate::pdf::{self, PdfResult};
 use crate::sniff::Format;
 
 impl Job {
+    pub fn is_pdf(&self) -> bool {
+        self.source_format == Format::Pdf
+    }
+
     /// Read a PDF's page count and size on the first run; refuse an encrypted
     /// or unreadable file. Any other job passes.
     pub(super) fn capture_facts(&mut self, original: &[u8]) -> Result<(), String> {

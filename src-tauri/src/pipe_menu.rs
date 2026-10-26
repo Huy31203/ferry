@@ -7,6 +7,7 @@ use ferry_core::i18n::t;
 use ferry_core::job::{JobId, JobState, JobUpdate};
 use ferry_core::optimise::Encoder;
 use ferry_core::pipeline_steps::Media;
+use ferry_core::sniff::Format;
 use tauri::menu::{CheckMenuItem, IsMenuItem, MenuItem, Submenu};
 use tauri::{AppHandle, Manager, Wry};
 
@@ -69,6 +70,8 @@ fn media_of(card: &JobUpdate) -> Media {
         Media::Video
     } else if card.audio.is_some() {
         Media::Audio
+    } else if card.source_format == Some(Format::Pdf) {
+        Media::Pdf
     } else {
         Media::Image
     }

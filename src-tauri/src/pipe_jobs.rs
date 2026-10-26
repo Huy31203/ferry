@@ -154,6 +154,8 @@ pub fn media_of(job: &Job) -> Media {
         Media::Video
     } else if job.is_audio() {
         Media::Audio
+    } else if job.is_pdf() {
+        Media::Pdf
     } else {
         Media::Image
     }
@@ -392,6 +394,7 @@ pub fn options(app: &AppHandle, id: &JobId, mut o: RunOptions) -> RunOptions {
     pipe.override_output(id, &mut o.output);
     pipe.override_output(id, &mut o.video.output);
     pipe.override_output(id, &mut o.audio.settings.output);
+    pipe.override_output(id, &mut o.pdf_output); // stream E
     o
 }
 

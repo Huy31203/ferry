@@ -3004,6 +3004,24 @@ mod tests {
     }
 
     #[test]
+    fn a_pdf_job_says_so_and_an_image_job_does_not() {
+        let env = Env::new();
+        let (path, _) = pdf_file(
+            &env,
+            "doc.pdf",
+            &[PdfPage::default()],
+            &PdfExtras::default(),
+        );
+        assert!(
+            Job::file(&path, &Settings::default(), true)
+                .unwrap()
+                .is_pdf()
+        );
+        let (png, _) = done_file(&env, "a.png");
+        assert!(!png.is_pdf());
+    }
+
+    #[test]
     fn aggressive_and_the_dpi_recipe_choose_the_resolution() {
         let env = Env::new();
         let image = testutil::PdfImage {
