@@ -124,10 +124,32 @@ fn read_native(decoder: &mut Reader) -> Result<Native, OptimiseError> {
     })
 }
 
+/// The decoded pages of one TIFF may take at most this many bytes.
+pub const MAX_PAGES_BYTES: u64 = 1_000_000_000;
+
 /// Every page as straight RGBA8, oriented by its tag 274, carrying its ICC
-/// profile (tag 34675).
+/// profile (tag 34675). Refused before any page is decoded when they would
+/// take more than `MAX_PAGES_BYTES`.
 pub fn decode_pages(bytes: &[u8]) -> Result<Vec<Raster>, OptimiseError> {
+    decode_pages_within(bytes, MAX_PAGES_BYTES)
+}
+
+fn decode_pages_within(bytes: &[u8], max_bytes: u64) -> Result<Vec<Raster>, OptimiseError> {
     let mut decoder = open(bytes)?;
+    // The sizes come from the directories alone.
+    let mut total = 0_u64;
+    loop {
+        let (w, h) = decoder.dimensions().map_err(decode_err)?;
+        total = total.saturating_add(u64::from(w) * u64::from(h) * 4);
+        if total > max_bytes {
+            return Err(OptimiseError::Unsupported(t("pdf.tiff.too_large")));
+        }
+        if !decoder.more_images() {
+            break;
+        }
+        decoder.next_image().map_err(decode_err)?;
+    }
+    decoder.seek_to_image(0).map_err(decode_err)?;
     let mut pages = vec![decode_page(&mut decoder)?];
     while decoder.more_images() {
         decoder.next_image().map_err(decode_err)?;
@@ -391,6 +413,16 @@ mod tests {
             (48, 64, Some(icc))
         );
         assert_eq!((pages[1].width, pages[1].height), (10, 20));
+    }
+
+    #[test]
+    fn too_many_pages_are_refused_before_decoding() {
+        let bytes = testutil::tiff(&vec![TiffPage::default(); 3]);
+        let page = 64 * 48 * 4;
+        assert!(decode_pages_within(&bytes, 3 * page).is_ok());
+        assert!(
+            matches!(decode_pages_within(&bytes, 3 * page - 1), Err(OptimiseError::Unsupported(m)) if m == t("pdf.tiff.too_large"))
+        );
     }
 
     #[test]

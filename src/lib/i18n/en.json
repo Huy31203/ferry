@@ -307,6 +307,7 @@
   "pdf.formats.webp": "Convert to WebP",
   "pdf.badge.pages": "{n} pages",
   "pdf.tiff.unsupported": "This TIFF's colour format isn't supported",
+  "pdf.tiff.too_large": "This TIFF has too many pages to process",
   "pdf.step.tiff": "Compressing TIFF",
   "pdf.step.heic": "Encoding HEIC",
   "pdf.anim.too_large": "This animation is too large to process",
