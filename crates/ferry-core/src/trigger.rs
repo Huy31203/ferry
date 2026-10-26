@@ -1,7 +1,7 @@
 //! What Ferry does with the clipboard (spec §5.2, §5.3). Pure decisions over a
 //! snapshot; the app reads the clipboard and starts the jobs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::i18n::{t, tf};
 use crate::run_state::RunState;
@@ -84,13 +84,8 @@ pub fn is_ignored_extension(ignored: &[String], ext: &str) -> bool {
     ignored.iter().any(|i| normalise_ext(i) == ext)
 }
 
-/// The content rules every clipboard image must pass, whoever asked. Copied
-/// files win over image data: Finder and Explorer put the file's icon beside them.
-pub fn check_image(
-    snap: &Snapshot,
-    settings: &Settings,
-    has_gifsicle: bool,
-) -> Result<Format, Skip> {
+/// Concealed content and ignored apps are never touched, whatever is on the clipboard.
+fn check_source(snap: &Snapshot, settings: &Settings) -> Result<(), Skip> {
     if snap.concealed {
         return Err(Skip::Concealed);
     }
@@ -103,6 +98,17 @@ pub fn check_image(
     {
         return Err(Skip::IgnoredApp);
     }
+    Ok(())
+}
+
+/// The content rules every clipboard image must pass, whoever asked. Copied
+/// files win over image data: Finder and Explorer put the file's icon beside them.
+pub fn check_image(
+    snap: &Snapshot,
+    settings: &Settings,
+    has_gifsicle: bool,
+) -> Result<Format, Skip> {
+    check_source(snap, settings)?;
     let Some((format, bytes)) = &snap.image else {
         return Err(Skip::NoImage);
     };
@@ -145,6 +151,33 @@ pub fn automatic(
         return Err(Skip::NotRunning);
     }
     Ok(format)
+}
+
+/// An automatic trigger for copied files (FR-T3), only with "Optimise copied
+/// video and PDF files" on. `wanted` says whether a file is a video or a PDF;
+/// the others are left alone. As for images, the run state is asked last, so a
+/// Paused skip is spent on files Ferry would really have optimised.
+pub fn automatic_files(
+    snap: &Snapshot,
+    settings: &Settings,
+    wanted: &dyn Fn(&Path) -> bool,
+    state: &mut RunState,
+) -> Result<Vec<PathBuf>, Skip> {
+    if !settings.clipboard.enabled || !settings.clipboard.optimise_files {
+        return Err(Skip::Disabled);
+    }
+    check_source(snap, settings)?;
+    if settings.clipboard.skip_multiple_files && snap.files.len() > 1 {
+        return Err(Skip::MultipleFiles);
+    }
+    let files: Vec<PathBuf> = snap.files.iter().filter(|f| wanted(f)).cloned().collect();
+    if files.is_empty() {
+        return Err(Skip::NoImage);
+    }
+    if !state.take_automatic() {
+        return Err(Skip::NotRunning);
+    }
+    Ok(files)
 }
 
 /// The optimise hotkeys (§5.3): they run whatever the run state, and act on
@@ -382,5 +415,95 @@ mod tests {
             "Nothing to optimise on the clipboard"
         );
         assert_eq!(Skip::MultipleFiles.reason(), "More than one file copied");
+    }
+
+    fn files_snapshot(names: &[&str]) -> Snapshot {
+        Snapshot {
+            files: names.iter().map(PathBuf::from).collect(),
+            ..Snapshot::default()
+        }
+    }
+
+    fn files_on() -> Settings {
+        let mut settings = Settings::default();
+        settings.clipboard.optimise_files = true;
+        settings
+    }
+
+    fn videos_only(path: &Path) -> bool {
+        path.extension().is_some_and(|e| e == "mp4")
+    }
+
+    #[test]
+    fn copied_files_are_left_alone_unless_the_setting_is_on() {
+        let snap = files_snapshot(&["a.mp4"]);
+        let mut state = RunState::Running;
+        assert_eq!(
+            automatic_files(&snap, &Settings::default(), &videos_only, &mut state),
+            Err(Skip::Disabled)
+        );
+        assert_eq!(
+            automatic_files(&snap, &files_on(), &videos_only, &mut state),
+            Ok(vec![PathBuf::from("a.mp4")])
+        );
+        let mut off = files_on();
+        off.clipboard.enabled = false;
+        assert_eq!(
+            automatic_files(&snap, &off, &videos_only, &mut state),
+            Err(Skip::Disabled)
+        );
+    }
+
+    #[test]
+    fn copied_files_follow_the_clipboard_rules() {
+        let mut state = RunState::Running;
+        let concealed = Snapshot {
+            concealed: true,
+            ..files_snapshot(&["a.mp4"])
+        };
+        assert_eq!(
+            automatic_files(&concealed, &files_on(), &videos_only, &mut state),
+            Err(Skip::Concealed)
+        );
+        let mut settings = files_on();
+        settings.clipboard.ignored_apps = vec!["com.example.vault".into()];
+        let ignored = Snapshot {
+            source_app: Some("COM.example.Vault".into()),
+            ..files_snapshot(&["a.mp4"])
+        };
+        assert_eq!(
+            automatic_files(&ignored, &settings, &videos_only, &mut state),
+            Err(Skip::IgnoredApp)
+        );
+        let two = files_snapshot(&["a.mp4", "b.mp4"]);
+        assert_eq!(
+            automatic_files(&two, &files_on(), &videos_only, &mut state),
+            Err(Skip::MultipleFiles)
+        );
+        settings = files_on();
+        settings.clipboard.skip_multiple_files = false;
+        assert_eq!(
+            automatic_files(&two, &settings, &videos_only, &mut state)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn paused_is_spent_on_a_video_or_pdf_not_on_other_files() {
+        let mut state = RunState::Paused;
+        let other = files_snapshot(&["notes.txt"]);
+        assert_eq!(
+            automatic_files(&other, &files_on(), &videos_only, &mut state),
+            Err(Skip::NoImage)
+        );
+        assert_eq!(state, RunState::Paused);
+        let video = files_snapshot(&["a.mp4"]);
+        assert_eq!(
+            automatic_files(&video, &files_on(), &videos_only, &mut state),
+            Err(Skip::NotRunning)
+        );
+        assert!(automatic_files(&video, &files_on(), &videos_only, &mut state).is_ok());
     }
 }

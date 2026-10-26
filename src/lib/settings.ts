@@ -49,6 +49,7 @@ export interface Settings {
     ignored_apps: string[];
     accumulate: boolean;
     copy_paths: boolean;
+    optimise_files: boolean;
     file_template: string;
   };
   images: {

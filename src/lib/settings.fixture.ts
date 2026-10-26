@@ -24,6 +24,7 @@ export const sample: Settings = {
     ignored_apps: [],
     accumulate: false,
     copy_paths: false,
+    optimise_files: false,
     file_template: '%f',
   },
   images: {
