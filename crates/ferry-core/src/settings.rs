@@ -103,6 +103,8 @@ pub struct Clipboard {
     pub ignored_apps: Vec<String>,
     pub accumulate: bool,
     pub copy_paths: bool,
+    /// FR-T3: also optimise copied video and PDF files, not only images.
+    pub optimise_files: bool,
     pub file_template: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -410,6 +412,7 @@ impl Default for Clipboard {
             extra: Map::new(),
         }
     }
+            optimise_files: false,
 }
 
 impl Default for Images {
@@ -1321,6 +1324,8 @@ mod tests {
         fs::write(&path, r#"{"images": {}}"#).unwrap();
         assert_eq!(Settings::load(&path).0.clip, Clip::default());
     }
+        // FR-T3 is opt-in: copying a file in Finder must not re-encode it.
+        assert!(!Settings::default().clipboard.optimise_files);
 
     // stream A: video
     #[test]

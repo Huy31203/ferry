@@ -518,6 +518,8 @@
   "clipboard.ignored_apps.help": "Copies from these apps are never optimised.",
   "clipboard.accumulate": "Accumulate results",
   "clipboard.accumulate.help": "Put every result since launch or the last Clear all on the clipboard as files, to paste them together.",
+  "clipboard.optimise_files": "Optimise copied video and PDF files",
+  "clipboard.optimise_files.help": "Off by default: copying a file in Finder or Explorer then leaves it alone. Results follow File handling.",
   "clipboard.copy_paths": "Copy file paths",
   "clipboard.copy_paths.help": "Put the result's file and its full path on the clipboard instead of the image.",
   "clipboard.file_template": "File name template",
