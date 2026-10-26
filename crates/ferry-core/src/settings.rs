@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::integrations::MediaKind;
+use crate::sniff::Format;
 use crate::svc_settings::Svc;
 use crate::{edit, fsutil, optimise::Encoder, template};
 
@@ -26,6 +27,9 @@ pub struct Settings {
     pub floating: Floating,
     pub backups: Backups,
     pub hotkeys: Hotkeys,
+    // sE pdf-formats
+    pub pdf: Pdf,
+    pub formats: Formats,
     /// Stream C: watchers.
     pub watch: Watch,
     // Stream H: integrations
@@ -359,6 +363,8 @@ impl Default for Settings {
             floating: Floating::default(),
             backups: Backups::default(),
             hotkeys: Hotkeys::default(),
+            pdf: Pdf::default(),         // sE pdf-formats
+            formats: Formats::default(), // sE pdf-formats
             watch: Watch::default(),
             share: Share::default(), // Stream H
             // ---- sI clipboard-fixes: [clip] ----
@@ -742,6 +748,145 @@ impl Default for ResultsList {
     }
 }
 
+// ---- sE pdf-formats: [pdf] and [formats] ----
+/// A screen a PDF can be cropped to, by its pixel size (only the ratio is used).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Device {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Device {
+    fn new(name: &str, width: u32, height: u32) -> Self {
+        Self {
+            name: name.into(),
+            width,
+            height,
+            extra: Map::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Pdf {
+    /// Image resolution when optimising; clamped to 36..=1200.
+    pub dpi: u16,
+    pub dpi_aggressive: u16,
+    /// Resolution of pages extracted as images.
+    pub extract_dpi: u16,
+    pub max_size_mb: u32,
+    pub output: Output,
+    pub devices: Vec<Device>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for Pdf {
+    fn default() -> Self {
+        let folder = "~/Documents/Ferry".to_string();
+        Self {
+            dpi: 150,
+            dpi_aggressive: 100,
+            extract_dpi: 150,
+            max_size_mb: 500,
+            output: Output {
+                optimised: OutputRule {
+                    folder: folder.clone(),
+                    template: "%f_optimised.%e".into(),
+                    ..OutputRule::default()
+                },
+                // Extracting pages must not move the PDF to the Trash.
+                converted: OutputRule {
+                    location: Location::SameFolder,
+                    folder,
+                    ..OutputRule::default()
+                },
+                extra: Map::new(),
+            },
+            devices: vec![
+                Device::new("iPhone", 1179, 2556),
+                Device::new("iPhone Pro Max", 1320, 2868),
+                Device::new("iPad", 1640, 2360),
+                Device::new("iPad Pro 13-inch", 2064, 2752),
+                Device::new("Kindle", 1236, 1648),
+                Device::new("reMarkable", 1404, 1872),
+            ],
+            extra: Map::new(),
+        }
+    }
+}
+
+/// What a source format becomes when Ferry optimises it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvertTo {
+    Keep,
+    Jpeg,
+    Png,
+    #[serde(rename = "webp")]
+    WebP,
+}
+
+impl ConvertTo {
+    pub fn format(self) -> Option<Format> {
+        match self {
+            ConvertTo::Keep => None,
+            ConvertTo::Jpeg => Some(Format::Jpeg),
+            ConvertTo::Png => Some(Format::Png),
+            ConvertTo::WebP => Some(Format::WebP),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Formats {
+    pub heic_to: ConvertTo,
+    pub tiff_to: ConvertTo,
+    pub avif_to: ConvertTo,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for Formats {
+    fn default() -> Self {
+        Self {
+            heic_to: ConvertTo::Jpeg,
+            tiff_to: ConvertTo::Jpeg,
+            avif_to: ConvertTo::Keep,
+            extra: Map::new(),
+        }
+    }
+}
+
+impl Settings {
+    fn sanitised_pdf_formats(mut self) -> Self {
+        let dpi = edit::MIN_DPI..=edit::MAX_DPI;
+        for value in [
+            &mut self.pdf.dpi,
+            &mut self.pdf.dpi_aggressive,
+            &mut self.pdf.extract_dpi,
+        ] {
+            *value = (*value).clamp(*dpi.start(), *dpi.end());
+        }
+        self.pdf.max_size_mb = self.pdf.max_size_mb.max(1);
+        repair_output(&mut self.pdf.output, &Pdf::default().output);
+        let side = 1..=edit::MAX_SIDE;
+        for device in &mut self.pdf.devices {
+            device.name = device.name.trim().to_string();
+        }
+        self.pdf
+            .devices
+            .retain(|d| !d.name.is_empty() && side.contains(&d.width) && side.contains(&d.height));
+        self
+    }
+}
+
 /// How `Settings::load` found the file.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LoadStatus {
@@ -820,6 +965,7 @@ impl Settings {
         self.audio.sanitise();
         self.watch = self.watch.sanitised(); // stream C
         self.share.sanitise(); // Stream H
+        self = self.sanitised_pdf_formats(); // sE pdf-formats
         self.version = self.version.max(VERSION);
         self
     }
@@ -1464,5 +1610,95 @@ mod tests {
             Some(&app_ref("/Applications/PDF Expert.app", "PDF Expert"))
         );
         assert_eq!(s.share.shelf_apps, [app_ref("com.x", "X")]);
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn pdf_and_format_defaults() {
+        let s = Settings::default();
+        assert_eq!(
+            (
+                s.pdf.dpi,
+                s.pdf.dpi_aggressive,
+                s.pdf.extract_dpi,
+                s.pdf.max_size_mb
+            ),
+            (150, 100, 150, 500)
+        );
+        assert_eq!(s.pdf.output.optimised.location, Location::InPlace);
+        assert_eq!(s.pdf.output.optimised.template, "%f_optimised.%e");
+        assert_eq!(s.pdf.output.converted.location, Location::SameFolder);
+        assert_eq!(s.pdf.output.converted.folder, "~/Documents/Ferry");
+        assert_eq!(s.pdf.devices.len(), 6);
+        assert_eq!(
+            (
+                s.pdf.devices[2].name.as_str(),
+                s.pdf.devices[2].width,
+                s.pdf.devices[2].height
+            ),
+            ("iPad", 1640, 2360)
+        );
+        assert_eq!(
+            (s.formats.heic_to, s.formats.tiff_to, s.formats.avif_to),
+            (ConvertTo::Jpeg, ConvertTo::Jpeg, ConvertTo::Keep)
+        );
+        assert_eq!(s.version, 2);
+    }
+
+    #[test]
+    fn a_version_2_file_without_the_new_sections_gets_their_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, br#"{"version":2,"images":{"compression":70}}"#).unwrap();
+        let (s, _) = Settings::load(&path);
+        assert_eq!(
+            (s.pdf, s.formats, s.images.compression),
+            (Pdf::default(), Formats::default(), 70)
+        );
+    }
+
+    #[test]
+    fn pdf_values_are_sanitised() {
+        let mut s = Settings::default();
+        s.pdf.dpi = 5;
+        s.pdf.extract_dpi = 60_000;
+        s.pdf.max_size_mb = 0;
+        s.pdf.output.converted.template = "%q".into();
+        s.pdf.devices.push(Device {
+            name: "  ".into(),
+            width: 10,
+            height: 10,
+            ..Device::default()
+        });
+        s.pdf.devices.push(Device {
+            name: "Huge".into(),
+            width: 40_000,
+            height: 10,
+            ..Device::default()
+        });
+        let s = s.sanitised();
+        assert_eq!(
+            (s.pdf.dpi, s.pdf.extract_dpi, s.pdf.max_size_mb),
+            (36, 1200, 1)
+        );
+        assert_eq!(s.pdf.output.converted.template, "%f.%e");
+        assert_eq!(s.pdf.devices.len(), 6);
+    }
+
+    #[test]
+    fn convert_to_names_a_format_or_keeps_it() {
+        assert_eq!(ConvertTo::Keep.format(), None);
+        assert_eq!(ConvertTo::Jpeg.format(), Some(Format::Jpeg));
+        assert_eq!(serde_json::to_value(ConvertTo::WebP).unwrap(), "webp");
+    }
+
+    #[test]
+    fn the_new_sections_reach_the_ui_as_plain_json() {
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(
+            json["pdf"]["devices"][0],
+            json!({ "name": "iPhone", "width": 1179, "height": 2556 })
+        );
+        assert_eq!(json["formats"]["heic_to"], "jpeg");
     }
 }

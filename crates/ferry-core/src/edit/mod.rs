@@ -18,6 +18,11 @@ use raster::Raster;
 /// The largest width, height or long edge a card may ask for.
 pub const MAX_SIDE: u32 = 30_000;
 
+// sE pdf-formats
+/// The range of a recipe's `dpi`.
+pub const MIN_DPI: u16 = 36;
+pub const MAX_DPI: u16 = 1200;
+
 /// Where an aspect crop or an exact size cuts from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
