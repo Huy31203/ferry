@@ -28,6 +28,9 @@ OPUS_COMMIT=22244de5a79bd1d6d623c32e72bf1954b56235be
 LAME_VERSION=3.100
 LAME_SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
 LAME_URL="https://downloads.sourceforge.net/project/lame/lame/${LAME_VERSION}/lame-${LAME_VERSION}.tar.gz"
+ZLIB_VERSION=1.3.2
+ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+ZLIB_URL="https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz"
 NVCODEC_URL=https://github.com/FFmpeg/nv-codec-headers.git
 NVCODEC_TAG=n12.1.14.0
 NVCODEC_COMMIT=1889e62e2d35ff7aa9baca2bceb14f053785e6f1
@@ -96,6 +99,23 @@ fetch_lame() {
   fi
 }
 
+# Windows only: ffmpeg.exe links this zlib statically, so it is pinned and shipped as source.
+fetch_zlib() {
+  local tarball="$CACHE/zlib-${ZLIB_VERSION}.tar.gz" actual
+  mkdir -p "$CACHE"
+  [ -f "$tarball" ] || curl -fsSL "$ZLIB_URL" -o "$tarball"
+  actual="$(sha256 "$tarball")"
+  if [ "$actual" != "$ZLIB_SHA256" ]; then
+    echo "zlib tarball checksum mismatch: got $actual" >&2
+    rm -f "$tarball"
+    exit 1
+  fi
+  if [ ! -d "$SRC/zlib" ]; then
+    mkdir -p "$SRC/zlib"
+    tar xzf "$tarball" -C "$SRC/zlib" --strip-components=1
+  fi
+}
+
 fetch_common() {
   mkdir -p "$SRC"
   fetch_git ffmpeg "$FFMPEG_URL" "$FFMPEG_TAG" "$FFMPEG_COMMIT"
@@ -108,6 +128,7 @@ fetch_common() {
 }
 
 fetch_windows() {
+  fetch_zlib
   fetch_git nv-codec-headers "$NVCODEC_URL" "$NVCODEC_TAG" "$NVCODEC_COMMIT"
   fetch_git amf "$AMF_URL" "$AMF_TAG" "$AMF_COMMIT" amf/public/include
   fetch_git libvpl "$VPL_URL" "$VPL_TAG" "$VPL_COMMIT"
@@ -128,6 +149,8 @@ if [ "${1:-}" = "--sources" ]; then
   tar -c --exclude=.git -C "$SRC/amf" . | tar -x -C "$DEST/amf"
   mkdir -p "$DEST/lame"
   cp -R "$SRC/lame/." "$DEST/lame/"
+  mkdir -p "$DEST/zlib"
+  cp -R "$SRC/zlib/." "$DEST/zlib/"
   echo "sources are in $DEST"
   exit 0
 fi
@@ -266,6 +289,10 @@ make -j"$JOBS" >/dev/null && make install >/dev/null
 
 FFMPEG_EXTRA=()
 if [ "$WINDOWS" = 1 ]; then
+  echo "== zlib"
+  fresh zlib
+  ./configure --static --prefix="$PREFIX" >/dev/null
+  make -j"$JOBS" >/dev/null && make install >/dev/null
   echo "== nv-codec-headers, AMF headers, libvpl"
   fresh nv-codec-headers
   make install PREFIX="$PREFIX" >/dev/null
@@ -324,7 +351,8 @@ fi
 echo "== licences"
 lic() { mkdir -p "$LICENSES/$1" && cp "$SRC/$2" "$LICENSES/$1/"; }
 rm -rf "$LICENSES/ffmpeg" "$LICENSES/x264" "$LICENSES/libvpx" "$LICENSES/svt-av1" "$LICENSES/dav1d" \
-  "$LICENSES/opus" "$LICENSES/lame" "$LICENSES/libvpl" "$LICENSES/amf" "$LICENSES/nv-codec-headers"
+  "$LICENSES/opus" "$LICENSES/lame" "$LICENSES/libvpl" "$LICENSES/amf" "$LICENSES/nv-codec-headers" \
+  "$LICENSES/zlib" "$LICENSES/mingw-w64"
 lic ffmpeg ffmpeg/COPYING.GPLv3
 lic ffmpeg ffmpeg/LICENSE.md
 lic x264 x264/COPYING
@@ -338,6 +366,11 @@ lic lame lame/COPYING
 if [ "$WINDOWS" = 1 ]; then
   lic libvpl libvpl/LICENSE
   lic amf amf/LICENSE.txt
+  lic zlib zlib/LICENSE
+  # winpthreads and the GCC runtime are linked statically (-static) from the MSYS2 toolchain; record which.
+  mkdir -p "$LICENSES/mingw-w64"
+  pacman -Q mingw-w64-x86_64-gcc mingw-w64-x86_64-winpthreads mingw-w64-x86_64-crt-git > "$LICENSES/mingw-w64/PACKAGES.txt" 2>&1 || true
+  find /mingw64/share/licenses -ipath '*winpthreads*' -type f -exec cp {} "$LICENSES/mingw-w64/" \; 2>/dev/null || true
   mkdir -p "$LICENSES/nv-codec-headers"
   sed -n '1,/\*\//p' "$SRC/nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h" > "$LICENSES/nv-codec-headers/LICENSE"
 fi
