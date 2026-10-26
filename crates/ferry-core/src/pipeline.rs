@@ -83,6 +83,8 @@ pub struct RunOptions {
     // stream F: pipelines
     /// Adaptive compression for plain runs (`images.adaptive`).
     pub adaptive: bool,
+    /// A plain run may switch PNG and JPEG (`images.switch_png_jpeg`).
+    pub switch_png_jpeg: bool,
 }
 
 impl RunOptions {
@@ -109,6 +111,7 @@ impl RunOptions {
             // stream B: audio
             audio: AudioRunOptions::new(settings),
             adaptive: settings.images.adaptive, // stream F: pipelines
+            switch_png_jpeg: settings.images.switch_png_jpeg, // stream F: pipelines
         }
     }
 }
@@ -669,13 +672,18 @@ impl Job {
         };
         // (state, Some((bytes, format, size after, fit target missed)))
         let (state, result) = if plain {
-            match optimise::optimise(&original, self.source_format, &options) {
-                Ok(Outcome::Smaller { bytes }) => (
-                    JobState::Done,
-                    Some((bytes, self.source_format, None, false)),
-                ),
-                Ok(Outcome::AlreadyOptimal) => (JobState::AlreadyOptimal, None),
-                Ok(Outcome::Larger) => (JobState::Larger, None),
+            // stream F: pipelines (switch_png_jpeg may pick the other format)
+            match optimise::switch::optimise(
+                &original,
+                self.source_format,
+                &options,
+                o.switch_png_jpeg,
+            ) {
+                Ok((Outcome::Smaller { bytes }, format)) => {
+                    (JobState::Done, Some((bytes, format, None, false)))
+                }
+                Ok((Outcome::AlreadyOptimal, _)) => (JobState::AlreadyOptimal, None),
+                Ok((Outcome::Larger, _)) => (JobState::Larger, None),
                 Err(OptimiseError::Cancelled) => return None,
                 Err(e) => return Some(self.fail(self.reason(&e), e)),
             }
@@ -2587,5 +2595,25 @@ mod tests {
         let mut s = Settings::default();
         s.images.adaptive = true;
         assert!(options_with(&s).adaptive);
+    }
+
+    #[test]
+    fn a_switched_file_is_written_as_a_conversion_and_restores() {
+        let env = Env::new();
+        let mut s = Settings::default();
+        s.images.switch_png_jpeg = true;
+        let path = env.file("photo.png", &testutil::photo_png(256, 256));
+        let mut job = Job::file(&path, &s, true).unwrap();
+        let o = options_with(&s);
+        let (finished, _) = run(&mut job, Level::Normal, &o, &env);
+        let update = finished.unwrap().update;
+        assert!(update.converted && update.format == Some(Format::Jpeg));
+        assert!(path.with_extension(Format::Jpeg.extension()).exists());
+        assert!(
+            !path.exists(),
+            "the in-place source went to the (test) Trash"
+        );
+        job.restore(&o, &mut |_, _, _| Ok(()));
+        assert!(path.exists());
     }
 }

@@ -5,6 +5,7 @@ pub mod adaptive; // stream F: pipelines
 pub(crate) mod gif;
 pub(crate) mod jpeg;
 pub(crate) mod png;
+pub mod switch; // stream F: pipelines
 pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
