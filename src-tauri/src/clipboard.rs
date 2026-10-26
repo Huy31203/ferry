@@ -225,4 +225,12 @@ mod tests {
         assert!(wanted_file(&theirs, &own));
         assert!(!wanted_file(&dir.path().join("gone.pdf"), &[]));
     }
+
+    #[test]
+    fn a_copied_folder_is_never_wanted_whatever_it_is_called() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("clips.mp4");
+        std::fs::create_dir(&folder).unwrap();
+        assert!(!wanted_file(&folder, &[]));
+    }
 }
