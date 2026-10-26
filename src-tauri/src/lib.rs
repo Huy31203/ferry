@@ -321,3 +321,46 @@ fn video_startup(_app: &AppHandle) {
         tracing::warn!("could not start the video probe: {e}");
     }
 }
+
+#[cfg(test)]
+mod asset_scope_tests {
+    use glob::{MatchOptions, Pattern};
+
+    /// The card and batch thumbnails (`.ferry-poster.png`, `.ferry-thumb.jpg`,
+    /// `.ferry-cover.*`) are dotfiles in the backup folder; Tauri's asset scope
+    /// refuses dotfiles on Unix unless the config says otherwise.
+    #[test]
+    fn asset_scope_serves_the_dot_named_thumbnails_in_backups() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let scope = &conf["app"]["security"]["assetProtocol"]["scope"];
+        let (allow, literal_dot) = match scope.as_array() {
+            Some(list) => (list.clone(), true), // Tauri's Unix default
+            None => (
+                scope["allow"].as_array().unwrap().clone(),
+                scope["requireLiteralLeadingDot"].as_bool().unwrap_or(true),
+            ),
+        };
+        let options = MatchOptions {
+            require_literal_separator: true,
+            require_literal_leading_dot: literal_dot,
+            ..Default::default()
+        };
+        let backups = "/data/backups/2026-10-26/j1";
+        let served = |file: &str| {
+            let path = format!("{backups}/{file}");
+            allow.iter().any(|p| {
+                let pattern = p.as_str().unwrap().replace("$APPDATA", "/data");
+                Pattern::new(&pattern).unwrap().matches_with(&path, options)
+            })
+        };
+        for name in [
+            "a.png",
+            ".ferry-poster.png",
+            ".ferry-thumb.jpg",
+            ".ferry-cover.jpg",
+        ] {
+            assert!(served(name), "{name} is outside the asset scope");
+        }
+    }
+}
