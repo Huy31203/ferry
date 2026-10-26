@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { card } from './card.fixture';
+import type { JobUpdate } from './ipc';
 import {
   NO_SELECTION,
   clearSel,
   escapeSel,
   headerText,
+  keyPatch,
   listKey,
   listTotals,
   moveCursor,
@@ -119,5 +121,28 @@ describe('compact list', () => {
 
   it('steps down like the hover key', () => {
     expect([stepDown(null), stepDown(50), stepDown(15), stepDown(10)]).toEqual([90, 40, 10, null]);
+  });
+});
+
+describe('keyPatch', () => {
+  const cfg = { dpi: 150, dpi_aggressive: 100, extract_dpi: 150, devices: [] };
+  const pdf = (edits: Partial<JobUpdate['edits']> = {}) => {
+    const c = card({ kind: 'done' }, { source_format: 'pdf' });
+    return { ...c, edits: { ...c.edits, ...edits } };
+  };
+
+  it('scales an image by digits and steps it down with -', () => {
+    const c = card({ kind: 'done' });
+    expect(keyPatch({ kind: 'scale', percent: 50 }, c, cfg)).toEqual({ scale: 50 });
+    expect(keyPatch({ kind: 'step_down' }, c, cfg)).toEqual({ scale: 90 });
+    expect(keyPatch({ kind: 'step_down' }, { ...c, edits: { ...c.edits, scale: 10 } }, cfg)).toBeNull();
+  });
+
+  it('does nothing on a PDF for digits, and steps its DPI with -', () => {
+    expect(keyPatch({ kind: 'scale', percent: 50 }, pdf(), cfg)).toBeNull();
+    expect(keyPatch({ kind: 'step_down' }, pdf(), cfg)).toEqual({ dpi: 100 });
+    expect(keyPatch({ kind: 'step_down' }, pdf({ dpi: 200 }), cfg)).toEqual({ dpi: 150 });
+    expect(keyPatch({ kind: 'step_down' }, pdf({ level: 'aggressive' }), cfg)).toEqual({ dpi: 72 });
+    expect(keyPatch({ kind: 'step_down' }, pdf({ dpi: 48 }), cfg)).toBeNull();
   });
 });

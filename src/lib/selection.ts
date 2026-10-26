@@ -1,7 +1,8 @@
 import { canDrag } from './cards';
 import { formatBytes, savingPercent } from './format';
 import { t } from './i18n';
-import type { JobUpdate } from './ipc';
+import type { EditsPatch, JobUpdate } from './ipc';
+import { dpiPatch, nextDpi, type PdfConfig } from './pdf';
 
 /** Height of a row in the compact list, in px. */
 export const LIST_ROW = 44;
@@ -182,4 +183,15 @@ export function escapeSel(sel: Sel): { sel: Sel; release: boolean } {
 export function stepDown(scale: number | null): number | null {
   const next = Math.max(10, (scale ?? 100) - 10);
   return next === scale ? null : next;
+}
+
+/** What `-` and the digits do to `card`, as `hover_keys` does: an image scales; a PDF has no scale, so `-` steps its DPI and digits do nothing. */
+export function keyPatch(key: { kind: 'scale'; percent: number } | { kind: 'step_down' }, card: JobUpdate, cfg: PdfConfig): EditsPatch | null {
+  if (card.source_format === 'pdf') {
+    if (key.kind === 'scale') return null;
+    const dpi = nextDpi(card.edits.dpi ?? (card.edits.level === 'aggressive' ? cfg.dpi_aggressive : cfg.dpi));
+    return dpi === null ? null : dpiPatch(dpi);
+  }
+  const scale = key.kind === 'scale' ? key.percent : stepDown(card.edits.scale);
+  return scale === null ? null : { scale };
 }
