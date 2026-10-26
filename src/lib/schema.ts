@@ -10,6 +10,7 @@ export type PaneId =
   | 'audio' // stream B: audio
   | 'files'
   | 'floating'
+  | 'pipelines' // stream F
   | 'drop' // stream D
   | 'watch' // stream C
   | 'sharing' // stream H
@@ -24,6 +25,7 @@ export const panes: { id: PaneId; label: StringKey }[] = [
   { id: 'audio', label: 'audio.pane' }, // stream B: audio
   { id: 'files', label: 'pane.files' },
   { id: 'floating', label: 'pane.floating' },
+  { id: 'pipelines', label: 'pipe.pane' }, // stream F
   { id: 'drop', label: 'drop.pane' }, // stream D
   { id: 'watch', label: 'watch.pane' }, // stream C
   { id: 'sharing', label: 'share.pane' }, // stream H
@@ -54,7 +56,9 @@ export type Control =
   | { kind: 'watch_folders' }
   // stream H
   | { kind: 'app' }
-  | { kind: 'app_list' };
+  | { kind: 'app_list' }
+  // stream F
+  | { kind: 'pipelines' };
 
 export interface Setting {
   id: string;
@@ -896,6 +900,16 @@ const all: Setting[] = [
     help: 'watch.folders.help',
     path: 'watch.folders',
     control: { kind: 'watch_folders' },
+    wide: true,
+  },
+  // stream F
+  {
+    id: 'pipelines_library',
+    pane: 'pipelines',
+    label: 'pipe.library',
+    help: 'pipe.library.help',
+    path: 'pipelines',
+    control: { kind: 'pipelines' },
     wide: true,
   },
   ...shareSettings, // stream H

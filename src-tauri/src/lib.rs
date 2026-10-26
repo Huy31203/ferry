@@ -9,8 +9,13 @@ mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
+mod pipe_commands; // stream F
+mod pipe_jobs; // stream F
+mod pipe_menu; // stream F
+mod pipe_windows; // stream F
 mod platform;
 mod prefs;
+mod preset_zones; // stream F
 mod preview;
 mod state;
 mod tray;
@@ -130,6 +135,25 @@ pub fn run() {
             drop_batch::list::list_save_to,
             // stream B: audio
             audio::card_extract_cover,
+            // stream F: pipelines
+            pipe_commands::pipe_registry,
+            pipe_commands::pipe_meta,
+            pipe_commands::pipe_check,
+            pipe_commands::pipe_parse,
+            pipe_commands::pipe_print,
+            pipe_commands::pipe_starters,
+            pipe_commands::pipe_test,
+            pipe_commands::pipe_reveal_test,
+            pipe_commands::pipe_pick_file,
+            pipe_commands::pipe_run,
+            pipe_commands::pipe_open_editor,
+            pipe_commands::pipe_zones_show,
+            pipe_commands::pipe_zones_hide,
+            pipe_commands::pipe_zones_drag,
+            pipe_commands::pipe_zones_ready,
+            pipe_commands::pipe_classify,
+            pipe_commands::pipe_zone_drop,
+            pipe_commands::pipe_zone_menu,
             svc_commands::svc_hotkeys_status,
             svc_commands::svc_hotkey_check,
             svc_commands::svc_hotkey_set,
@@ -192,11 +216,13 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         log_dir,
         gifsicle(),
     ));
+    app.manage(pipe_jobs::PipeState::default()); // stream F: pipelines
     windows::create_stack(app)?;
     hotkeys::reregister(app);
     tray::build(app)?;
     menu::init(app);
     drop_batch::init(app)?;
+    preset_zones::init(app); // stream F: pipelines
     clipboard::start(app);
     watch::start(app); // stream C
     integrations::init(app); // Stream H

@@ -1,6 +1,7 @@
 //! One job end to end (spec §5.4): back up the original, optimise it, write the
 //! result and report each step as a `JobUpdate`. The app runs this on a worker
 //! thread and owns the clipboard, which it reaches through a `deliver` callback.
+//! The user's pipelines (pipeline_def, pipeline_plan) compile into the `Edits` recipe that `Job::run` applies here; this module is the job runner, not the pipeline engine.
 
 use std::fmt::Display;
 use std::fs;
@@ -79,6 +80,11 @@ pub struct RunOptions {
     pub hardware: Option<Hardware>,
     // stream B: audio
     pub audio: AudioRunOptions,
+    // stream F: pipelines
+    /// Adaptive compression for plain runs (`images.adaptive`).
+    pub adaptive: bool,
+    /// A plain run may switch PNG and JPEG (`images.switch_png_jpeg`).
+    pub switch_png_jpeg: bool,
 }
 
 impl RunOptions {
@@ -104,6 +110,8 @@ impl RunOptions {
             hardware: None,
             // stream B: audio
             audio: AudioRunOptions::new(settings),
+            adaptive: settings.images.adaptive, // stream F: pipelines
+            switch_png_jpeg: settings.images.switch_png_jpeg, // stream F: pipelines
         }
     }
 }
@@ -480,27 +488,35 @@ impl Job {
     /// GIF, clears the conversion.
     pub fn edit(&mut self, patch: EditsPatch) {
         self.prior = Some((self.edits.clone(), self.level));
-        self.edits.merge(patch);
+        self.edits = self.recipe_for(patch); // stream F: pipelines
+        self.level = self.edits.level;
+    }
+
+    // stream F: pipelines
+    /// The recipe `edit(patch)` would leave, without changing the job.
+    pub fn recipe_for(&self, patch: EditsPatch) -> Edits {
+        let mut edits = self.edits.clone();
+        edits.merge(patch);
         // stream A: video (a video can become a GIF; only its own targets are kept)
         let cleared = match (&self.video, &self.audio) {
             (Some(_), _) => matches!(
-                self.edits.format,
+                edits.format,
                 Some(f) if f == self.source_format || !video::is_target(f)
             ),
             // stream B: audio (the source format stays: "same format, ignore the rule")
             (None, Some(_)) => matches!(
-                self.edits.format,
+                edits.format,
                 Some(f) if !crate::audio::TARGETS.contains(&f)
             ),
             (None, None) => matches!(
-                self.edits.format,
+                edits.format,
                 Some(f) if f == self.source_format || f == Format::Gif || f.is_audio()
             ),
         };
         if cleared {
-            self.edits.format = None;
+            edits.format = None;
         }
-        self.level = self.edits.level;
+        edits
     }
 
     /// A cancelled run leaves the file as the earlier run made it, so the
@@ -656,19 +672,26 @@ impl Job {
         let options = OptimiseOptions {
             level,
             compression: o.compression,
-            strip_metadata: o.strip_metadata,
+            strip_metadata: self.edits.strip_metadata.unwrap_or(o.strip_metadata), // stream F: pipelines
             gifsicle: o.gifsicle.clone(),
             cancel: o.cancel.clone(),
+            encoder: self.edits.encoder, // stream F: pipelines
+            adaptive: false,             // stream F: pipelines
         };
         // (state, Some((bytes, format, size after, fit target missed)))
         let (state, result) = if plain {
-            match optimise::optimise(&original, self.source_format, &options) {
-                Ok(Outcome::Smaller { bytes }) => (
-                    JobState::Done,
-                    Some((bytes, self.source_format, None, false)),
-                ),
-                Ok(Outcome::AlreadyOptimal) => (JobState::AlreadyOptimal, None),
-                Ok(Outcome::Larger) => (JobState::Larger, None),
+            // stream F: pipelines (switch_png_jpeg may pick the other format)
+            match optimise::switch::optimise(
+                &original,
+                self.source_format,
+                &options,
+                o.switch_png_jpeg,
+            ) {
+                Ok((Outcome::Smaller { bytes }, format)) => {
+                    (JobState::Done, Some((bytes, format, None, false)))
+                }
+                Ok((Outcome::AlreadyOptimal, _)) => (JobState::AlreadyOptimal, None),
+                Ok((Outcome::Larger, _)) => (JobState::Larger, None),
                 Err(OptimiseError::Cancelled) => return None,
                 Err(e) => return Some(self.fail(self.reason(&e), e)),
             }
@@ -2530,5 +2553,91 @@ mod tests {
         job.rename("diagram").unwrap();
         assert_eq!(job.output.file_name().unwrap(), "diagram.png");
         assert!(job.output.exists() && !first.output.unwrap().exists());
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn an_encoder_choice_keeps_the_plain_never_worse_rule() {
+        let env = Env::new();
+        let path = env.file("dot.png", &testutil::png(1, 1));
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        job.edit(EditsPatch {
+            encoder: Some(Some(crate::optimise::Encoder::Fast)),
+            ..EditsPatch::default()
+        });
+        let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+        assert_eq!(finished.unwrap().update.state, JobState::Larger);
+    }
+
+    #[test]
+    fn a_strip_override_writes_a_result_without_exif() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.strip_metadata = false;
+        let exif = testutil::exif_with_orientation(1, 4000);
+        let input = testutil::jpeg(
+            300,
+            200,
+            90,
+            &testutil::JpegExtras {
+                exif: Some(exif),
+                ..Default::default()
+            },
+        );
+        let path = env.file("photo.jpg", &input);
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        job.edit(EditsPatch {
+            strip_metadata: Some(Some(true)),
+            ..EditsPatch::default()
+        });
+        let (finished, _) = run(&mut job, Level::Normal, &options_with(&settings), &env);
+        assert_eq!(finished.unwrap().update.state, JobState::Done);
+        let out = fs::read(&path).unwrap();
+        // Orientation 1 needs no minimal EXIF (C1§5.8), so no APP1 Exif header is left at all.
+        assert!(!out.windows(6).any(|w| w == b"Exif\0\0"));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn run_options_carry_the_adaptive_setting() {
+        let mut s = Settings::default();
+        s.images.adaptive = true;
+        assert!(options_with(&s).adaptive);
+    }
+
+    #[test]
+    fn a_switched_file_is_written_as_a_conversion_and_restores() {
+        let env = Env::new();
+        let mut s = Settings::default();
+        s.images.switch_png_jpeg = true;
+        let path = env.file("photo.png", &testutil::photo_png(256, 256));
+        let mut job = Job::file(&path, &s, true).unwrap();
+        let o = options_with(&s);
+        let (finished, _) = run(&mut job, Level::Normal, &o, &env);
+        let update = finished.unwrap().update;
+        assert!(update.converted && update.format == Some(Format::Jpeg));
+        assert!(path.with_extension(Format::Jpeg.extension()).exists());
+        assert!(
+            !path.exists(),
+            "the in-place source went to the (test) Trash"
+        );
+        job.restore(&o, &mut |_, _, _| Ok(()));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn recipe_for_matches_what_edit_makes_and_changes_nothing() {
+        let env = Env::new();
+        let path = env.file("a.png", &testutil::png(64, 64));
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let patch = EditsPatch {
+            format: Some(Some(Format::Png)),
+            scale: Some(Some(50)),
+            ..EditsPatch::default()
+        };
+        let predicted = job.recipe_for(patch.clone());
+        assert_eq!(job.edits, Edits::default());
+        job.edit(patch);
+        assert_eq!((job.edits.clone(), job.edits.format), (predicted, None));
     }
 }

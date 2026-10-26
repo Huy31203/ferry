@@ -39,6 +39,8 @@ pub struct Settings {
     pub results_list: ResultsList,
     // stream B: audio
     pub audio: crate::audio::settings::Audio,
+    // stream F: pipelines
+    pub pipelines: crate::pipeline_def::Pipelines,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -369,6 +371,7 @@ impl Default for Settings {
             results_list: ResultsList::default(),
             // stream B: audio
             audio: crate::audio::settings::Audio::default(),
+            pipelines: crate::pipeline_def::Pipelines::default(), // stream F: pipelines
             extra: Map::new(),
         }
     }
@@ -820,6 +823,7 @@ impl Settings {
         self.audio.sanitise();
         self.watch = self.watch.sanitised(); // stream C
         self.share.sanitise(); // Stream H
+        self.pipelines = self.pipelines.sanitised(); // stream F: pipelines
         self.version = self.version.max(VERSION);
         self
     }
@@ -1464,5 +1468,20 @@ mod tests {
             Some(&app_ref("/Applications/PDF Expert.app", "PDF Expert"))
         );
         assert_eq!(s.share.shelf_apps, [app_ref("com.x", "X")]);
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn a_version_2_file_without_pipelines_loads_them_empty_and_round_trips_them() {
+        let s: Settings = serde_json::from_value(json!({ "version": 2 })).unwrap();
+        assert_eq!(s.pipelines, crate::pipeline_def::Pipelines::default());
+        let mut s = Settings::default();
+        s.pipelines.library.push(crate::pipeline_def::Pipeline {
+            id: 1,
+            name: "A".into(),
+            ..Default::default()
+        });
+        let back: Settings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(back.pipelines, s.pipelines);
     }
 }

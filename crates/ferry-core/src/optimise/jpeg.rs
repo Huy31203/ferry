@@ -11,7 +11,7 @@ use mozjpeg_sys::{
     jpeg_error_mgr, jpeg_std_error,
 };
 
-use super::{OptimiseError, OptimiseOptions, quality};
+use super::{Encoder, OptimiseError, OptimiseOptions, quality};
 use crate::edit::raster::Raster;
 
 const EXIF_PREFIX: &[u8] = b"Exif\0\0";
@@ -141,8 +141,14 @@ fn run(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
 
     let mut encoder = Compress::new(space);
     encoder.set_size(width, height);
+    // stream F: pipelines (Fast: baseline, mozjpeg's fastest defaults)
+    if o.encoder == Some(Encoder::Fast) {
+        encoder.set_fastest_defaults();
+    }
     encoder.set_quality(f32::from(quality(o)));
-    encoder.set_progressive_mode();
+    if o.encoder != Some(Encoder::Fast) {
+        encoder.set_progressive_mode();
+    }
     encoder.set_optimize_coding(true);
     if let Some(density) = density {
         encoder.set_pixel_density(density);
@@ -267,8 +273,14 @@ fn write_raster(r: &Raster, o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseErro
         .collect();
     let mut encoder = Compress::new(ColorSpace::JCS_RGB);
     encoder.set_size(r.width as usize, r.height as usize);
+    // stream F: pipelines (Fast: baseline, mozjpeg's fastest defaults)
+    if o.encoder == Some(Encoder::Fast) {
+        encoder.set_fastest_defaults();
+    }
     encoder.set_quality(f32::from(quality(o)));
-    encoder.set_progressive_mode();
+    if o.encoder != Some(Encoder::Fast) {
+        encoder.set_progressive_mode();
+    }
     encoder.set_optimize_coding(true);
     let mut encoder = encoder.start_compress(Vec::new()).map_err(encode_err)?;
     if let Some(icc) = &r.icc {
@@ -596,5 +608,57 @@ mod tests {
             panic!("decode_raster should refuse a CMYK JPEG");
         };
         assert_eq!(m, want);
+    }
+
+    // stream F: pipelines
+    /// The start-of-frame marker: 0xC0 baseline, 0xC2 progressive.
+    fn frame_marker(jpeg: &[u8]) -> u8 {
+        let mut pos = 2;
+        while let Some(&[0xFF, marker, hi, lo]) = jpeg.get(pos..pos + 4) {
+            if (0xC0..=0xC2).contains(&marker) {
+                return marker;
+            }
+            pos += 2 + usize::from(u16::from_be_bytes([hi, lo]));
+        }
+        panic!("no start of frame");
+    }
+
+    #[test]
+    fn fast_writes_a_baseline_jpeg_and_the_default_stays_progressive() {
+        let input = testutil::jpeg(200, 200, 95, &testutil::JpegExtras::default());
+        let fast = optimise(
+            &input,
+            &OptimiseOptions {
+                encoder: Some(Encoder::Fast),
+                ..OptimiseOptions::default()
+            },
+        )
+        .unwrap();
+        let default = optimise(&input, &OptimiseOptions::default()).unwrap();
+        assert_eq!(frame_marker(&fast), 0xC0);
+        assert_eq!(frame_marker(&default), 0xC2);
+    }
+
+    #[test]
+    fn visually_lossless_jpeg_at_40_equals_quality_90() {
+        let input = testutil::jpeg(200, 200, 98, &testutil::JpegExtras::default());
+        let vl = optimise(
+            &input,
+            &OptimiseOptions {
+                compression: 40,
+                encoder: Some(Encoder::VisuallyLossless),
+                ..OptimiseOptions::default()
+            },
+        )
+        .unwrap();
+        let q90 = optimise(
+            &input,
+            &OptimiseOptions {
+                compression: 90,
+                ..OptimiseOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(vl, q90);
     }
 }

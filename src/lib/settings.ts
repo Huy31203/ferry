@@ -1,3 +1,5 @@
+import type { Pipelines } from './pipelines'; // stream F
+
 export type OutputLocation = 'in_place' | 'same_folder' | 'folder' | 'temporary';
 
 /** Mirrors ferry_core::settings::OutputRule. `folder` keeps a leading `~`. */
@@ -82,6 +84,8 @@ export interface Settings {
   };
   results_list: { after_cards: number };
   audio: AudioSettings; // stream B: audio
+  /** Stream F: mirrors ferry_core::pipeline_def::Pipelines. */
+  pipelines: Pipelines;
 }
 
 /** Stream C: mirrors ferry_core::settings::WatchTypes. */

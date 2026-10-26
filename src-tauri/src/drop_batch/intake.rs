@@ -68,7 +68,13 @@ pub fn accept(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) {
             Ok(job) => {
                 let id: JobId = job.id.clone();
                 mark_dropped(app, &id, keep);
-                if !jobs::start_auto_copied(app, job, Level::Normal) {
+                if !crate::pipe_jobs::start_assigned(
+                    app,
+                    job,
+                    crate::pipe_jobs::Trigger::DropZone, // stream F: pipelines
+                    Level::Normal,
+                    None,
+                ) {
                     jobs::notice(app, tf("error.busy", &[("name", &file_name(&path))]));
                     forget(app, &[id]);
                 }

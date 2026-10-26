@@ -29,6 +29,57 @@ pub fn screenshot_rgba(w: u32, h: u32) -> Vec<u8> {
     px
 }
 
+// stream F: pipelines
+/// A photo-like RGBA image: smooth gradients plus fixed-seed noise of +-3, so
+/// lossy encoders lose something measurable but a middling quality still scores
+/// well. Opaque.
+pub fn photo_rgba(w: u32, h: u32) -> Vec<u8> {
+    let mut seed = 0x1357_9BDF_u32;
+    let mut noise = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        i32::from((seed >> 24) as u8) * 7 / 255 - 3
+    };
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let base = [x * 255 / w, y * 255 / h, (x + y) * 255 / (w + h)];
+            for c in base {
+                px.push((c as i32 + noise()).clamp(0, 255) as u8);
+            }
+            px.push(255);
+        }
+    }
+    px
+}
+
+/// A plain RGBA PNG of `photo_rgba`.
+pub fn photo_png(w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut writer = enc.write_header().unwrap();
+    writer.write_image_data(&photo_rgba(w, h)).unwrap();
+    writer.finish().unwrap();
+    out
+}
+
+/// A baseline RGB JPEG of `photo_rgba`.
+pub fn photo_jpeg(w: u32, h: u32, quality: u8) -> Vec<u8> {
+    let rgb: Vec<u8> = photo_rgba(w, h)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    let mut enc = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_RGB);
+    enc.set_size(w as usize, h as usize);
+    enc.set_quality(f32::from(quality));
+    let mut enc = enc.start_compress(Vec::new()).unwrap();
+    enc.write_scanlines(&rgb).unwrap();
+    enc.finish().unwrap()
+}
+
 /// A plain (unoptimised) RGBA PNG of `screenshot_rgba`.
 pub fn png(w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::new();

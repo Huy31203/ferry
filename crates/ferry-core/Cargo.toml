@@ -23,6 +23,8 @@ oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# stream F: pipelines (BSD-2-Clause; the perceptual metric for adaptive compression)
+ssimulacra2 = "=0.5.1"
 # Default features pull in the `image` crate, which Ferry does not use.
 webp = { version = "0.3", default-features = false }
 

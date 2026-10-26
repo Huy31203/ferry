@@ -528,6 +528,7 @@ impl Job {
             strip_metadata: o.strip_metadata,
             gifsicle: Some(gifsicle.to_owned()),
             cancel: o.cancel.clone(),
+            ..OptimiseOptions::default() // stream F: pipelines
         };
         let bytes = fs::read(out).map_err(|e| OptimiseError::Decode(e.to_string()))?;
         let (polished, missed) = match self.edits.fit_under {
