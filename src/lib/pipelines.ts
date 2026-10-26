@@ -156,3 +156,81 @@ export function usageLabel(list: Usage[]): string {
   });
   return [...new Set(parts)].join(' · ');
 }
+
+// ---- steps ----
+
+/** Move the step at `from` so it ends at `to`. */
+export function moveStep(steps: Step[], from: number, to: number): Step[] {
+  if (from === to || from < 0 || from >= steps.length || to < 0 || to >= steps.length) return steps;
+  const next = [...steps];
+  next.splice(to, 0, next.splice(from, 1)[0]);
+  return next;
+}
+
+/** A new step of `kind` with its default params, at `at` or at the end. */
+export function addStep(steps: Step[], kind: StepKindView, at?: number): Step[] {
+  const step: Step = { kind: kind.id, params: structuredClone(kind.defaults) };
+  const next = [...steps];
+  next.splice(at ?? next.length, 0, step);
+  return next;
+}
+
+export function removeStep(steps: Step[], i: number): Step[] {
+  return steps.filter((_, n) => n !== i);
+}
+
+/** Set a param of step `i`; `undefined` deletes it. */
+export function setParam(steps: Step[], i: number, name: string, value: unknown | undefined): Step[] {
+  return steps.map((step, n) => {
+    if (n !== i) return step;
+    const params = { ...step.params };
+    if (value === undefined) delete params[name];
+    else params[name] = value;
+    return { ...step, params };
+  });
+}
+
+// ---- text mode ----
+
+/** The text of `token` the cursor is in, and where it starts. */
+function tokenAt(line: string, col: number): { start: number; text: string } {
+  const before = line.slice(0, col);
+  const start = Math.max(before.lastIndexOf(' '), before.lastIndexOf('\t')) + 1;
+  return { start, text: before.slice(start) };
+}
+
+/** What the text editor offers at `col` of `line`: step ids in the first word, then the step's settings not yet on the line (each ending in `=`), then a choice setting's values. */
+export function suggest(line: string, col: number, kinds: StepKindView[]): string[] {
+  const { start, text } = tokenAt(line, col);
+  if (start === 0) return kinds.map((k) => k.id).filter((id) => id.startsWith(text));
+  const kind = kinds.find((k) => k.id === line.trimStart().split(/\s+/)[0]);
+  if (!kind) return [];
+  const equals = text.indexOf('=');
+  if (equals !== -1) {
+    const param = kind.params.find((p) => p.name === text.slice(0, equals));
+    if (param?.control.kind !== 'choice') return [];
+    const typed = text.slice(equals + 1);
+    return param.control.options.map((o) => o.value).filter((v) => v.startsWith(typed));
+  }
+  const used = new Set(
+    line
+      .split(/\s+/)
+      .slice(1)
+      .filter((word) => word.includes('=') && word !== text)
+      .map((word) => word.slice(0, word.indexOf('='))),
+  );
+  return kind.params
+    .map((p) => p.name)
+    .filter((name) => !used.has(name) && name.startsWith(text))
+    .map((name) => `${name}=`);
+}
+
+/** `line` with the token at `col` replaced by `suggestion`, and the cursor after it. A value or a step id is followed by a space. */
+export function applySuggestion(line: string, col: number, suggestion: string): { line: string; col: number } {
+  const { start, text } = tokenAt(line, col);
+  const equals = text.indexOf('=');
+  const prefix = equals !== -1 && !suggestion.endsWith('=') ? text.slice(0, equals + 1) : '';
+  const done = suggestion + (suggestion.endsWith('=') ? '' : ' ');
+  const head = line.slice(0, start) + prefix + done;
+  return { line: head + line.slice(col), col: head.length };
+}
