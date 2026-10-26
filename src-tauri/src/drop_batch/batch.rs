@@ -159,7 +159,8 @@ pub(super) fn exec(app: &AppHandle, work: Work) {
                 return;
             }
             mark_dropped(app, &id, keep);
-            if !jobs::start(app, job, level, None) {
+            // stream I: a batch is a drop too, so "Copy results of drops" applies
+            if !jobs::start_auto_copied(app, job, level) {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 skip(row, tf("error.busy", &[("name", &name)]));
                 forget(app, &[id]);

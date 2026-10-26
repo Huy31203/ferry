@@ -40,6 +40,7 @@ pub mod workdir;
 pub mod audio_steps;
 pub mod image_steps;
 pub mod metric;
+pub mod pdf_steps; // stream E
 pub mod pipeline_after;
 pub mod pipeline_def;
 pub mod pipeline_plan;

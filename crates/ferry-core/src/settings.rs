@@ -103,6 +103,8 @@ pub struct Clipboard {
     pub ignored_apps: Vec<String>,
     pub accumulate: bool,
     pub copy_paths: bool,
+    /// FR-T3: also optimise copied video and PDF files, not only images.
+    pub optimise_files: bool,
     pub file_template: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -284,6 +286,9 @@ pub struct WatchedFolder {
     pub ignore: Vec<String>,
     pub max_files_at_once: u32,
     pub paused: bool,
+    /// The library pipeline every arriving file runs through (stream F); `None`
+    /// is the plain optimise. A pipeline of another media leaves that media plain.
+    pub pipeline: Option<u32>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -297,6 +302,7 @@ impl Default for WatchedFolder {
             ignore: Vec::new(),
             max_files_at_once: 10,
             paused: false,
+            pipeline: None,
             extra: Map::new(),
         }
     }
@@ -406,6 +412,7 @@ impl Default for Clipboard {
             ignored_apps: Vec::new(),
             accumulate: false,
             copy_paths: false,
+            optimise_files: false,
             file_template: "%f".into(),
             extra: Map::new(),
         }
@@ -969,6 +976,15 @@ impl Settings {
         self.watch = self.watch.sanitised(); // stream C
         self.share.sanitise(); // Stream H
         self.pipelines = self.pipelines.sanitised(); // stream F: pipelines
+        for folder in &mut self.watch.folders {
+            // A deleted pipeline leaves its folders on the plain optimise.
+            if folder
+                .pipeline
+                .is_some_and(|id| self.pipelines.get(id).is_none())
+            {
+                folder.pipeline = None;
+            }
+        }
         self = self.sanitised_pdf_formats(); // sE pdf-formats
         self.version = self.version.max(VERSION);
         self
@@ -1311,6 +1327,8 @@ mod tests {
     fn the_clip_section_defaults_off_and_keeps_unknown_fields() {
         assert!(!Settings::default().clip.auto_copy);
         assert_eq!(Settings::default().version, 2);
+        // FR-T3 is opt-in: copying a file in Finder must not re-encode it.
+        assert!(!Settings::default().clipboard.optimise_files);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(&path, r#"{"clip": {"auto_copy": true, "later": 1}}"#).unwrap();
@@ -1533,19 +1551,44 @@ mod tests {
 
     #[test]
     fn unknown_fields_in_a_watched_folder_survive() {
-        // Stream F will add `pipeline` here; nothing may drop it before then.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         fs::write(
             &path,
-            r#"{"watch": {"folders": [{"path": "~/In", "pipeline": "webp"}], "later": 1}}"#,
+            r#"{"watch": {"folders": [{"path": "~/In", "later": "x"}], "later": 1}}"#,
         )
         .unwrap();
         let (s, _) = Settings::load(&path);
         s.save(&path).unwrap();
         let saved = read_json(&path);
-        assert_eq!(saved["watch"]["folders"][0]["pipeline"], json!("webp"));
+        assert_eq!(saved["watch"]["folders"][0]["later"], json!("x"));
         assert_eq!(saved["watch"]["later"], json!(1));
+    }
+
+    #[test]
+    fn a_folder_keeps_its_pipeline_until_the_pipeline_is_deleted() {
+        let mut s = Settings::default();
+        s.pipelines.library.push(crate::pipeline_def::Pipeline {
+            id: 3,
+            name: "WebP".into(),
+            ..Default::default()
+        });
+        let folder = |pipeline| WatchedFolder {
+            path: "~/In".into(),
+            pipeline,
+            ..WatchedFolder::default()
+        };
+        s.watch.folders = vec![folder(Some(3))];
+        assert_eq!(s.clone().sanitised().watch.folders[0].pipeline, Some(3));
+        s.watch.folders = vec![folder(Some(9))];
+        assert_eq!(s.sanitised().watch.folders[0].pipeline, None);
+        let (loaded, _) = {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            fs::write(&path, r#"{"watch": {"folders": [{"path": "~/In"}]}}"#).unwrap();
+            Settings::load(&path)
+        };
+        assert_eq!(loaded.watch.folders[0].pipeline, None);
     }
 
     // ---- Stream H: integrations ----

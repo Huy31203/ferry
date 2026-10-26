@@ -37,9 +37,18 @@ pub struct StackConfig {
     hover_hotkeys: bool,
     /// The rail's tool ids in order (svc.rail.tools).
     rail: Vec<String>,
+    /// stream F: the library pipelines a rail button (`pipeline:<id>`) can run.
+    pipelines: Vec<RailPipeline>,
     // stream A: video
     video_compression: u8,
     speed_frames: SpeedFrames,
+}
+
+#[derive(Serialize)]
+pub struct RailPipeline {
+    id: u32,
+    name: String,
+    media: ferry_core::pipeline_steps::Media,
 }
 
 /// The stack page is listening: hand it its settings and any cards sent before.
@@ -57,6 +66,16 @@ pub fn stack_ready(app: AppHandle) -> (StackConfig, Vec<JobUpdate>) {
         crop_sizes: settings.images.crop_sizes,
         hover_hotkeys: settings.floating.hover_hotkeys,
         rail: settings.svc.rail.tools,
+        pipelines: settings
+            .pipelines
+            .library
+            .iter()
+            .map(|p| RailPipeline {
+                id: p.id,
+                name: p.name.clone(),
+                media: p.media,
+            })
+            .collect(),
         // stream A: video
         video_compression: settings.video.compression,
         speed_frames: settings.video.speed_frames,

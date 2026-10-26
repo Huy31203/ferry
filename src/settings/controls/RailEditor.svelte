@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '../../lib/i18n';
+  import { store } from '../store.svelte';
   import { isMac } from '../../lib/ipc';
   import {
     DEFAULT_RAIL_TOOLS,
@@ -28,9 +29,10 @@
   /** The row being dragged and the gap it would land in (0 to value.length). */
   let drag = $state<{ from: number; gap: number } | null>(null);
 
-  const rows = $derived(editorRows(value));
-  const full = $derived(knownCount(value) >= MAX_TOOLS);
-  const choices = $derived(addable(value));
+  const library = $derived(store.value?.pipelines.library ?? []); // stream F: pipelines can sit on the rail
+  const rows = $derived(editorRows(value, library));
+  const full = $derived(knownCount(value, library) >= MAX_TOOLS);
+  const choices = $derived(addable(value, library));
   /** The index the dragged row would end at. The gap counts the row's own slot when it lies above. */
   const landing = $derived(drag === null ? null : drag.gap > drag.from ? drag.gap - 1 : drag.gap);
   /** The gap to mark, or null while the row would stay where it is. */
@@ -77,7 +79,7 @@
   {/if}
   <ul role="list" aria-labelledby={labelledby} bind:this={list}>
     {#each rows as row, i (row.id)}
-      {@const name = toolLabel(row.id, isMac)}
+      {@const name = toolLabel(row.id, isMac, library)}
       <li
         class:unknown={!row.known}
         class:before={mark === i}
@@ -129,7 +131,7 @@
     >
       <option value="">{t('svc.rail.add_tool')}</option>
       {#each choices as tool (tool.id)}
-        <option value={tool.id}>{toolLabel(tool.id, isMac)}</option>
+        <option value={tool.id}>{toolLabel(tool.id, isMac, library)}</option>
       {/each}
     </select>
     <button type="button" class="reset" {disabled} onclick={() => onchange([...DEFAULT_RAIL_TOOLS])}>

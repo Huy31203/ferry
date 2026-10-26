@@ -64,6 +64,16 @@ describe('pipelines', () => {
     expect(usageLabel(usage(lib, 1))).toBe('Copied images · Zone “WebP”');
     expect(usageLabel([])).toBe('Not assigned to anything yet.');
   });
+  it('lists watched folders that run a pipeline', () => {
+    const lib = newPipeline(empty(), 'image', 'A').lib;
+    const folders = [
+      { path: '~/Downloads', pipeline: 1 },
+      { path: '~/Other', pipeline: null },
+    ];
+    expect(usage(lib, 1, folders)).toEqual([{ kind: 'folder', folder: 'Downloads' }]);
+    expect(usageLabel(usage(lib, 1, folders))).toBe('Folder “Downloads”');
+    expect(usage(lib, 1)).toEqual([]);
+  });
 });
 
 const kinds: StepKindView[] = [

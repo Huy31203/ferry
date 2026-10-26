@@ -27,7 +27,7 @@
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
-  import { DEFAULT_RAIL_TOOLS, MAX_TOOLS, addable, knownCount, toolLabel } from '../lib/rail';
+  import { DEFAULT_RAIL_TOOLS, MAX_TOOLS, addable, knownCount, pipelineFor, toolLabel, type RailPipeline } from '../lib/rail';
   import { extLabel, formatDuration, isVideo, ringDash } from '../lib/video'; // stream A: video
   import FormatBar from './FormatBar.svelte';
   import Slider from './Slider.svelte';
@@ -42,6 +42,7 @@
     autoHideSecs,
     compression,
     railTools = DEFAULT_RAIL_TOOLS,
+    railPipelines = [],
     tool = null,
     frame = null,
     onclose,
@@ -61,6 +62,8 @@
     compression: number;
     /** svc: the tool ids the rail shows, in the user's order. */
     railTools?: string[];
+    /** stream F: the library pipelines a `pipeline:<id>` tool runs. */
+    railPipelines?: RailPipeline[];
     /** This card's open tool, if any. */
     tool?: Tool | null;
     /** The crop popover's live frame, drawn over the thumbnail. */
@@ -83,18 +86,9 @@
   const busy = $derived(isBusy(card.state));
   const notice = $derived(card.name === '' && card.ext === '');
   const fileName = $derived(card.ext ? `${card.name}.${card.ext}` : card.name);
-  const rail = $derived(railActions(card, compact, railTools));
+  const rail = $derived(railActions(card, compact, railTools, railPipelines));
   const canRename = $derived(canDrag(card));
 
-  // svc: the rail's visual order follows the setting; the blocks below keep their built-in order in the DOM
-  $effect(() => {
-    const order = rail;
-    if (!cardEl) return;
-    for (const button of cardEl.querySelectorAll<HTMLElement>('.rail > [data-action]')) {
-      const action = button.dataset.action as string;
-      button.style.order = String(action === 'add' ? order.length : order.indexOf(action));
-    }
-  });
   const frameRect = $derived(
     frame && card.dims_before
       ? frameBox(frame, card.dims_before, compact ? [220, 150] : [300, 200])
@@ -286,6 +280,7 @@
   function tipText(action: string): string {
     if (action.startsWith('format-')) return formatTip(action.slice('format-'.length));
     if (needsOriginal(action as RailAction) && !card.can_edit) return card.edit_hint ?? t('card.no_original');
+    if (pipelineFor(action, railPipelines)) return toolLabel(action, isMac, railPipelines);
     switch (action) {
       case 'downscale':
         return card.audio ? t('audio.card.cover_downscale') : t('card.downscale'); // stream B: audio
@@ -356,10 +351,10 @@
   // svc: the + button lists the tools that are not on the rail; full means none can be added
   function openAddMenu(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const full = knownCount(railTools) >= MAX_TOOLS;
-    const items = addable(railTools).map((tool) => ({
+    const full = knownCount(railTools, railPipelines) >= MAX_TOOLS;
+    const items = addable(railTools, railPipelines).map((tool) => ({
       id: tool.id,
-      label: toolLabel(tool.id, isMac),
+      label: toolLabel(tool.id, isMac, railPipelines),
       enabled: !full,
     }));
     invoke('svc_rail_menu', { x: rect.left, y: rect.bottom + 4, items }).catch((e) =>
@@ -471,8 +466,10 @@
   {/if}
 
   {#if rail.length > 0}
+    <!-- svc: one block per action, drawn in the user's order so Tab follows what is shown -->
     <div class="rail">
-      {#if rail.includes('downscale')}
+      {#each rail as action (action)}
+      {#if action === 'downscale'}
         <button
           type="button"
           data-action="downscale"
@@ -487,8 +484,7 @@
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="m14 10 7-7" /><path d="m3 21 7-7" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('compression')}
+      {:else if action === 'compression'}
         <button
           type="button"
           data-action="compression"
@@ -503,23 +499,19 @@
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('crop')}
+      {:else if action === 'crop'}
         <button type="button" data-action="crop" class:hot={hotAction === 'crop'} aria-label={tipText('crop')} disabled={!card.can_edit} onclick={() => ontool(tool === 'crop' ? null : 'crop')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v14a2 2 0 0 0 2 2h14" /><path d="M18 22V8a2 2 0 0 0-2-2H2" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('restore')}
+      {:else if action === 'restore'}
         <button type="button" data-action="restore" class:hot={hotAction === 'restore'} aria-label={tipText('restore')} onclick={() => act('card_restore')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('compare')}
+      {:else if action === 'compare'}
         <button type="button" data-action="compare" class:hot={hotAction === 'compare'} aria-label={tipText('compare')} disabled={!card.can_edit} onclick={() => act('open_compare')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('copy')}
+      {:else if action === 'copy'}
         <button
           type="button"
           data-action="copy"
@@ -535,38 +527,37 @@
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
           {/if}
         </button>
-      {/if}
-      <!-- svc: rail tools (stream G) -->
-      {#if rail.includes('reveal')}
+      {:else if action === 'reveal'}
         <button type="button" data-action="reveal" class:hot={hotAction === 'reveal'} aria-label={tipText('reveal')} onclick={() => act('card_reveal')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('aggressive')}
+      {:else if action === 'aggressive'}
         <button type="button" data-action="aggressive" class:hot={hotAction === 'aggressive'} aria-label={tipText('aggressive')} disabled={!card.can_edit} onclick={() => act('card_rerun', { aggressive: true })}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('rename')}
+      {:else if action === 'rename'}
         <button type="button" data-action="rename" class:hot={hotAction === 'rename'} aria-label={tipText('rename')} onclick={() => ontool('rename')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('preview')}
+      {:else if action === 'preview'}
         <button type="button" data-action="preview" class:hot={hotAction === 'preview'} aria-label={tipText('preview')} onclick={() => act('quick_preview')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('fit')}
+      {:else if action === 'fit'}
         <button type="button" data-action="fit" class:hot={hotAction === 'fit'} aria-label={tipText('fit')} disabled={!card.can_edit} onclick={() => ontool(tool === 'fit' ? null : 'fit')}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="M12 18v-6" /><path d="m9 15 3 3 3-3" /></svg>
         </button>
-      {/if}
-      {#if rail.includes('more')}
+      {:else if pipelineFor(action, railPipelines)}
+        <!-- stream F: a pipeline from the library, run on this card's original -->
+        <button type="button" data-action={action} class:hot={hotAction === action} aria-label={tipText(action)} disabled={!card.can_edit} onclick={() => act('pipe_run', { pipeline: pipelineFor(action, railPipelines)?.id })}>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="12" r="2.5" /><circle cx="6" cy="18" r="2.5" /><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5" /></svg>
+        </button>
+      {:else if action === 'more'}
         <button type="button" data-action="more" class:hot={hotAction === 'more'} aria-label={tipText('more')} onclick={(event) => openMenu(event)}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
         </button>
       {/if}
+      {/each}
       {#if !compact}
         <button type="button" data-action="add" class:hot={hotAction === 'add'} aria-label={tipText('add')} onclick={openAddMenu}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
