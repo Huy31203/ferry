@@ -161,6 +161,13 @@ describe('slider drag', () => {
     expect(stopY(QUALITY_STOPS, 21, 110)).toBe(110);
   });
 
+  it('places DPI stops by value with 300 at the top', () => {
+    const dpi = [300, 250, 200, 150, 100, 72, 48];
+    expect(stopY(dpi, 0, 120)).toBe(0);
+    expect(stopY(dpi, 6, 120)).toBe(120);
+    expect(stopY(dpi, 3, 120)).toBeCloseTo((120 * 150) / 252, 5);
+  });
+
   it('finds where a value sits, or the stop just below it', () => {
     expect(stopIndex(SCALE_STOPS, 50)).toBe(9);
     expect(stopIndex(SCALE_STOPS, 100)).toBe(0);

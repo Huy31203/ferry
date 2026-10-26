@@ -27,7 +27,7 @@ export function railActions(
     const tool = RAIL_TOOLS.find((candidate) => candidate.id === id);
     if (!tool || (compact && !tool.compact) || (tool.applies && !tool.applies(card))) continue;
     if (actions.length === limit) break;
-    actions.push(id);
+    actions.push(id === 'downscale' && card.source_format === 'pdf' ? 'dpi' : id); // sE pdf-formats: a PDF has DPI, not a scale
   }
   actions.push('more');
   return actions;
@@ -35,7 +35,7 @@ export function railActions(
 
 /** Rail buttons that work on the original, so `can_edit` turns them off. */
 export function needsOriginal(action: RailAction): boolean {
-  return RAIL_TOOLS.find((tool) => tool.id === action)?.needsOriginal ?? false;
+  return RAIL_TOOLS.find((tool) => tool.id === (action === 'dpi' ? 'downscale' : action))?.needsOriginal ?? false;
 }
 
 /** Whether the card's file can be dragged out. */

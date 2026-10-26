@@ -23,10 +23,13 @@
     labelledStops,
     stopIndex,
     type CropFrame,
+    type Quality,
   } from '../lib/edits';
   import { formatBytes, savingPercent } from '../lib/format';
   import { t, type StringKey } from '../lib/i18n';
   import { isMac, type EditsPatch, type Format, type JobUpdate } from '../lib/ipc';
+  import { DPI_STOPS, currentDpi, dpiLabel, dpiPatch, nextDpi } from '../lib/pdf'; // sE pdf-formats
+  import { pdfConfig } from '../lib/pdfConfig.svelte'; // sE pdf-formats
   import { DEFAULT_RAIL_TOOLS, MAX_TOOLS, addable, knownCount, toolLabel } from '../lib/rail';
   import { extLabel, formatDuration, isVideo, ringDash } from '../lib/video'; // stream A: video
   import FormatBar from './FormatBar.svelte';
@@ -169,7 +172,7 @@
   const TRACK = $derived(sliderTrack(compact ? 150 : 200));
   /** Fallback switch (Task 11): false if drags never reach the panel; the buttons then only step. */
   const PRESS_AND_DRAG = true;
-  type SliderKind = 'downscale' | 'compression';
+  type SliderKind = 'downscale' | 'compression' | 'dpi'; // 'dpi': sE pdf-formats
   let slide = $state<{
     kind: SliderKind;
     startY: number;
@@ -180,8 +183,13 @@
   } | null>(null);
   const quality = $derived(compressionStart(card, compression)); // stream B: audio
   const qualityStops = $derived(compressionStops(card));
+  const dpi = $derived(currentDpi(card, pdfConfig)); // sE pdf-formats
+  /** The stops the open slider steps through. */
+  const stopsOf = (kind: SliderKind): Quality[] =>
+    kind === 'downscale' ? SCALE_STOPS : kind === 'dpi' ? DPI_STOPS : qualityStops;
   const slideLabel = $derived.by(() => {
     if (!slide) return '';
+    if (slide.kind === 'dpi') return dpiLabel(DPI_STOPS[slide.index]);
     return slide.kind === 'downscale'
       ? scaleLabel(SCALE_STOPS[slide.index], card.dims_before, card.edits)
       : compressionLabel(card, qualityStops[slide.index]);
@@ -189,19 +197,25 @@
 
   /** Every stop's short value, such as "50 %" or "q 60", for the slider's labels. */
   const slideStops = $derived(
-    slide?.kind === 'downscale'
-      ? SCALE_STOPS.map((scale) => scaleLabel(scale, null, card.edits))
-      : qualityStops.map((stop) => compressionLabel(card, stop)),
+    slide?.kind === 'dpi'
+      ? DPI_STOPS.map(dpiLabel)
+      : slide?.kind === 'downscale'
+        ? SCALE_STOPS.map((scale) => scaleLabel(scale, null, card.edits))
+        : qualityStops.map((stop) => compressionLabel(card, stop)),
   );
 
   /** Every stop's distance from the track's top, px: the track is the value axis. */
   const slideYs = $derived.by(() => {
-    return stopYs(slide?.kind === 'downscale' ? SCALE_STOPS : qualityStops, TRACK);
+    return stopYs(stopsOf(slide?.kind ?? 'compression'), TRACK);
   });
 
   /** The stops that get a value label (round ones, spaced for the track). */
   const slideLabelled = $derived(
-    slide?.kind === 'downscale' ? labelledStops(SCALE_STOPS, TRACK) : labelledStops(qualityStops, TRACK, compressionRound(card)),
+    slide?.kind === 'dpi'
+      ? labelledStops(DPI_STOPS, TRACK, () => true)
+      : slide?.kind === 'downscale'
+        ? labelledStops(SCALE_STOPS, TRACK)
+        : labelledStops(qualityStops, TRACK, compressionRound(card)),
   );
 
   function edit(edits: EditsPatch) {
@@ -209,6 +223,11 @@
   }
 
   function step(kind: SliderKind) {
+    if (kind === 'dpi') {
+      const next = nextDpi(dpi);
+      if (next !== null) edit(dpiPatch(next));
+      return;
+    }
     edit(kind === 'downscale' ? scalePatch(nextScale(card.edits.scale)) : compressionPatch(card, nextCompression(card, quality)));
   }
 
@@ -220,7 +239,11 @@
     const box = cardEl?.getBoundingClientRect();
     const rect = button.getBoundingClientRect();
     const start =
-      kind === 'downscale' ? stopIndex(SCALE_STOPS, card.edits.scale ?? 100) : stopIndex(qualityStops, quality);
+      kind === 'dpi'
+        ? stopIndex(DPI_STOPS, dpi)
+        : kind === 'downscale'
+          ? stopIndex(SCALE_STOPS, card.edits.scale ?? 100)
+          : stopIndex(qualityStops, quality);
     slide = {
       kind,
       startY: event.clientY,
@@ -236,7 +259,7 @@
     const dy = event.clientY - slide.startY;
     if (!slide.moved && Math.abs(dy) < 4) return;
     if (!slide.moved) ontool('slider');
-    const stops = slide.kind === 'downscale' ? SCALE_STOPS : qualityStops;
+    const stops = stopsOf(slide.kind);
     slide = { ...slide, moved: true, index: sliderIndex(stops, slide.start, dy, TRACK) };
   }
 
@@ -252,9 +275,11 @@
     ontool(null);
     if (done.index === done.start) return;
     edit(
-      done.kind === 'downscale'
-        ? scalePatch(SCALE_STOPS[done.index])
-        : compressionPatch(card, qualityStops[done.index]),
+      done.kind === 'dpi'
+        ? dpiPatch(DPI_STOPS[done.index])
+        : done.kind === 'downscale'
+          ? scalePatch(SCALE_STOPS[done.index])
+          : compressionPatch(card, qualityStops[done.index]),
     );
   }
 
@@ -289,6 +314,8 @@
     switch (action) {
       case 'downscale':
         return card.audio ? t('audio.card.cover_downscale') : t('card.downscale'); // stream B: audio
+      case 'dpi':
+        return t('pdf.dpi.tip');
       case 'compression':
         return card.audio ? t('audio.card.bitrate') : t('card.compression');
       case 'crop':
@@ -486,6 +513,23 @@
           onclick={(event) => keyStep('downscale', event)}
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6" /><path d="M20 10h-6V4" /><path d="m14 10 7-7" /><path d="m3 21 7-7" /></svg>
+        </button>
+      {/if}
+      <!-- sE pdf-formats -->
+      {#if rail.includes('dpi')}
+        <button
+          type="button"
+          data-action="dpi"
+          class:hot={hotAction === 'dpi'}
+          aria-label={tipText('dpi')}
+          disabled={!card.can_edit}
+          onpointerdown={(event) => press('dpi', event)}
+          onpointermove={slideMove}
+          onpointerup={release}
+          onpointercancel={cancelSlide}
+          onclick={(event) => keyStep('dpi', event)}
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M9 15h6" /></svg>
         </button>
       {/if}
       {#if rail.includes('compression')}
