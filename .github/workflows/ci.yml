@@ -23,9 +23,11 @@ jobs:
           - os: macos-latest
             triple: aarch64-apple-darwin
             exe: ''
+            pdfium: libpdfium.dylib
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
             exe: .exe
+            pdfium: pdfium.dll
     runs-on: ${{ matrix.os }}
     env:
       # The GIF tests run the real sidecar; ci_always_has_gifsicle fails if this is unset.
@@ -33,7 +35,7 @@ jobs:
       # The video tests run the real sidecar; ci_always_has_ffmpeg fails if this is unset.
       FERRY_FFMPEG: ${{ github.workspace }}/src-tauri/binaries/ffmpeg-${{ matrix.triple }}${{ matrix.exe }}
       # The PDF tests render with the real library; ci_always_has_pdfium fails if this is unset.
-      FERRY_PDFIUM: ${{ github.workspace }}/src-tauri/binaries/${{ runner.os == 'Windows' && 'pdfium.dll' || 'libpdfium.dylib' }}
+      FERRY_PDFIUM: ${{ github.workspace }}/src-tauri/binaries/${{ matrix.pdfium }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
