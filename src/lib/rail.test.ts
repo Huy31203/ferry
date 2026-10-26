@@ -10,6 +10,7 @@ import {
   moveItem,
   RAIL_TOOLS,
   toolLabel,
+  type RailPipeline,
 } from './rail';
 
 const done = card({ kind: 'done' }, { can_restore: true });
@@ -80,5 +81,37 @@ describe('the rail catalog', () => {
     expect(toolLabel('reveal', true)).toBe('Show in Finder');
     expect(toolLabel('reveal', false)).toBe('Show in Explorer');
     expect(toolLabel('trim', true)).toBe('Not in this version of Ferry (trim)');
+  });
+});
+
+describe('pipelines on the rail', () => {
+  const library: RailPipeline[] = [
+    { id: 4, name: 'To WebP', media: 'image' },
+    { id: 5, name: 'Trim video', media: 'video' },
+  ];
+
+  it('are offered after the catalog tools, once', () => {
+    expect(addable(DEFAULT_RAIL_TOOLS, library).map((tool) => tool.id).slice(-2)).toEqual([
+      'pipeline:4',
+      'pipeline:5',
+    ]);
+    expect(addable(['pipeline:4'], library).map((tool) => tool.id)).not.toContain('pipeline:4');
+  });
+
+  it('are named and known while they are in the library', () => {
+    expect(toolLabel('pipeline:4', true, library)).toBe('To WebP');
+    expect(toolLabel('pipeline:9', true, library)).toBe('Not in this version of Ferry (pipeline:9)');
+    expect(editorRows(['pipeline:4', 'pipeline:9'], library)).toEqual([
+      { id: 'pipeline:4', known: true },
+      { id: 'pipeline:9', known: false },
+    ]);
+    expect(knownCount(['pipeline:4', 'pipeline:9', 'copy'], library)).toBe(2);
+  });
+
+  it('show only on cards of their media, in the user order, and need the original', () => {
+    const tools = ['pipeline:5', 'pipeline:4', 'copy'];
+    expect(railActions(done, false, tools, library)).toEqual(['pipeline:4', 'copy', 'more']);
+    expect(railActions(done, true, tools, library)).toEqual(['pipeline:4', 'copy', 'more']);
+    expect(needsOriginal('pipeline:4')).toBe(true);
   });
 });
