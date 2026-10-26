@@ -26,23 +26,24 @@ jobs:
             bundles: app,dmg
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.rust_targets }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
       - id: ffmpeg-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             src-tauri/binaries/ffmpeg-*
@@ -55,25 +56,32 @@ jobs:
           brew install nasm pkgconf meson ninja
           bash scripts/build-ffmpeg.sh universal-apple-darwin
       - if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: MINGW64
           update: true
           install: >-
             git make diffutils mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-meson mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-meson mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf
       - name: Build ffmpeg sidecar (Windows)
         if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: bash scripts/build-ffmpeg.sh x86_64-pc-windows-msvc
       # sE pdf-formats: rav1d (AVIF decode) builds assembly with NASM on x86_64
-      - uses: ilammy/setup-nasm@v1
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.target }}
       - name: Fetch PDFium
         shell: bash
         run: scripts/fetch-pdfium.sh ${{ matrix.target }}
+      # The licence notices of the linked crates ship in the bundle (resource: binaries/licenses/).
+      - name: Generate Rust crate licence notices
+        shell: bash
+        run: |
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          mkdir -p src-tauri/binaries/licenses
+          cargo about generate --locked -c about.toml about.hbs -o src-tauri/binaries/licenses/rust-crates-NOTICES.html
       - name: Check updater signing
         shell: bash
         env:
@@ -85,7 +93,7 @@ jobs:
           if grep -q 'REPLACE_WITH_UPDATER_PUBLIC_KEY' src-tauri/tauri.conf.json; then
             echo "::error::Put the updater public key in src-tauri/tauri.conf.json (plugins.updater.pubkey)"; exit 1
           fi
-      - uses: tauri-apps/tauri-action@v1
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -96,7 +104,8 @@ jobs:
           releaseBody: >-
             Unsigned build. Windows: SmartScreen shows "Windows protected your PC";
             choose More info → Run anyway. macOS: right-click Ferry.app → Open the first time.
-          releaseDraft: false
+          # A draft keeps every asset (installers, latest.json) private until the publish job below.
+          releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
@@ -123,7 +132,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Collect the corresponding source (GPL-3 section 6d)
         run: |
           bash scripts/build-gifsicle.sh x86_64-unknown-linux-gnu
@@ -134,3 +143,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" ferry-*-third-party-sources.tar.xz --clobber
+
+  publish:
+    name: publish release
+    needs: [release, updater-manifest, sources]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Only now do the installers, latest.json and the corresponding-source archive go public together.
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
