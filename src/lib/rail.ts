@@ -28,7 +28,8 @@ export const RAIL_TOOLS: RailTool[] = [
     label: 'svc.rail.tool.compression',
     needsOriginal: true,
     compact: false,
-    applies: (card) => !card.audio || !card.audio.lossless,
+    // sE pdf-formats (TIFF output is lossless, so there is no quality to set)
+    applies: (card) => (!card.audio || !card.audio.lossless) && card.format !== 'tiff',
   },
   { id: 'crop', label: 'svc.rail.tool.crop', needsOriginal: true, compact: true, applies: (card) => !card.audio },
   {

@@ -133,7 +133,8 @@ pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u
         Format::WebP => webp::optimise(input, o)?,
         Format::Gif => gif::optimise(input, o)?,
         // sE pdf-formats
-        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => {
+        Format::Tiff => tiff::optimise(input, o)?,
+        Format::Heic | Format::Avif | Format::Pdf => {
             return Err(OptimiseError::Unsupported(tf(
                 "pdf.read_unsupported",
                 &[("format", format.label())],
