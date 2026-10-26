@@ -112,6 +112,18 @@ pub fn muxer(ext: &str) -> &'static str {
     }
 }
 
+/// The extension of the temporary file an encode writes, which picks the muxer.
+/// A kept container keeps the source's (AV1 in an `.mp4` stays MP4, not
+/// Matroska); anything else takes the target's own.
+pub fn temp_extension(target: Format, source: Format, source_ext: &str) -> String {
+    let ext = source_ext.to_ascii_lowercase();
+    if target == source && matches!(ext.as_str(), "mp4" | "m4v" | "mov" | "mkv" | "webm") {
+        ext
+    } else {
+        target.extension().to_owned()
+    }
+}
+
 /// A `Mov` becomes HEVC or MP4 when converting MOV is on; anything else stays.
 pub fn plain_target(source: Format, probe: &Probe, settings: &settings::Video) -> Format {
     match source {
@@ -175,7 +187,7 @@ pub fn thumb_args(input: &Path, output: &Path) -> Vec<OsString> {
     let mut args = vec![OsString::from("-i"), input.into()];
     args.extend(strs(&[
         "-map",
-        "0:v:0",
+        "0:V:0",
         "-frames:v",
         "1",
         "-vf",
@@ -196,7 +208,7 @@ pub fn frame_args(input: &Path, output: &Path) -> Vec<OsString> {
     let mut args = vec![OsString::from("-i"), input.into()];
     args.extend(strs(&[
         "-map",
-        "0:v:0",
+        "0:V:0",
         "-frames:v",
         "1",
         "-c:v",
@@ -312,7 +324,7 @@ pub fn plan(p: &PlanInput) -> Plan {
     let ten_bit = probe.video.ten_bit && matches!(codec, Codec::Hevc | Codec::Av1);
 
     let mut args = vec![OsString::from("-i"), p.input.into()];
-    args.extend(strs(&["-map", "0:v:0"]));
+    args.extend(strs(&["-map", "0:V:0"]));
     let audio_kept = !(p.edits.mute || p.settings.remove_audio);
     if audio_kept {
         args.extend(strs(&["-map", "0:a?"]));
@@ -510,7 +522,7 @@ fn plan_gif(p: &PlanInput, window: (u32, u32), expected: Duration) -> Plan {
     chain.push(format!("fps={GIF_FPS}"));
     chain.push("split[a][b]".into());
     let graph = format!(
-        "[0:v:0]{};[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle[o]",
+        "[0:V:0]{};[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle[o]",
         chain.join(",")
     );
     let mut args = vec![OsString::from("-i"), p.input.into()];
@@ -940,6 +952,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn av1_in_an_mp4_is_muxed_as_mp4_when_the_container_is_kept() {
+        let ext = temp_extension(Format::Av1, Format::Av1, "MP4");
+        assert_eq!(ext, "mp4");
+        let mut c = case();
+        c.target = Format::Av1;
+        c.same_container = true;
+        c.out_file = "/w/out.mp4";
+        let plan = run(&c);
+        assert_eq!(plan.encoder, "libsvtav1");
+        assert!(has(&plan.args, &["-f", "mp4"]));
+        // an AV1 MKV stays Matroska; a converted target takes its own container
+        assert_eq!(temp_extension(Format::Av1, Format::Av1, "mkv"), "mkv");
+        assert_eq!(temp_extension(Format::Av1, Format::Mp4, "mp4"), "mkv");
+        assert_eq!(temp_extension(Format::Av1, Format::Av1, "video"), "mkv");
+        assert_eq!(temp_extension(Format::Hevc, Format::Hevc, "m4v"), "m4v");
+    }
+
+    #[test]
     fn visually_lossless_yields_to_an_explicit_compression() {
         let mut c = case();
         c.settings.encoder = Encoder::VisuallyLossless;
@@ -969,6 +999,30 @@ pub(crate) mod tests {
         assert!(has(&plan.args, &["-map", "0:s?"]) && has(&plan.args, &["-c:s", "copy"]));
         assert!(lacks(&plan.args, "-sn"));
         assert!(!lacks(&run(&small()).args, "-sn"));
+    }
+
+    #[test]
+    fn every_video_map_skips_an_attached_cover_picture() {
+        // `0:V:0` is the first video stream that is not an attached picture,
+        // the same stream the probe reports.
+        let input = Path::new("/b/in.mkv");
+        let mut gif = small();
+        gif.target = Format::Gif;
+        gif.out_file = "/w/out.gif";
+        let args = [
+            run(&small()).args,
+            run(&gif).args,
+            thumb_args(input, Path::new("/w/t.jpg")),
+            frame_args(input, Path::new("/w/f.png")),
+        ];
+        for args in args {
+            let text = args
+                .iter()
+                .map(|a| a.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(text.contains("0:V:0") && !text.contains("0:v:0"), "{text}");
+        }
     }
 
     #[test]
