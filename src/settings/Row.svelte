@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { formatBytes } from '../lib/format';
+  import { DPI_STOPS, dpiLabel } from '../lib/pdf'; // sE pdf-formats
   import { t, type StringKey } from '../lib/i18n';
   import type { AppRef } from '../lib/settings'; // stream H
   import type { Setting } from '../lib/schema';
   import type { Pipelines } from '../lib/pipelines'; // stream F
-  import type { OutputRule as Rule, WatchedFolder } from '../lib/settings';
+  import type { Device, OutputRule as Rule, WatchedFolder } from '../lib/settings';
+  import DeviceList from './controls/DeviceList.svelte'; // sE pdf-formats
   import CaptureDirs from './controls/CaptureDirs.svelte'; // stream C
   import AppList from './controls/AppList.svelte'; // stream H
   import AppPicker from './controls/AppPicker.svelte'; // stream H
@@ -154,6 +156,17 @@
       <EncoderPicker value={value as string} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'sizes'}
       <SizeList sizes={value as [number, number][]} {disabled} labelledby={labelId} {onchange} />
+    {:else if control.kind === 'dpi'}
+      <!-- sE pdf-formats -->
+      <Choice
+        value={String(value)}
+        options={DPI_STOPS.map((n) => ({ value: String(n), label: dpiLabel(n) }))}
+        {disabled}
+        labelledby={labelId}
+        onchange={(v) => onchange(Number(v))}
+      />
+    {:else if control.kind === 'devices'}
+      <DeviceList devices={value as Device[]} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'tray_style'}
       <TrayStyle value={value as string} labelledby={labelId} {onchange} />
     {:else if control.kind === 'hotkey'}

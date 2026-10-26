@@ -263,7 +263,7 @@ pub fn output_preview(
     app: AppHandle,
     rule: OutputRule,
     converted: bool,
-    // stream A: video ("video" shows a clip instead of a screenshot; "audio", a track)
+    // stream A: video ("video" shows a clip instead of a screenshot; "audio", a track; "pdf", a report)
     media: Option<String>,
 ) -> Result<String, Vec<String>> {
     let kind = if converted {
@@ -277,6 +277,7 @@ pub fn output_preview(
     let sample = match media.as_deref() {
         Some("video") => &output::Sample::VIDEO,
         Some("audio") => &output::Sample::AUDIO, // stream B: audio
+        Some("pdf") => &output::Sample::PDF,     // sE pdf-formats
         _ => &output::Sample::IMAGE,
     };
     output::example_for(kind, &rule, &home, &work_dir, today, sample)

@@ -53,6 +53,12 @@ describe('railActions', () => {
     ]);
   });
 
+  it('a PDF card has a DPI button in place of downscale', () => {
+    const pdf = card({ kind: 'done' }, { source_format: 'pdf', format: 'pdf', can_restore: true });
+    expect(railActions(pdf)).toEqual(['dpi', 'compression', 'crop', 'restore', 'compare', 'copy', 'more']);
+    expect(needsOriginal('dpi')).toBe(true);
+  });
+
   it('leaves Compression and Compare off a compact card', () => {
     expect(railActions(card({ kind: 'done' }, { can_restore: true }), true)).toEqual([
       'downscale',
