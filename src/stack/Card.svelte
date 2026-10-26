@@ -425,8 +425,9 @@
   out:fade={{ duration: motionOut }}
 >
   <div class="thumb" aria-hidden="true">
-    {#if card.thumb_path}
-      <img bind:this={thumb} src={convertFileSrc(card.thumb_path)} alt="" crossorigin="anonymous" />
+    {#if card.poster ?? card.thumb_path}
+      <!-- sE pdf-formats: a poster stands in for originals the webview cannot draw -->
+      <img bind:this={thumb} src={convertFileSrc((card.poster ?? card.thumb_path)!)} alt="" crossorigin="anonymous" />
     {:else if card.audio}
       <!-- stream B: audio -->
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2" /></svg>
@@ -440,6 +441,10 @@
   {#if card.video}
     <!-- stream A: video -->
     <span class="duration" aria-label={t('video.card.duration', { time: formatDuration(card.video.duration_ms) })}>{formatDuration(card.video.duration_ms)}</span>
+  {/if}
+  {#if card.pages !== null && card.pages > 1}
+    <!-- sE pdf-formats -->
+    <span class="pages" aria-hidden="true">{t('pdf.badge.pages', { n: card.pages })}</span>
   {/if}
   {#if busy || card.state.kind === 'error'}
     <div class="dim" aria-hidden="true"></div>
@@ -736,7 +741,8 @@
     animation: spin 1s linear infinite;
   }
   /* stream A: video. The length sits top-left; the rail takes that corner while the card is hovered. */
-  .duration {
+  .duration,
+  .pages {
     position: absolute;
     left: 8px;
     top: 8px;
@@ -751,7 +757,10 @@
   }
   .card:not(.rail-right):hover .duration,
   .card:not(.rail-right).hovered .duration,
-  .card:not(.rail-right):focus-within .duration {
+  .card:not(.rail-right):focus-within .duration,
+  .card:not(.rail-right):hover .pages,
+  .card:not(.rail-right).hovered .pages,
+  .card:not(.rail-right):focus-within .pages {
     opacity: 0;
   }
   .scrim {

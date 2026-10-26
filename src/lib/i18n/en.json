@@ -249,6 +249,7 @@
   "pdf.read_unsupported": "Ferry can't open {format} files on this computer",
   "pdf.write_unsupported": "Ferry can't save {format} files on this computer",
   "pdf.first_page": "First page only",
+  "pdf.badge.pages": "{n} pages",
   "format.tip.mac": "Convert to {format} · ⌥-click keeps both",
   "format.tip.windows": "Convert to {format} · Alt-click keeps both",
   "card.downscale": "Downscale — click for −10 %, drag for a slider",
