@@ -32,8 +32,13 @@ struct Harness {
 }
 
 impl Harness {
+    /// Returns once the folder is watched: the service starts watching on its
+    /// own thread, and a file created before that has no create event (on
+    /// Windows its later writes are changes, which never start a wait).
     fn new() -> Self {
-        Self::with(true, |_| {})
+        let h = Self::with(true, |_| {});
+        h.wait_folder(|s| *s == DirState::Watching);
+        h
     }
 
     /// Watches `tmp/watched` (created first when `create`); backups in
