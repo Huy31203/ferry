@@ -152,8 +152,8 @@
   onfocusout={() => (focused = false)}
 >
   <span class="thumb">
-    {#if card.thumb_path}
-      <img bind:this={thumb} src={convertFileSrc(card.thumb_path)} alt="" width="32" height="32" crossorigin="anonymous" />
+    {#if card.poster ?? card.thumb_path}
+      <img bind:this={thumb} src={convertFileSrc((card.poster ?? card.thumb_path)!)} alt="" width="32" height="32" crossorigin="anonymous" />
     {/if}
     {#if hovered || checked || focused || selecting}
       <input type="checkbox" {checked} aria-label={t('drop.list.select', { name: fileName })} onclick={(e) => ontoggle(e.shiftKey)} />

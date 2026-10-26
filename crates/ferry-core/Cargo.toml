@@ -10,6 +10,7 @@ path = "tests/support/sidecar_fixture.rs"
 test = false
 
 [dependencies]
+avif-decode = { version = "3.0", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fast_image_resize = "6.1"
 # sE pdf-formats: deflate PDF images; recompress them in parallel.
@@ -18,6 +19,7 @@ gif = "0.14"
 imagequant = "4.4"
 # sE pdf-formats: the writer (object model only); PDFium renders, loaded at run time.
 lopdf = { version = "0.45", default-features = false }
+libwebp-sys = "0.9"
 # No nasm_simd, so building Ferry never needs NASM. Revisit if JPEG latency matters.
 mozjpeg = { version = "0.10", default-features = false }
 # The same features mozjpeg already enables; named here for the decoder's error manager.
@@ -31,11 +33,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # stream F: pipelines (BSD-2-Clause; the perceptual metric for adaptive compression)
 ssimulacra2 = "=0.5.1"
+tiff = "0.11"
 # Default features pull in the `image` crate, which Ferry does not use.
 webp = { version = "0.3", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+objc2 = "0.6"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFDictionary", "CFString", "CFNumber", "CFArray"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDataProvider"] }
+objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "CGImageDestination", "CGImageProperties", "objc2-core-graphics"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
