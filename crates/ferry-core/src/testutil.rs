@@ -273,6 +273,37 @@ pub fn animated_webp_frames(durations: &[u32], w: u32, h: u32) -> Vec<u8> {
     })
 }
 
+/// An animated WebP of three frames (100, 200 and 300 ms) whose last two show
+/// the same picture, stored as separate `ANMF` chunks the way encoders that do
+/// not merge frames write them.
+pub fn animated_webp_held_frame(w: u32, h: u32) -> Vec<u8> {
+    use crate::optimise::webp::{chunks, push_chunk};
+    let source = animated_webp_frames(&[100, 200, 300], w, h);
+    let parts = chunks(&source);
+    let frames: Vec<&[u8]> = parts
+        .iter()
+        .filter(|(n, _)| n == b"ANMF")
+        .map(|(_, d)| *d)
+        .collect();
+    // Frame 3 is frame 2's picture; the duration is the 24 bits at 12..15.
+    let mut held = frames[1].to_vec();
+    held[12..15].copy_from_slice(&300_u32.to_le_bytes()[..3]);
+    let mut body = b"WEBP".to_vec();
+    for (name, data) in &parts {
+        if name == b"ANMF" {
+            continue;
+        }
+        push_chunk(&mut body, name, data);
+    }
+    push_chunk(&mut body, b"ANMF", frames[0]);
+    push_chunk(&mut body, b"ANMF", frames[1]);
+    push_chunk(&mut body, b"ANMF", &held);
+    let mut out = b"RIFF".to_vec();
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
 /// Extra segments for `jpeg`.
 #[derive(Default)]
 pub struct JpegExtras {
