@@ -10,6 +10,7 @@ import {
   openTool,
   railActions,
   remove,
+  thumbSrc,
   upsert,
   type RailAction,
 } from './cards';
@@ -176,5 +177,22 @@ describe('popover tools', () => {
   it('knows which tools are popovers', () => {
     expect(isPopover('pages')).toBe(true);
     expect(isPopover('rename')).toBe(false);
+  });
+});
+
+describe('thumbSrc', () => {
+  it('draws the backup of an image', () => {
+    expect(thumbSrc(card({ kind: 'queued' }))).toBe('/b/shot.png');
+  });
+
+  it('draws the poster of a PDF once it exists', () => {
+    const pdf = card({ kind: 'queued' }, { source_format: 'pdf', thumb_path: '/b/a.pdf', poster: '/b/a.png' });
+    expect(thumbSrc(pdf)).toBe('/b/a.png');
+  });
+
+  it('draws nothing for a PDF, TIFF or HEIC before its poster exists', () => {
+    for (const source_format of ['pdf', 'tiff', 'heic'] as const) {
+      expect(thumbSrc(card({ kind: 'queued' }, { source_format, thumb_path: '/b/a.bin', poster: null }))).toBeNull();
+    }
   });
 });
