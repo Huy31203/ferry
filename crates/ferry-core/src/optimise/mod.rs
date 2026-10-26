@@ -38,6 +38,11 @@ pub struct OptimiseOptions {
     /// Resolved sidecar path; `None` makes GIF return `Unsupported`.
     pub gifsicle: Option<PathBuf>,
     pub cancel: CancelToken,
+    // stream F: pipelines
+    /// `None` keeps each format's own effort.
+    pub encoder: Option<Encoder>,
+    /// Search for the lowest quality that still looks like the original.
+    pub adaptive: bool,
 }
 
 impl Default for OptimiseOptions {
@@ -48,6 +53,8 @@ impl Default for OptimiseOptions {
             strip_metadata: true,
             gifsicle: None,
             cancel: CancelToken::new(),
+            encoder: None,
+            adaptive: false,
         }
     }
 }
@@ -87,9 +94,15 @@ impl std::error::Error for OptimiseError {}
 /// below 5) when aggressive.
 pub fn quality(o: &OptimiseOptions) -> u8 {
     let q = o.compression.clamp(5, 100);
-    match o.level {
+    let q = match o.level {
         Level::Normal => q,
         Level::Aggressive => q.saturating_sub(20).max(5),
+    };
+    // stream F: pipelines
+    if o.encoder == Some(Encoder::VisuallyLossless) {
+        q.max(90)
+    } else {
+        q
     }
 }
 
@@ -296,5 +309,19 @@ mod tests {
         let out = encode(&tiny, Format::Png, &OptimiseOptions::default()).unwrap();
         assert!(out.len() > tiny.len());
         assert_eq!(crate::sniff::sniff(&out), Some(Format::Png));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn visually_lossless_floors_quality_at_90() {
+        let vl = |level, q| OptimiseOptions {
+            level,
+            compression: q,
+            encoder: Some(Encoder::VisuallyLossless),
+            ..OptimiseOptions::default()
+        };
+        assert_eq!(quality(&vl(Level::Normal, 40)), 90);
+        assert_eq!(quality(&vl(Level::Aggressive, 80)), 90);
+        assert_eq!(quality(&vl(Level::Normal, 95)), 95);
     }
 }

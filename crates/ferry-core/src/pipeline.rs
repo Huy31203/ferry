@@ -1,6 +1,7 @@
 //! One job end to end (spec §5.4): back up the original, optimise it, write the
 //! result and report each step as a `JobUpdate`. The app runs this on a worker
 //! thread and owns the clipboard, which it reaches through a `deliver` callback.
+//! The user's pipelines (pipeline_def, pipeline_plan) compile into the `Edits` recipe that `Job::run` applies here; this module is the job runner, not the pipeline engine.
 
 use std::fmt::Display;
 use std::fs;
@@ -656,9 +657,11 @@ impl Job {
         let options = OptimiseOptions {
             level,
             compression: o.compression,
-            strip_metadata: o.strip_metadata,
+            strip_metadata: self.edits.strip_metadata.unwrap_or(o.strip_metadata), // stream F: pipelines
             gifsicle: o.gifsicle.clone(),
             cancel: o.cancel.clone(),
+            encoder: self.edits.encoder, // stream F: pipelines
+            adaptive: false,             // stream F: pipelines
         };
         // (state, Some((bytes, format, size after, fit target missed)))
         let (state, result) = if plain {
@@ -2530,5 +2533,47 @@ mod tests {
         job.rename("diagram").unwrap();
         assert_eq!(job.output.file_name().unwrap(), "diagram.png");
         assert!(job.output.exists() && !first.output.unwrap().exists());
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn an_encoder_choice_keeps_the_plain_never_worse_rule() {
+        let env = Env::new();
+        let path = env.file("dot.png", &testutil::png(1, 1));
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        job.edit(EditsPatch {
+            encoder: Some(Some(crate::optimise::Encoder::Fast)),
+            ..EditsPatch::default()
+        });
+        let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+        assert_eq!(finished.unwrap().update.state, JobState::Larger);
+    }
+
+    #[test]
+    fn a_strip_override_writes_a_result_without_exif() {
+        let env = Env::new();
+        let mut settings = Settings::default();
+        settings.images.strip_metadata = false;
+        let exif = testutil::exif_with_orientation(1, 4000);
+        let input = testutil::jpeg(
+            300,
+            200,
+            90,
+            &testutil::JpegExtras {
+                exif: Some(exif),
+                ..Default::default()
+            },
+        );
+        let path = env.file("photo.jpg", &input);
+        let mut job = Job::file(&path, &settings, true).unwrap();
+        job.edit(EditsPatch {
+            strip_metadata: Some(Some(true)),
+            ..EditsPatch::default()
+        });
+        let (finished, _) = run(&mut job, Level::Normal, &options_with(&settings), &env);
+        assert_eq!(finished.unwrap().update.state, JobState::Done);
+        let out = fs::read(&path).unwrap();
+        // Orientation 1 needs no minimal EXIF (C1§5.8), so no APP1 Exif header is left at all.
+        assert!(!out.windows(6).any(|w| w == b"Exif\0\0"));
     }
 }

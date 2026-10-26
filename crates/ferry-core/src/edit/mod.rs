@@ -95,6 +95,11 @@ pub struct Edits {
     // stream F: pipelines
     /// `None`: the settings' encoder.
     pub encoder: Option<Encoder>,
+    /// `None` follows `images.strip_metadata`.
+    pub strip_metadata: Option<bool>,
+    /// Search for the lowest quality that still looks like the original;
+    /// excludes `compression` and `fit_under`.
+    pub adaptive: bool,
     // stream A: video
     pub speed: Option<Speed>,
     pub mute: bool,
@@ -123,6 +128,9 @@ impl Edits {
             && self.format.is_none()
             && self.compression.is_none()
             && self.fit_under.is_none()
+            // stream F: pipelines
+            && self.strip_metadata.is_none()
+            && !self.adaptive
             && self.speed.is_none()
             && !self.mute
             // stream B: audio
@@ -171,12 +179,14 @@ impl Edits {
             self.compression = compression.map(|c| c.clamp(5, 100));
             if self.compression.is_some() {
                 self.fit_under = None;
+                self.adaptive = false; // stream F: pipelines
             }
         }
         if let Some(fit_under) = patch.fit_under {
             self.fit_under = fit_under.filter(|&bytes| bytes > 0);
             if self.fit_under.is_some() {
                 self.compression = None;
+                self.adaptive = false; // stream F: pipelines
                 self.bitrate = None; // stream B: audio
             }
         }
@@ -186,6 +196,16 @@ impl Edits {
         // stream F: pipelines
         if let Some(encoder) = patch.encoder {
             self.encoder = encoder;
+        }
+        if let Some(strip) = patch.strip_metadata {
+            self.strip_metadata = strip;
+        }
+        if let Some(adaptive) = patch.adaptive {
+            self.adaptive = adaptive;
+            if adaptive {
+                self.compression = None;
+                self.fit_under = None;
+            }
         }
         // stream A: video
         if let Some(speed) = patch.speed {
@@ -241,6 +261,9 @@ pub struct EditsPatch {
     // stream F: pipelines
     #[serde(deserialize_with = "present")]
     pub encoder: Option<Option<Encoder>>,
+    #[serde(deserialize_with = "present")]
+    pub strip_metadata: Option<Option<bool>>,
+    pub adaptive: Option<bool>,
     // stream A: video
     #[serde(deserialize_with = "present")]
     pub speed: Option<Option<Speed>>,
@@ -252,6 +275,31 @@ pub struct EditsPatch {
     pub loudness: Option<Option<Loudness>>,
     #[serde(deserialize_with = "present")]
     pub cover: Option<Option<CoverPolicy>>,
+}
+
+// stream F: pipelines
+impl EditsPatch {
+    /// A patch that sets every field, so `merge` makes the target equal to `e`.
+    pub fn from_recipe(e: &Edits) -> EditsPatch {
+        EditsPatch {
+            aspect: Some(e.aspect),
+            framing: Some(e.framing),
+            size: Some(e.size),
+            scale: Some(e.scale),
+            format: Some(e.format),
+            compression: Some(e.compression),
+            fit_under: Some(e.fit_under),
+            level: Some(e.level),
+            encoder: Some(e.encoder),
+            strip_metadata: Some(e.strip_metadata),
+            adaptive: Some(e.adaptive),
+            speed: Some(e.speed),
+            mute: Some(e.mute),
+            bitrate: Some(e.bitrate),
+            loudness: Some(e.loudness),
+            cover: Some(e.cover),
+        }
+    }
 }
 
 /// A field that is in the JSON: `null` is `Some(None)`. Absent fields never
@@ -301,6 +349,9 @@ pub fn apply(
     if let Some(compression) = edits.compression {
         base.compression = compression;
     }
+    // stream F: pipelines
+    base.strip_metadata = edits.strip_metadata.unwrap_or(o.strip_metadata);
+    base.encoder = edits.encoder.or(o.encoder);
     let (bytes, missed_target) = match edits.fit_under {
         Some(limit) => {
             let fitted = fit::search(limit, |q| {
@@ -606,6 +657,8 @@ mod tests {
                 "fit_under": null,
                 "level": "normal",
                 "encoder": null,
+                "strip_metadata": null,
+                "adaptive": false,
                 "speed": null,
                 "mute": false,
                 "bitrate": null,
@@ -802,5 +855,89 @@ mod tests {
         assert_eq!((p.mute, p.encoder), (Some(true), Some(None)));
         let old: Edits = serde_json::from_str(r#"{"scale":50}"#).unwrap(); // a Cycle 2 recipe
         assert_eq!((old.speed, old.mute, old.encoder), (None, false, None));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn a_full_recipe_round_trips_through_from_recipe() {
+        let recipes = [
+            Edits {
+                aspect: Some((16, 9)),
+                framing: Framing::Smart,
+                scale: Some(50),
+                format: Some(Format::WebP),
+                compression: Some(60),
+                level: Level::Aggressive,
+                encoder: Some(Encoder::Small),
+                strip_metadata: Some(false),
+                ..Edits::default()
+            },
+            Edits {
+                adaptive: true,
+                speed: Some(Speed {
+                    percent: 150,
+                    keep_frames: true,
+                }),
+                mute: true,
+                ..Edits::default()
+            },
+            Edits {
+                size: Some(Size::Exact {
+                    width: 600,
+                    height: 300,
+                }),
+                scale: Some(50),
+                fit_under: Some(5000),
+                ..Edits::default()
+            },
+            Edits {
+                bitrate: Some(128),
+                loudness: Some(Loudness::Podcast),
+                cover: Some(CoverPolicy::Downscale),
+                ..Edits::default()
+            },
+        ];
+        for recipe in recipes {
+            let mut other = Edits {
+                size: Some(Size::Width { width: 10 }),
+                fit_under: Some(5),
+                adaptive: true,
+                mute: true,
+                bitrate: Some(64),
+                ..Edits::default()
+            };
+            other.merge(EditsPatch::from_recipe(&recipe));
+            assert_eq!(other, recipe);
+        }
+    }
+
+    #[test]
+    fn strip_makes_a_recipe_explicit_but_an_encoder_does_not() {
+        assert!(
+            Edits {
+                encoder: Some(Encoder::Fast),
+                ..Edits::default()
+            }
+            .is_plain()
+        );
+        assert!(
+            !Edits {
+                strip_metadata: Some(true),
+                ..Edits::default()
+            }
+            .is_plain()
+        );
+    }
+
+    #[test]
+    fn encoder_and_strip_are_set_and_cleared_by_patches() {
+        let mut e = Edits::default();
+        e.merge(patch(json!({ "encoder": "small", "strip_metadata": true })));
+        assert_eq!(
+            (e.encoder, e.strip_metadata),
+            (Some(Encoder::Small), Some(true))
+        );
+        e.merge(patch(json!({ "encoder": null, "strip_metadata": null })));
+        assert_eq!((e.encoder, e.strip_metadata), (None, None));
     }
 }

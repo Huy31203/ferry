@@ -30,6 +30,8 @@ export function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate
       fit_under: null,
       level: 'normal',
       encoder: null,
+      strip_metadata: null,
+      adaptive: false,
       speed: null,
       mute: false,
       bitrate: null,

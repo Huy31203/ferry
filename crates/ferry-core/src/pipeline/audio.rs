@@ -350,6 +350,7 @@ impl Job {
                     strip_metadata: o.strip_metadata,
                     gifsicle: None,
                     cancel: o.cancel.clone(),
+                    ..OptimiseOptions::default() // stream F: pipelines
                 };
                 let processed = stored_cover
                     .as_ref()
