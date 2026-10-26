@@ -93,7 +93,8 @@ fetch_lame() {
     rm -f "$tarball"
     exit 1
   fi
-  if [ ! -d "$SRC/lame" ]; then
+  if [ ! -f "$SRC/lame/include/libmp3lame.sym" ]; then
+    rm -rf "$SRC/lame"
     mkdir -p "$SRC/lame"
     tar xzf "$tarball" -C "$SRC/lame" --strip-components=1
   fi
@@ -281,6 +282,7 @@ cmake --build build --target install >/dev/null
 echo "== LAME"
 fresh lame
 # The known macOS link fix: lame_init_old is listed but not defined.
+[ -f include/libmp3lame.sym ] || { echo "LAME: include/libmp3lame.sym is missing in $PWD" >&2; ls -la . include >&2; exit 1; }
 sed -i.bak '/lame_init_old/d' include/libmp3lame.sym
 LAME_NASM=""
 [ "${TRIPLE%%-*}" = x86_64 ] && LAME_NASM="--enable-nasm"
@@ -304,7 +306,7 @@ if [ "$WINDOWS" = 1 ]; then
   cmake -G Ninja -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF \
     -DBUILD_TOOLS=OFF -DCMAKE_INSTALL_PREFIX="$PREFIX" >/dev/null
   cmake --build build --target install
-  FFMPEG_EXTRA=(--enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --extra-ldflags=-static)
+  FFMPEG_EXTRA=(--enable-ffnvcodec --enable-nvenc --enable-amf --enable-libvpl --extra-ldflags=-static --extra-libs=-lstdc++)
 elif [ "$APPLE" = 1 ]; then
   FFMPEG_EXTRA=(--enable-videotoolbox --enable-audiotoolbox --cc="clang -arch $ARCH" --arch="$ARCH")
 fi
