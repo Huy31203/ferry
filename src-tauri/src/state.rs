@@ -201,6 +201,11 @@ pub fn output_busy(jobs: &HashMap<JobId, Arc<Entry>>, entry: &Arc<Entry>) -> boo
 }
 
 // ---- sI clipboard-fixes ----
+/// Every job's current file: Ferry's own results, which a new job must not take as input.
+pub fn own_outputs(jobs: &HashMap<JobId, Arc<Entry>>) -> Vec<PathBuf> {
+    jobs.values().map(|e| e.output()).collect()
+}
+
 /// The jobs whose current files are `paths`, in order; `None` unless every path has one.
 pub fn jobs_with_outputs(
     jobs: &HashMap<JobId, Arc<Entry>>,
