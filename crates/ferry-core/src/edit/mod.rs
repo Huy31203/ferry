@@ -6,11 +6,13 @@ pub mod geometry;
 pub mod raster;
 pub mod smart;
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::audio::{CoverPolicy, Loudness};
 use crate::i18n::tf;
-use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, gif};
+use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, adaptive, gif};
 use crate::sniff::{self, Format};
 use geometry::Rect;
 use raster::Raster;
@@ -351,6 +353,8 @@ pub fn apply(
     }
     // stream F: pipelines
     base.strip_metadata = edits.strip_metadata.unwrap_or(o.strip_metadata);
+    base.adaptive =
+        edits.adaptive || (o.adaptive && edits.compression.is_none() && edits.fit_under.is_none());
     base.encoder = edits.encoder.or(o.encoder);
     let (bytes, missed_target) = match edits.fit_under {
         Some(limit) => {
@@ -363,7 +367,14 @@ pub fn apply(
             })?;
             (fitted.bytes, fitted.missed)
         }
-        None => (work.run(&base)?, false),
+        // stream F: pipelines
+        None => match adaptive_reference(&work, target, &base) {
+            Some(reference) => (
+                adaptive::search(&reference, target, &base, |opts| work.run(opts))?.bytes,
+                false,
+            ),
+            None => (work.run(&base)?, false),
+        },
     };
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
@@ -399,6 +410,24 @@ impl Work<'_> {
             Work::Encoder { input, format } => optimise::encode(input, *format, o),
             Work::Pixels { raster, format } => raster::encode(raster, *format, o),
         }
+    }
+}
+
+/// The pixels adaptive compression scores against, when this run is adaptive:
+/// not for GIF, and a decode error means a plain encode.
+// stream F: pipelines
+fn adaptive_reference<'w>(
+    work: &'w Work,
+    target: Format,
+    base: &OptimiseOptions,
+) -> Option<Cow<'w, Raster>> {
+    if !adaptive::applies(target, base) {
+        return None;
+    }
+    match work {
+        Work::Gifsicle { .. } => None,
+        Work::Pixels { raster, .. } => Some(Cow::Borrowed(raster)),
+        Work::Encoder { input, format } => raster::decode(input, *format).ok().map(Cow::Owned),
     }
 }
 
@@ -939,5 +968,59 @@ mod tests {
         );
         e.merge(patch(json!({ "encoder": null, "strip_metadata": null })));
         assert_eq!((e.encoder, e.strip_metadata), (None, None));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn adaptive_and_an_explicit_quality_replace_each_other() {
+        let mut e = Edits::default();
+        e.merge(patch(json!({ "compression": 60 })));
+        e.merge(patch(json!({ "adaptive": true })));
+        assert_eq!((e.adaptive, e.compression, e.fit_under), (true, None, None));
+        e.merge(patch(json!({ "compression": null })));
+        assert!(e.adaptive, "clearing a quality is not choosing one");
+        e.merge(patch(json!({ "fit_under": 1000 })));
+        assert!(!e.adaptive);
+        assert!(
+            !Edits {
+                adaptive: true,
+                ..Edits::default()
+            }
+            .is_plain()
+        );
+    }
+
+    #[test]
+    fn an_explicit_card_quality_beats_the_adaptive_setting() {
+        let input = testutil::photo_jpeg(256, 192, 98);
+        let edits = Edits {
+            compression: Some(40),
+            ..Edits::default()
+        };
+        let adaptive = OptimiseOptions {
+            adaptive: true,
+            ..Default::default()
+        };
+        let with = apply(&input, Format::Jpeg, &edits, &adaptive).unwrap();
+        let without = apply(&input, Format::Jpeg, &edits, &OptimiseOptions::default()).unwrap();
+        assert_eq!(with.bytes, without.bytes);
+    }
+
+    #[test]
+    fn an_adaptive_recipe_searches_for_its_quality() {
+        let input = testutil::photo_jpeg(256, 192, 98);
+        let edits = Edits {
+            adaptive: true,
+            ..Edits::default()
+        };
+        let adaptive = apply(&input, Format::Jpeg, &edits, &OptimiseOptions::default()).unwrap();
+        let q80 = apply(
+            &input,
+            Format::Jpeg,
+            &Edits::default(),
+            &OptimiseOptions::default(),
+        )
+        .unwrap();
+        assert_ne!(adaptive.bytes, q80.bytes);
     }
 }

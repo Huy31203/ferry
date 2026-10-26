@@ -67,7 +67,10 @@ fn tile(r: &Raster, region: Rect) -> Result<Rgb, MetricError> {
     let mut data = Vec::with_capacity(region.width as usize * region.height as usize);
     for y in region.y..region.y + region.height {
         let row = (y as usize * r.width as usize + region.x as usize) * 4;
-        for p in r.rgba[row..row + region.width as usize * 4].as_chunks::<4>().0 {
+        for p in r.rgba[row..row + region.width as usize * 4]
+            .as_chunks::<4>()
+            .0
+        {
             let alpha = f32::from(p[3]) / 255.0;
             let over = |c: u8| f32::from(c) / 255.0 * alpha + 128.0 / 255.0 * (1.0 - alpha);
             data.push([over(p[0]), over(p[1]), over(p[2])]);
@@ -140,9 +143,10 @@ mod tests {
         let tiles = regions(2000, 1500);
         assert_eq!(tiles.len(), 4);
         assert!(
-            tiles
-                .iter()
-                .all(|t| t.width == 512 && t.height == 512 && t.x + 512 <= 2000 && t.y + 512 <= 1500)
+            tiles.iter().all(|t| t.width == 512
+                && t.height == 512
+                && t.x + 512 <= 2000
+                && t.y + 512 <= 1500)
         );
         assert_eq!(
             tiles[0],
@@ -153,7 +157,11 @@ mod tests {
                 height: 512
             }
         );
-        assert!(regions(400, 3000).iter().all(|t| t.width == 400 && t.x == 0));
+        assert!(
+            regions(400, 3000)
+                .iter()
+                .all(|t| t.width == 400 && t.x == 0)
+        );
     }
 
     #[test]
