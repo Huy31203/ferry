@@ -588,7 +588,8 @@ impl Job {
             .output
             .with_file_name(format!("{} cover.{ext}", self.name));
         let dest = output::unique(&wanted, None);
-        fs::copy(&file, &dest).map_err(|e| describe(&e))?;
+        // Through the ledger: a watched folder must not pick the cover up as new.
+        crate::fsutil::atomic_replace_from(&dest, &file).map_err(|e| describe(&e))?;
         Ok(dest)
     }
 }
@@ -1046,6 +1047,10 @@ mod tests {
         );
         run(&mut job, &o, &env);
         assert_eq!(job.extract_cover(), Ok(env.dir.path().join("a cover.jpg")));
+        // Ferry's own write: a watcher on this folder must not pick the cover up.
+        let cover = env.dir.path().join("a cover.jpg");
+        let stamp = crate::selfwrite::Stamp::of(&cover).unwrap();
+        assert!(crate::selfwrite::is_own(&cover, &stamp));
         assert_eq!(
             job.extract_cover(),
             Ok(env.dir.path().join("a cover (2).jpg"))
