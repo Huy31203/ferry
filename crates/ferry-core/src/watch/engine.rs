@@ -136,8 +136,10 @@ impl Engine {
             return;
         }
         if is_ignored_name(&name) || self.plan.roles_for(path).is_empty() {
+            crate::wdiag!("event {:?} DROPPED ignored={} roles_empty={}", ev, is_ignored_name(&name), self.plan.roles_for(path).is_empty());
             return;
         }
+        crate::wdiag!("event {:?} pending_before={}", ev, self.settler.is_pending(path));
         match ev {
             FsEvent::Arrived(path) => {
                 let parent = path.parent().map(selfwrite::key).unwrap_or_default();
@@ -182,7 +184,9 @@ impl Engine {
         now: Instant,
         fs: &dyn Fs,
     ) -> Option<Vec<Notice>> {
+        crate::wdiag!("settled {:?} {:?}", path, stamp);
         if fs.is_own(path, &stamp) {
+            crate::wdiag!("settled {:?} -> is_own", path);
             return None;
         }
         let key = selfwrite::key(path);
@@ -191,11 +195,16 @@ impl Engine {
             .get(&key)
             .is_some_and(|(seen, at)| *seen == stamp && now.duration_since(*at) < SEEN_TTL)
         {
+            crate::wdiag!("settled {:?} -> seen", path);
             return None;
         }
         self.remember(key, stamp, now);
         let name = path.file_name()?.to_string_lossy().into_owned();
-        let media = classify(&name, &fs.head(path)?)?;
+        let head = fs.head(path);
+        crate::wdiag!("settled {:?} head={:?}", path, head.as_ref().map(|h| h.iter().take(16).copied().collect::<Vec<u8>>()));
+        let media = classify(&name, &head?);
+        crate::wdiag!("settled {:?} media={:?} roles={}", path, media, self.plan.roles_for(path).len());
+        let media = media?;
         let roles: Vec<Role> = self
             .plan
             .roles_for(path)
@@ -237,6 +246,7 @@ impl Engine {
                         show_results: folder.show_results,
                         pipeline: folder.pipeline,
                     };
+                    crate::wdiag!("settled {:?} -> burst {}", path, index);
                     self.bursts
                         .entry(index)
                         .or_insert_with(|| (now, Vec::new()))
@@ -291,6 +301,7 @@ impl Engine {
                     show_results: folder.show_results,
                 });
             } else {
+                crate::wdiag!("flush {} files", files.len());
                 notices.extend(files.into_iter().map(Notice::Ready));
             }
         }

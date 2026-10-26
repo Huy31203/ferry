@@ -14,3 +14,13 @@ pub mod plan;
 pub mod probe;
 pub mod service;
 pub mod settle;
+
+pub static DIAG_T0: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
+
+#[macro_export]
+macro_rules! wdiag {
+    ($($arg:tt)*) => {
+        eprintln!("[wdiag {:>6}ms {:?}] {}", $crate::watch::DIAG_T0.elapsed().as_millis(), std::thread::current().name(), format!($($arg)*))
+    };
+}

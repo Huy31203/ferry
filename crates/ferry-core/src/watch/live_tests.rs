@@ -237,14 +237,17 @@ fn a_file_written_in_chunks_is_ready_only_after_the_last_chunk() {
     let png = testutil::png(300, 200);
     let chunk = png.len().div_ceil(6);
     let path = h.watched("slow.png");
+    crate::wdiag!("TEST create {:?} total={}", path, png.len());
     let mut file = fs::File::create(&path).unwrap();
     for part in png.chunks(chunk) {
         file.write_all(part).unwrap();
         file.flush().unwrap();
+        crate::wdiag!("TEST wrote {}", part.len());
         std::thread::sleep(Duration::from_millis(150));
     }
     let finished = Instant::now();
     drop(file);
+    crate::wdiag!("TEST closed");
     let ready = h.expect_ready();
     assert!(
         finished.elapsed() >= Duration::from_millis(200),

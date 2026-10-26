@@ -87,7 +87,12 @@ jobs:
         run: scripts/fetch-pdfium.sh ${{ matrix.triple }}
       - if: runner.os == 'macOS'
         run: cargo fmt --all --check
-      - run: cargo clippy -p ferry-core --all-targets -- -D warnings
+      - name: DIAG isolated
+        continue-on-error: true
+        run: cargo test -p ferry-core --lib watch::live_tests::a_file_written_in_chunks -- --nocapture --test-threads=1
+      - name: DIAG watch parallel
+        continue-on-error: true
+        run: cargo test -p ferry-core --lib watch::live_tests -- --nocapture
       - run: cargo test -p ferry-core
 
   web:

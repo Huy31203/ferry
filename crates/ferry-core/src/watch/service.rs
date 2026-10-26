@@ -137,15 +137,20 @@ impl Service {
                     self.replan();
                 }
                 Ok(Msg::Rescan) => self.replan(),
-                Ok(Msg::Fs(Ok(ev))) if ev.need_rescan() => self.replan(),
+                Ok(Msg::Fs(Ok(ev))) if ev.need_rescan() => {
+                    crate::wdiag!("raw RESCAN {:?}", ev);
+                    self.replan()
+                }
                 Ok(Msg::Fs(Ok(ev))) => {
+                    crate::wdiag!("raw {:?} {:?}", ev.kind, ev.paths);
                     let now = Instant::now();
                     for event in from_notify(&ev) {
                         self.engine.on_event(event, now);
                     }
                 }
                 // The next rescan repairs the watch.
-                Ok(Msg::Fs(Err(_))) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(Msg::Fs(Err(e))) => crate::wdiag!("raw ERR {e:?}"),
+                Err(RecvTimeoutError::Timeout) => {}
             }
             if Instant::now() >= next_rescan {
                 self.replan();
@@ -192,12 +197,14 @@ impl Service {
             if self.watched.contains(&dir) {
                 now_watched.push(dir);
             } else {
+                crate::wdiag!("watch {:?}", dir);
                 match self.watcher.watch(&dir, RecursiveMode::NonRecursive) {
                     Ok(()) => now_watched.push(dir),
                     Err(e) => plan.mark_failed(&dir, &e.to_string()),
                 }
             }
         }
+        crate::wdiag!("watched {:?}", now_watched);
         self.watched = now_watched;
         let status = plan.status.clone();
         self.engine.set_plan(plan);

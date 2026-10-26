@@ -95,6 +95,7 @@ impl Settler {
     /// The file changed. Only a file already waiting is extended: a change to an
     /// old file never starts a wait.
     pub fn extend(&mut self, path: &Path, now: Instant) {
+        crate::wdiag!("extend {:?} pending={}", path, self.is_pending(path));
         if let Some(entry) = self.pending.iter_mut().find(|e| e.path == path) {
             entry.last_event = now;
             entry.seen = None;
@@ -139,6 +140,7 @@ impl Settler {
         let mut out = Vec::new();
         self.pending.retain_mut(|e| {
             if now.duration_since(e.last_event) >= cfg.max_wait {
+                crate::wdiag!("poll {:?} max_wait drop", e.path);
                 return false;
             }
             if now.duration_since(e.last_event) < cfg.quiet
@@ -148,7 +150,9 @@ impl Settler {
                 return true;
             }
             e.last_probe = Some(now);
-            match probe(&e.path) {
+            let pr = probe(&e.path);
+            crate::wdiag!("poll {:?} probe={:?} seen={:?}", e.path, pr, e.seen.map(|(s, at)| (s, now.duration_since(at))));
+            match pr {
                 Probe::Gone | Probe::NotAFile | Probe::Placeholder => false,
                 Probe::Denied => {
                     out.push(Polled::Denied {

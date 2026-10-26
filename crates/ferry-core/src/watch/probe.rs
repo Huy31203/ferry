@@ -31,7 +31,11 @@ pub fn probe(path: &Path) -> Probe {
 }
 
 fn probe_now(path: &Path) -> Probe {
-    let meta = match fs::symlink_metadata(path) {
+    let meta = fs::symlink_metadata(path);
+    if let Err(e) = &meta {
+        crate::wdiag!("probe_now {:?} symlink_metadata err {:?} {:?}", path, e.raw_os_error(), e.kind());
+    }
+    let meta = match meta {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Probe::Gone,
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Probe::Denied,
@@ -50,11 +54,14 @@ fn probe_now(path: &Path) -> Probe {
     #[cfg(windows)]
     {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        crate::wdiag!("probe_now {:?} attrs={:#x} len={}", path, meta.file_attributes(), meta.len());
         if is_placeholder_attributes(meta.file_attributes()) {
             return Probe::Placeholder;
         }
         // A writer that still holds the file open without sharing it.
-        match fs::OpenOptions::new().read(true).share_mode(0).open(path) {
+        let opened = fs::OpenOptions::new().read(true).share_mode(0).open(path);
+        crate::wdiag!("probe_now {:?} exclusive open -> {:?}", path, opened.as_ref().map(|_| ()).map_err(|e| (e.raw_os_error(), e.kind())));
+        match opened {
             Ok(_) => {}
             Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Probe::Busy,
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Probe::Denied,
