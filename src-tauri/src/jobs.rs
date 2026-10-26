@@ -328,6 +328,9 @@ pub fn show(app: &AppHandle, update: JobUpdate) {
     if !state.settings.read().unwrap().floating.enabled {
         return;
     }
+    if crate::pipe_jobs::hidden(app, &update) {
+        return; // stream F: pipelines
+    }
     let mut inbox = state.stack.lock().unwrap();
     if !inbox.ready {
         inbox.pending.retain(|u| u.id != update.id);
@@ -394,6 +397,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     let options = crate::drop_batch::with_keep(app, &id, options);
     let started = Instant::now();
     let mut job = relock(&entry.job);
+    let options = crate::pipe_jobs::options(app, &job.id, options); // stream F: pipelines
     info!(
         job = job.id.as_str(),
         source = ?job.source,
@@ -416,6 +420,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
             if cancel.is_cancelled() {
                 return;
             }
+            let update = crate::pipe_jobs::label(app, update); // stream F: pipelines
             *entry.last.lock().unwrap() = update.clone();
             show(app, update);
         },
@@ -423,6 +428,7 @@ fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     );
     entry.set_output(job.output.clone());
     drop(job);
+    let finished = crate::pipe_jobs::after_run(app, entry, finished); // stream F: pipelines
     match finished {
         Some(f) => {
             let result = f.update.state.clone();

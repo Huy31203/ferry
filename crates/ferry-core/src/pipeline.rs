@@ -488,27 +488,35 @@ impl Job {
     /// GIF, clears the conversion.
     pub fn edit(&mut self, patch: EditsPatch) {
         self.prior = Some((self.edits.clone(), self.level));
-        self.edits.merge(patch);
+        self.edits = self.recipe_for(patch); // stream F: pipelines
+        self.level = self.edits.level;
+    }
+
+    // stream F: pipelines
+    /// The recipe `edit(patch)` would leave, without changing the job.
+    pub fn recipe_for(&self, patch: EditsPatch) -> Edits {
+        let mut edits = self.edits.clone();
+        edits.merge(patch);
         // stream A: video (a video can become a GIF; only its own targets are kept)
         let cleared = match (&self.video, &self.audio) {
             (Some(_), _) => matches!(
-                self.edits.format,
+                edits.format,
                 Some(f) if f == self.source_format || !video::is_target(f)
             ),
             // stream B: audio (the source format stays: "same format, ignore the rule")
             (None, Some(_)) => matches!(
-                self.edits.format,
+                edits.format,
                 Some(f) if !crate::audio::TARGETS.contains(&f)
             ),
             (None, None) => matches!(
-                self.edits.format,
+                edits.format,
                 Some(f) if f == self.source_format || f == Format::Gif || f.is_audio()
             ),
         };
         if cleared {
-            self.edits.format = None;
+            edits.format = None;
         }
-        self.level = self.edits.level;
+        edits
     }
 
     /// A cancelled run leaves the file as the earlier run made it, so the
@@ -2615,5 +2623,21 @@ mod tests {
         );
         job.restore(&o, &mut |_, _, _| Ok(()));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn recipe_for_matches_what_edit_makes_and_changes_nothing() {
+        let env = Env::new();
+        let path = env.file("a.png", &testutil::png(64, 64));
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let patch = EditsPatch {
+            format: Some(Some(Format::Png)),
+            scale: Some(Some(50)),
+            ..EditsPatch::default()
+        };
+        let predicted = job.recipe_for(patch.clone());
+        assert_eq!(job.edits, Edits::default());
+        job.edit(patch);
+        assert_eq!((job.edits.clone(), job.edits.format), (predicted, None));
     }
 }

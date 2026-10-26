@@ -9,6 +9,7 @@ mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
+mod pipe_jobs; // stream F
 mod platform;
 mod prefs;
 mod preview;
@@ -192,6 +193,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         log_dir,
         gifsicle(),
     ));
+    app.manage(pipe_jobs::PipeState::default()); // stream F: pipelines
     windows::create_stack(app)?;
     hotkeys::reregister(app);
     tray::build(app)?;
