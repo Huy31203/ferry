@@ -12,6 +12,7 @@
     "test": "vitest run",
     "tauri": "tauri",
     "sidecar": "bash scripts/build-gifsicle.sh",
+    "pdfium": "bash scripts/fetch-pdfium.sh",
     "sidecar:ffmpeg": "bash scripts/build-ffmpeg.sh"
   },
   "dependencies": {

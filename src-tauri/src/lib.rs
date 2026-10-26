@@ -193,6 +193,9 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         gifsicle(),
     ));
     windows::create_stack(app)?;
+    if let Some(path) = pdfium() {
+        ferry_core::pdf::render::init(path); // sE pdf-formats
+    }
     hotkeys::reregister(app);
     tray::build(app)?;
     menu::init(app);
@@ -242,6 +245,30 @@ fn gifsicle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let path = exe.with_file_name(format!("gifsicle{}", std::env::consts::EXE_SUFFIX));
     path.is_file().then_some(path)
+}
+
+// sE pdf-formats
+/// The bundled PDFium library: in the app's `Frameworks` on macOS, beside the
+/// executable on Windows. A debug build also finds the fetched copy in
+/// `src-tauri/binaries/`, so `pnpm tauri dev` renders PDFs.
+fn pdfium() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let name = if cfg!(windows) {
+        "pdfium.dll"
+    } else {
+        "libpdfium.dylib"
+    };
+    let bundled = if cfg!(windows) {
+        exe.with_file_name(name)
+    } else {
+        exe.parent()?.join("../Frameworks").join(name)
+    };
+    let fetched = cfg!(debug_assertions)
+        .then(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/binaries")).join(name));
+    [Some(bundled), fetched]
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_file())
 }
 
 // stream A: video

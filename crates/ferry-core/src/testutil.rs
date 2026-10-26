@@ -448,6 +448,51 @@ pub fn tiff_ifds(pages: &[(u32, u32)], extra_tag: Option<u16>) -> Vec<u8> {
     out
 }
 
+/// `FERRY_PDFIUM` (the library's path), else the fetched copy in
+/// `src-tauri/binaries/`; true when PDFium is there. PDF render tests return
+/// early without it; CI sets it and fails if it is missing.
+pub fn pdfium() -> bool {
+    let fetched = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../src-tauri/binaries")
+        .join(pdfium_render::prelude::Pdfium::pdfium_platform_library_name());
+    let path = std::env::var_os("FERRY_PDFIUM").map_or(fetched, std::path::PathBuf::from);
+    crate::pdf::render::init(path);
+    crate::pdf::render::available()
+}
+
+/// A PDF with one blank page per `(width_pt, height_pt)`, each holding a small
+/// filled rectangle.
+pub fn blank_pdf(pages: &[(f32, f32)]) -> Vec<u8> {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.5");
+    let tree = doc.new_object_id();
+    let kids: Vec<Object> = pages
+        .iter()
+        .map(|&(w, h)| {
+            let content = doc.add_object(Stream::new(
+                dictionary! {},
+                b"0.2 g 10 10 40 40 re f".to_vec(),
+            ));
+            doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => tree,
+                "MediaBox" => vec![0.into(), 0.into(), w.into(), h.into()],
+                "Contents" => content,
+            })
+            .into()
+        })
+        .collect();
+    doc.objects.insert(
+        tree,
+        dictionary! { "Type" => "Pages", "Count" => kids.len() as i64, "Kids" => kids }.into(),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => tree });
+    doc.trailer.set("Root", catalog);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
 // ---- stream B: audio fixtures ----
 use crate::audio::tool::{AudioTool, ToolError};
 use std::{
