@@ -277,7 +277,8 @@ pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, 
         let mut jobs = state.jobs.lock().unwrap();
         jobs.retain(|_, entry| entry.is_busy());
         let ids: Vec<JobId> = jobs.keys().cloned().collect();
-        let keep: Vec<std::path::PathBuf> = jobs.values().map(|e| e.output()).collect();
+        let mut keep: Vec<std::path::PathBuf> = jobs.values().map(|e| e.output()).collect();
+        keep.extend(work_folders(&state.work_dir, &ids));
         let busy: Vec<JobUpdate> = jobs
             .values()
             .map(|e| e.last.lock().unwrap().clone())
@@ -312,6 +313,13 @@ pub fn force_clean(app: &AppHandle) -> Result<ferry_core::workdir::CleanReport, 
     }
     tray::rebuild(app);
     result.map_err(|e| e.to_string())
+}
+
+/// The temporary folders a running video or audio encode works in.
+fn work_folders(work_dir: &Path, ids: &[JobId]) -> Vec<std::path::PathBuf> {
+    ids.iter()
+        .flat_map(|id| ["video", "audio"].map(|kind| work_dir.join(kind).join(id.as_str())))
+        .collect()
 }
 
 /// Send a card to the stack, or hold it until the stack page is listening.
@@ -392,12 +400,13 @@ fn spawn(app: &AppHandle, entry: Arc<Entry>, level: Level) {
 
 fn run(app: &AppHandle, entry: &Arc<Entry>, level: Level, cancel: CancelToken) {
     let options = run_options(app, cancel.clone());
-    // Stream D: a job dropped with the keep modifier writes beside its original.
     let id = entry.last.lock().unwrap().id.clone();
-    let options = crate::drop_batch::with_keep(app, &id, options);
     let started = Instant::now();
     let mut job = relock(&entry.job);
     let options = crate::pipe_jobs::options(app, &job.id, options); // stream F: pipelines
+    // Stream D: a job dropped with the keep modifier writes beside its original,
+    // whatever the pipeline named.
+    let options = crate::drop_batch::with_keep(app, &id, options);
     info!(
         job = job.id.as_str(),
         source = ?job.source,
@@ -674,4 +683,29 @@ fn entry_name(entry: &Entry) -> String {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_keeps_the_encode_folders_of_running_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let busy = crate::drop_batch::job_id("1-a").unwrap();
+        for sub in [
+            "video/1-a/part.mp4",
+            "audio/1-a/part.m4a",
+            "video/1-b/old.mp4",
+        ] {
+            let file = dir.path().join(sub);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, b"x").unwrap();
+        }
+        let keep = work_folders(dir.path(), &[busy]);
+        ferry_core::workdir::clean(dir.path(), &keep).unwrap();
+        assert!(dir.path().join("video/1-a/part.mp4").exists());
+        assert!(dir.path().join("audio/1-a/part.m4a").exists());
+        assert!(!dir.path().join("video/1-b").exists());
+    }
 }

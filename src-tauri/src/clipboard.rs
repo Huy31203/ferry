@@ -2,7 +2,7 @@
 //! optimise hotkeys. The rules are `ferry_core::trigger`; this file reads the
 //! clipboard and starts jobs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -73,17 +73,23 @@ fn on_change(app: &AppHandle, seq: u64) {
     }
 }
 
+/// A video or PDF that is not one of Ferry's own results.
+fn wanted_file(path: &Path, own: &[PathBuf]) -> bool {
+    !own.iter().any(|o| o == path)
+        && matches!(
+            intake::classify_file(path),
+            Ok(Some(c)) if matches!(c.kind, MediaKind::Video | MediaKind::Pdf)
+        )
+}
+
 /// FR-T3: copied video and PDF files, when "Optimise copied video and PDF files"
 /// is on. They start as the hotkey starts copied files, under the clipboard's
 /// pipeline for their media.
 fn optimise_copied_files(app: &AppHandle, snap: &Snapshot, settings: &Settings) {
     let state = app.state::<AppState>();
-    let wanted = |path: &Path| {
-        matches!(
-            intake::classify_file(path),
-            Ok(Some(c)) if matches!(c.kind, MediaKind::Video | MediaKind::Pdf)
-        )
-    };
+    // Copying a finished result to paste it elsewhere must not re-encode it.
+    let own = state::own_outputs(&state.jobs.lock().unwrap());
+    let wanted = |path: &Path| wanted_file(path, &own);
     let was_paused = *state.run_state.lock().unwrap() == RunState::Paused;
     let plan = trigger::automatic_files(
         snap,
@@ -202,4 +208,21 @@ fn read() -> Option<Snapshot> {
         })
         .map_err(|e| warn!("could not read the clipboard: {e}"))
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copied_files_skip_ferrys_own_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mine, theirs) = (dir.path().join("mine.pdf"), dir.path().join("theirs.pdf"));
+        std::fs::write(&mine, b"%PDF-1.7\n").unwrap();
+        std::fs::write(&theirs, b"%PDF-1.7\n").unwrap();
+        let own = [mine.clone()];
+        assert!(!wanted_file(&mine, &own));
+        assert!(wanted_file(&theirs, &own));
+        assert!(!wanted_file(&dir.path().join("gone.pdf"), &[]));
+    }
 }

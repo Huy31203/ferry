@@ -112,6 +112,7 @@ pub fn came_from_drop(app: &AppHandle, id: &JobId) -> bool {
 }
 
 /// `options` for a run or restore of `id`: the keep rules when it was dropped with the modifier.
+/// Apply it after `pipe_jobs::options`, which would otherwise put In place back.
 pub fn with_keep(app: &AppHandle, id: &JobId, options: RunOptions) -> RunOptions {
     let keep = app.state::<DropState>().keep.lock().unwrap().contains(id);
     keep_options(keep, options)
@@ -120,6 +121,9 @@ pub fn with_keep(app: &AppHandle, id: &JobId, options: RunOptions) -> RunOptions
 fn keep_options(keep: bool, mut options: RunOptions) -> RunOptions {
     if keep {
         options.output = keep_source_rules(&options.output);
+        options.video.output = keep_source_rules(&options.video.output);
+        options.audio.settings.output = keep_source_rules(&options.audio.settings.output);
+        options.pdf_output = keep_source_rules(&options.pdf_output);
     }
     options
 }
@@ -135,21 +139,61 @@ mod tests {
     use ferry_core::cancel::CancelToken;
     use ferry_core::settings::{Location, Settings};
 
+    fn options(dir: &std::path::Path) -> RunOptions {
+        RunOptions::new(
+            &Settings::default(),
+            None,
+            dir.into(),
+            |_| Ok(()),
+            CancelToken::new(),
+        )
+    }
+
+    /// Every rule set a job kind reads: images, video, audio and PDF.
+    fn rule_sets(o: &RunOptions) -> [&ferry_core::settings::Output; 4] {
+        [
+            &o.output,
+            &o.video.output,
+            &o.audio.settings.output,
+            &o.pdf_output,
+        ]
+    }
+
     #[test]
     fn keeping_the_original_writes_beside_it_and_otherwise_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let o = || {
-            RunOptions::new(
-                &Settings::default(),
-                None,
-                dir.path().into(),
-                |_| Ok(()),
-                CancelToken::new(),
-            )
+        let kept = keep_options(true, options(dir.path()));
+        for out in rule_sets(&kept) {
+            assert_eq!(out.optimised.location, Location::SameFolder);
+            assert_eq!(out.converted.location, Location::SameFolder);
+        }
+        let plain = keep_options(false, options(dir.path()));
+        let fresh = options(dir.path());
+        assert_eq!(rule_sets(&plain), rule_sets(&fresh));
+    }
+
+    #[test]
+    fn keeping_wins_over_a_pipeline_that_names_in_place() {
+        // `pipe_jobs::options` runs first and may put In place back; keeping is applied after it.
+        let dir = tempfile::tempdir().unwrap();
+        let mut o = options(dir.path());
+        let in_place = ferry_core::settings::OutputRule {
+            location: Location::InPlace,
+            ..Default::default()
         };
-        let kept = keep_options(true, o());
-        assert_eq!(kept.output.optimised.location, Location::SameFolder);
-        assert_eq!(kept.output.converted.location, Location::SameFolder);
-        assert_eq!(keep_options(false, o()).output, o().output);
+        for out in [
+            &mut o.output,
+            &mut o.video.output,
+            &mut o.audio.settings.output,
+            &mut o.pdf_output,
+        ] {
+            out.optimised = in_place.clone();
+            out.converted = in_place.clone();
+        }
+        let kept = keep_options(true, o);
+        for out in rule_sets(&kept) {
+            assert_eq!(out.optimised.location, Location::SameFolder);
+            assert_eq!(out.converted.location, Location::SameFolder);
+        }
     }
 }
