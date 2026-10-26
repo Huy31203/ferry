@@ -1,21 +1,25 @@
 <script lang="ts">
   import { t, type StringKey } from '../lib/i18n';
-  import { usage, usageLabel, type PipeMeta, type Pipelines } from '../lib/pipelines';
+  import { usage, usageLabel, type PipeMeta, type Pipeline, type Pipelines } from '../lib/pipelines';
 
   let {
     pipelines,
     selected,
     meta,
+    starters,
     onselect,
     onnew,
+    onstarter,
     onduplicate,
     ondelete,
   }: {
     pipelines: Pipelines;
     selected: number | null;
     meta: PipeMeta;
+    starters: Pipeline[];
     onselect: (id: number) => void;
     onnew: () => void;
+    onstarter: (starter: Pipeline) => void;
     onduplicate: (id: number) => void;
     ondelete: (id: number) => void;
   } = $props();
@@ -39,6 +43,15 @@
 </script>
 
 <aside class="library">
+  {#if pipelines.library.length === 0}
+    <div class="empty">
+      <h3>{t('pipe.empty.title')}</h3>
+      <p>{t('pipe.empty.body')}</p>
+      {#each starters as starter (starter.name)}
+        <button type="button" onclick={() => onstarter(starter)}>{starter.name}</button>
+      {/each}
+    </div>
+  {/if}
   <ul>
     {#each pipelines.library as pipeline (pipeline.id)}
       <li>
@@ -81,6 +94,31 @@
     min-height: 0;
     background: var(--bg-sidebar);
     border-right: 1px solid var(--rail-line);
+  }
+  .empty {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 8px 0;
+  }
+  .empty h3,
+  .empty p {
+    margin: 0;
+  }
+  .empty h3 {
+    font-size: 13px;
+  }
+  .empty p {
+    color: var(--fg-2);
+  }
+  .empty button {
+    padding: 4px 10px;
+    font: inherit;
+    color: var(--fg);
+    background: var(--bg-content);
+    border: 1px solid var(--rail-line);
+    border-radius: 6px;
+    cursor: pointer;
   }
   ul {
     flex: 1;

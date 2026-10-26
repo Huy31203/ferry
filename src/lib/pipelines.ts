@@ -234,3 +234,15 @@ export function applySuggestion(line: string, col: number, suggestion: string): 
   const head = line.slice(0, start) + prefix + done;
   return { line: head + line.slice(col), col: head.length };
 }
+
+// ---- assignments ----
+
+export type Slot = { kind: 'clipboard' } | { kind: 'drop_zone' } | { kind: 'zone'; zone: number };
+
+/** Make pipeline `id` (or none) the one that runs in `slot` for `media`. */
+export function assign(lib: Pipelines, slot: Slot, media: Media, id: number | null): Pipelines {
+  const put = (slots: PerMedia): PerMedia => ({ ...slots, [media]: id });
+  if (slot.kind === 'clipboard') return { ...lib, clipboard: put(lib.clipboard) };
+  if (slot.kind === 'drop_zone') return { ...lib, drop_zone: put(lib.drop_zone) };
+  return { ...lib, zones: lib.zones.map((z) => (z.id === slot.zone ? { ...z, pipelines: put(z.pipelines) } : z)) };
+}

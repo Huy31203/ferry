@@ -20,16 +20,20 @@
     type StepKindView,
   } from '../lib/pipelines';
   import { change, load, store } from '../settings/store.svelte';
+  import Assignments from './Assignments.svelte';
   import Inspector from './Inspector.svelte';
   import Library from './Library.svelte';
   import StepList from './StepList.svelte';
+  import TestWell from './TestWell.svelte';
   import TextMode from './TextMode.svelte';
+  import Switch from '../settings/controls/Switch.svelte';
 
   type Tab = 'pipelines' | 'zones';
 
   let tab = $state<Tab>('pipelines');
   let selected = $state<number | null>(null);
   let kinds = $state<StepKindView[]>([]);
+  let starters = $state<Pipeline[]>([]);
   let meta = $state<PipeMeta>({ media: [], last_run: {} });
   let name = $state('');
   let mode = $state<'visual' | 'text'>('visual');
@@ -86,6 +90,13 @@
     selected = next.id;
   }
 
+  function fromStarter(starter: Pipeline) {
+    if (!pipelines) return;
+    const next = newPipeline(pipelines, starter.media, starter.name, starter.steps);
+    commit(next.lib);
+    selected = next.id;
+  }
+
   function copy(id: number) {
     if (!pipelines) return;
     const source = pipelines.library.find((p) => p.id === id);
@@ -123,9 +134,10 @@
     const wanted = params.get('pipeline');
     void (async () => {
       await load();
-      [kinds, meta] = await Promise.all([
+      [kinds, meta, starters] = await Promise.all([
         invoke<StepKindView[]>('pipe_registry'),
         invoke<PipeMeta>('pipe_meta'),
+        invoke<Pipeline[]>('pipe_starters'),
       ]);
       focus(wanted === null ? null : Number(wanted), params.get('tab'));
     })();
@@ -156,8 +168,10 @@
         {pipelines}
         {selected}
         {meta}
+        {starters}
         onselect={(id) => (selected = id)}
         onnew={create}
+        onstarter={fromStarter}
         onduplicate={copy}
         ondelete={remove}
       />
@@ -229,7 +243,19 @@
           <p class="empty">{t('pipe.empty.title')}</p>
         {/if}
       </main>
-      <aside class="right"></aside>
+      <aside class="right">
+        {#if current}
+          <Assignments {pipelines} pipeline={current} onchange={commit} />
+          <div class="hide">
+            <div>
+              <div id="hide-result">{t('pipe.hide_result')}</div>
+              <div class="help">{t('pipe.hide_result.help')}</div>
+            </div>
+            <Switch checked={current.hide_result} labelledby="hide-result" onchange={(on) => update({ hide_result: on })} />
+          </div>
+          <TestWell pipeline={current} blocked={checked.issues.length > 0} />
+        {/if}
+      </aside>
     </div>
   {:else}
     <div class="shell zones"></div>
@@ -275,7 +301,22 @@
     overflow-y: auto;
   }
   .right {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    overflow-y: auto;
     border-left: 1px solid var(--rail-line);
+  }
+  .hide {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .help {
+    font-size: 11px;
+    color: var(--fg-2);
   }
   .head {
     display: flex;

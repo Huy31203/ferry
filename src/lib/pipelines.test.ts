@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addStep,
+  assign,
   applySuggestion,
   duplicate,
   moveStep,
@@ -120,5 +121,16 @@ describe('suggest', () => {
     expect(applySuggestion('co', 2, 'convert')).toEqual({ line: 'convert ', col: 8 });
     expect(applySuggestion('convert t', 9, 'to=')).toEqual({ line: 'convert to=', col: 11 });
     expect(applySuggestion('convert to=w', 12, 'webp')).toEqual({ line: 'convert to=webp ', col: 16 });
+  });
+});
+
+describe('assign', () => {
+  it('puts one pipeline per slot and media, and clears with null', () => {
+    const lib: Pipelines = { ...empty(), zones: [{ id: 4, name: 'Z', icon: 'image', pipelines: { ...none } }] };
+    const a = assign(lib, { kind: 'clipboard' }, 'image', 2);
+    expect(assign(a, { kind: 'clipboard' }, 'image', 3).clipboard.image).toBe(3);
+    expect(assign(a, { kind: 'zone', zone: 4 }, 'image', 2).zones[0].pipelines.image).toBe(2);
+    expect(assign(a, { kind: 'clipboard' }, 'image', null).clipboard.image).toBeNull();
+    expect(assign(a, { kind: 'drop_zone' }, 'video', 2).drop_zone).toEqual({ ...none, video: 2 });
   });
 });
