@@ -25,9 +25,13 @@ pub fn atomic_replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
 /// stays where it is). For results too big to hold in memory.
 pub fn atomic_replace_from(target: &Path, from: &Path) -> io::Result<()> {
     replace_with(target, |tmp| {
-        fs::copy(from, tmp)?;
-        // Opened for writing: Windows refuses to flush a read-only handle.
-        OpenOptions::new().write(true).open(tmp)?.sync_all()
+        // Not `fs::copy`: it copies a read-only source's mode too, and the
+        // temporary file could then not be opened for writing (and Windows
+        // refuses to flush a read-only handle). A new target keeps the mode.
+        let mut file = File::create(tmp)?;
+        io::copy(&mut File::open(from)?, &mut file)?;
+        file.sync_all()?;
+        fs::set_permissions(tmp, fs::metadata(from)?.permissions())
     })
 }
 
@@ -442,6 +446,27 @@ mod tests {
         atomic_replace_from(&target, &from).unwrap();
         let mode = fs::metadata(&target).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn replacing_from_a_read_only_file_works_and_stays_read_only_when_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let (target, from) = (dir.path().join("a.mp4"), dir.path().join("backup.mp4"));
+        fs::write(&from, b"original").unwrap();
+        let mut perms = fs::metadata(&from).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&from, perms).unwrap();
+
+        atomic_replace_from(&target, &from).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert!(fs::metadata(&target).unwrap().permissions().readonly());
+
+        let writable = dir.path().join("b.mp4");
+        fs::write(&writable, b"result").unwrap();
+        atomic_replace_from(&writable, &from).unwrap();
+        assert_eq!(fs::read(&writable).unwrap(), b"original");
+        assert!(!fs::metadata(&writable).unwrap().permissions().readonly());
+        assert!(!dir.path().join("b.mp4.ferry-tmp").exists());
     }
 
     #[test]

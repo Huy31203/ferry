@@ -5,6 +5,9 @@ use std::{fmt, io};
 
 use crate::i18n::t;
 
+/// What ffmpeg prints when the disk fills.
+const DISK_FULL: &str = "No space left on device";
+
 #[derive(Debug)]
 pub enum FerryError {
     /// No ffmpeg next to Ferry, and FERRY_FFMPEG unset or not a file.
@@ -33,14 +36,20 @@ impl FerryError {
             Self::Spawn(_) => t("video.error.spawn"),
             Self::Cancelled => t("error.cancelled"),
             Self::Stalled => t("video.error.stalled"),
-            Self::Failed { stderr, .. } if stderr.contains("No space left on device") => {
-                t("video.error.disk_full")
-            }
+            Self::Failed { stderr, .. } if stderr.contains(DISK_FULL) => t("video.error.disk_full"),
             Self::Failed { .. } => t("video.error.encode"),
             Self::Io(e) if e.kind() == io::ErrorKind::StorageFull => t("video.error.disk_full"),
             Self::Io(e) => e.to_string(),
             Self::Unsupported(message) => message.clone(),
         }
+    }
+}
+
+impl FerryError {
+    /// Whether the encoder itself failed, so another encoder may do better. A
+    /// full disk or a stalled run would fail the same way again.
+    pub fn is_encoder_failure(&self) -> bool {
+        matches!(self, Self::Failed { stderr, .. } if !stderr.contains(DISK_FULL))
     }
 }
 
@@ -79,6 +88,22 @@ impl From<io::Error> for FerryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_genuine_encoder_failure_is_worth_a_retry() {
+        let failed = |stderr: &str| FerryError::Failed {
+            code: Some(1),
+            command: "ffmpeg".into(),
+            stderr: stderr.into(),
+        };
+        assert!(failed("Error while opening encoder").is_encoder_failure());
+        assert!(
+            !failed("av_interleaved_write_frame(): No space left on device").is_encoder_failure()
+        );
+        assert!(!FerryError::Stalled.is_encoder_failure());
+        assert!(!FerryError::Io(io::ErrorKind::StorageFull.into()).is_encoder_failure());
+        assert!(!FerryError::Spawn(io::Error::other("x")).is_encoder_failure());
+    }
 
     #[test]
     fn every_error_has_a_one_line_reason() {

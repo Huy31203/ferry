@@ -400,9 +400,8 @@ impl Job {
         emit: &mut dyn FnMut(JobUpdate),
     ) -> Result<(Plan, PathBuf), Stop> {
         loop {
-            let out = e
-                .tmp
-                .join(format!("out{tag}.{}", attempt.target.extension()));
+            let ext = plan::temp_extension(attempt.target, self.source_format, &self.source_ext);
+            let out = e.tmp.join(format!("out{tag}.{ext}"));
             let planned = plan::plan(&PlanInput {
                 input: e.backup,
                 output: &out,
@@ -442,8 +441,9 @@ impl Job {
                 Ok(()) => return Ok((planned, out)),
                 Err(FerryError::Cancelled) => return Err(Stop::Cancelled),
                 // The hardware encoder failed: once more in software. A failed HEVC
-                // attempt means no HEVC on this run.
-                Err(_) if planned.hardware && !attempt.software => {
+                // attempt means no HEVC on this run. A full disk or a stall is not
+                // the encoder's fault and takes the failure path below.
+                Err(err) if planned.hardware && !attempt.software && err.is_encoder_failure() => {
                     match plan::route(e.asked, e.probe, false, e.plain) {
                         Route::Keep => return Err(Stop::Keep),
                         Route::Encode(target) => {
