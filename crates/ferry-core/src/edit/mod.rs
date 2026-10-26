@@ -469,7 +469,7 @@ impl Work<'_> {
             Work::TiffPages(pages) => tiff::encode_rasters(pages),
             Work::Animation { anim, extras } => {
                 let out = webp_anim::encode(anim, o, extras)?;
-                if webp_anim::frame_count(&out) != anim.frames.len() {
+                if !webp_anim::kept_intact(&anim.frames, &out) {
                     return Err(OptimiseError::Encode(crate::i18n::t("pdf.anim.flattened")));
                 }
                 Ok(out)
@@ -969,6 +969,17 @@ mod tests {
         assert_eq!((a.format, a.dims), (Format::WebP, (100, 50)));
         let back = webp_anim::decode(&a.bytes).unwrap();
         assert_eq!((back.width, back.frames.len()), (100, 3));
+    }
+
+    #[test]
+    fn an_animated_webp_with_a_held_frame_can_be_edited() {
+        let a = applied(
+            &testutil::animated_webp_held_frame(200, 100),
+            Format::WebP,
+            |e| e.scale = Some(50),
+        );
+        assert_eq!(a.dims, (100, 50));
+        assert_eq!(webp_anim::frame_count(&a.bytes), 2);
     }
 
     #[test]
