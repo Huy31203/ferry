@@ -175,7 +175,7 @@ pub fn thumb_args(input: &Path, output: &Path) -> Vec<OsString> {
     let mut args = vec![OsString::from("-i"), input.into()];
     args.extend(strs(&[
         "-map",
-        "0:v:0",
+        "0:V:0",
         "-frames:v",
         "1",
         "-vf",
@@ -196,7 +196,7 @@ pub fn frame_args(input: &Path, output: &Path) -> Vec<OsString> {
     let mut args = vec![OsString::from("-i"), input.into()];
     args.extend(strs(&[
         "-map",
-        "0:v:0",
+        "0:V:0",
         "-frames:v",
         "1",
         "-c:v",
@@ -312,7 +312,7 @@ pub fn plan(p: &PlanInput) -> Plan {
     let ten_bit = probe.video.ten_bit && matches!(codec, Codec::Hevc | Codec::Av1);
 
     let mut args = vec![OsString::from("-i"), p.input.into()];
-    args.extend(strs(&["-map", "0:v:0"]));
+    args.extend(strs(&["-map", "0:V:0"]));
     let audio_kept = !(p.edits.mute || p.settings.remove_audio);
     if audio_kept {
         args.extend(strs(&["-map", "0:a?"]));
@@ -510,7 +510,7 @@ fn plan_gif(p: &PlanInput, window: (u32, u32), expected: Duration) -> Plan {
     chain.push(format!("fps={GIF_FPS}"));
     chain.push("split[a][b]".into());
     let graph = format!(
-        "[0:v:0]{};[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle[o]",
+        "[0:V:0]{};[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle[o]",
         chain.join(",")
     );
     let mut args = vec![OsString::from("-i"), p.input.into()];
@@ -969,6 +969,30 @@ pub(crate) mod tests {
         assert!(has(&plan.args, &["-map", "0:s?"]) && has(&plan.args, &["-c:s", "copy"]));
         assert!(lacks(&plan.args, "-sn"));
         assert!(!lacks(&run(&small()).args, "-sn"));
+    }
+
+    #[test]
+    fn every_video_map_skips_an_attached_cover_picture() {
+        // `0:V:0` is the first video stream that is not an attached picture,
+        // the same stream the probe reports.
+        let input = Path::new("/b/in.mkv");
+        let mut gif = small();
+        gif.target = Format::Gif;
+        gif.out_file = "/w/out.gif";
+        let args = [
+            run(&small()).args,
+            run(&gif).args,
+            thumb_args(input, Path::new("/w/t.jpg")),
+            frame_args(input, Path::new("/w/f.png")),
+        ];
+        for args in args {
+            let text = args
+                .iter()
+                .map(|a| a.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(text.contains("0:V:0") && !text.contains("0:v:0"), "{text}");
+        }
     }
 
     #[test]
