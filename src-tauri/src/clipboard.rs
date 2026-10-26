@@ -127,7 +127,13 @@ fn start_clipboard_job(app: &AppHandle, snap: Snapshot, level: Level) {
         &state.work_dir,
         now,
     );
-    jobs::start(app, job, level, Some(seq));
+    crate::pipe_jobs::start_assigned(
+        app,
+        job,
+        crate::pipe_jobs::Trigger::Clipboard,
+        level,
+        Some(seq),
+    ); // stream F: pipelines
 }
 
 /// Read the clipboard, retrying once after 100 ms (§6).
