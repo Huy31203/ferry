@@ -30,8 +30,8 @@ pub const PER_OS: &[&str] = &[
     "svc.shortcuts",
     "clipboard.ignored_apps",
     "drop_zone.ignored_apps", // stream D: bundle ids on macOS, .exe names on Windows
-    "drop_zone.show_on",      // stream D: Windows has no drag-start signal, so it defaults differently
-    "video.output",           // stream A: ~/Movies on macOS, ~/Videos on Windows
+    "drop_zone.show_on", // stream D: Windows has no drag-start signal, so it defaults differently
+    "video.output",      // stream A: ~/Movies on macOS, ~/Videos on Windows
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

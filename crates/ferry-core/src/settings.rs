@@ -978,7 +978,10 @@ impl Settings {
         self.pipelines = self.pipelines.sanitised(); // stream F: pipelines
         for folder in &mut self.watch.folders {
             // A deleted pipeline leaves its folders on the plain optimise.
-            if folder.pipeline.is_some_and(|id| self.pipelines.get(id).is_none()) {
+            if folder
+                .pipeline
+                .is_some_and(|id| self.pipelines.get(id).is_none())
+            {
                 folder.pipeline = None;
             }
         }
