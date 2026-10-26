@@ -39,7 +39,8 @@ impl Harness {
     /// Watches `tmp/watched` (created first when `create`); backups in
     /// `tmp/backups` and work files in `tmp/work` are Ferry's own folders.
     fn with(create: bool, edit: impl FnOnce(&mut WatchedFolder)) -> Self {
-        let tmp = tempfile::tempdir().unwrap();
+        // FSEvents reports real paths; macOS temp is a /var -> /private/var symlink.
+        let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         for name in ["backups", "work"] {
             fs::create_dir(tmp.path().join(name)).unwrap();
         }
