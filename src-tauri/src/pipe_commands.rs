@@ -8,17 +8,18 @@ use std::path::PathBuf;
 use chrono::{Local, NaiveDate, NaiveDateTime};
 use ferry_core::i18n::t;
 use ferry_core::job::JobId;
-use ferry_core::optimise::OptimiseOptions;
+use ferry_core::optimise::{Level, OptimiseOptions};
+use ferry_core::pipeline::Job;
 use ferry_core::pipeline_def::{Pipeline, Step, starters};
 use ferry_core::pipeline_plan::{Issue, captions, check};
 use ferry_core::pipeline_steps::{Media, StepKindView, registry};
 use ferry_core::pipeline_test::{StepReport, run};
 use ferry_core::pipeline_text::{LineError, parse, print};
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 use crate::state::AppState;
-use crate::{pipe_jobs, pipe_windows};
+use crate::{jobs, pipe_jobs, pipe_windows, preset_zones};
 
 /// Run `work` on a blocking worker and return its result.
 async fn blocking<T: Send + 'static>(
@@ -167,6 +168,86 @@ pub async fn pipe_run(app: AppHandle, id: JobId, pipeline: u32) -> Result<(), St
 #[tauri::command]
 pub fn pipe_open_editor(app: AppHandle, pipeline: Option<u32>, tab: Option<String>) {
     pipe_windows::open_editor(&app, pipeline, tab.as_deref());
+}
+
+// ---- preset zones ----
+
+/// Show the grid from the zone editor; it stays until Done.
+#[tauri::command]
+pub async fn pipe_zones_show(app: AppHandle) -> Result<(), String> {
+    blocking(app, |app| {
+        preset_zones::show(app, preset_zones::Mode::Preview, Vec::new());
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn pipe_zones_hide(app: AppHandle) {
+    preset_zones::hide(&app);
+}
+
+/// The page reports a drag entering (true) or leaving (false) the grid.
+#[tauri::command]
+pub fn pipe_zones_drag(app: AppHandle, entered: bool) {
+    preset_zones::dragging(&app, entered);
+}
+
+#[tauri::command]
+pub fn pipe_zones_ready(app: AppHandle) -> preset_zones::ZonesView {
+    preset_zones::view(&app)
+}
+
+#[tauri::command]
+pub fn pipe_classify(paths: Vec<String>) -> Vec<Option<Media>> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    preset_zones::classify(&paths)
+}
+
+/// Files dropped on a zone's tile: each runs the zone's pipeline for its media.
+#[tauri::command]
+pub async fn pipe_zone_drop(app: AppHandle, zone: u32, paths: Vec<String>) -> Result<(), String> {
+    blocking(app, move |app| {
+        let (settings, has_gifsicle) = {
+            let state = app.state::<AppState>();
+            (
+                state.settings.read().unwrap().clone(),
+                state.gifsicle.is_some(),
+            )
+        };
+        for path in paths.into_iter().map(PathBuf::from) {
+            if path.is_dir() {
+                jobs::notice(app, t("pipe.zones.folder_skipped"));
+                continue;
+            }
+            match Job::file(&path, &settings, has_gifsicle) {
+                Ok(job) => {
+                    pipe_jobs::start_assigned(
+                        app,
+                        job,
+                        pipe_jobs::Trigger::Zone(zone),
+                        Level::Normal,
+                        None,
+                    );
+                }
+                Err(reason) => jobs::notice(app, reason),
+            }
+        }
+        preset_zones::hide_after_drop(app);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn pipe_zone_menu(
+    app: AppHandle,
+    window: WebviewWindow,
+    zone: u32,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    preset_zones::popup_menu(&app, &window, zone, x, y)
 }
 
 #[cfg(test)]

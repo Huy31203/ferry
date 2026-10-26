@@ -15,6 +15,7 @@ mod pipe_menu; // stream F
 mod pipe_windows; // stream F
 mod platform;
 mod prefs;
+mod preset_zones; // stream F
 mod preview;
 mod state;
 mod tray;
@@ -146,6 +147,13 @@ pub fn run() {
             pipe_commands::pipe_pick_file,
             pipe_commands::pipe_run,
             pipe_commands::pipe_open_editor,
+            pipe_commands::pipe_zones_show,
+            pipe_commands::pipe_zones_hide,
+            pipe_commands::pipe_zones_drag,
+            pipe_commands::pipe_zones_ready,
+            pipe_commands::pipe_classify,
+            pipe_commands::pipe_zone_drop,
+            pipe_commands::pipe_zone_menu,
             svc_commands::svc_hotkeys_status,
             svc_commands::svc_hotkey_check,
             svc_commands::svc_hotkey_set,
@@ -214,6 +222,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     tray::build(app)?;
     menu::init(app);
     drop_batch::init(app)?;
+    preset_zones::init(app); // stream F: pipelines
     clipboard::start(app);
     watch::start(app); // stream C
     integrations::init(app); // Stream H

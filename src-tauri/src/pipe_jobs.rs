@@ -2,8 +2,6 @@
 //! leaves for a job's next finished run (copies, forks, where results go), and
 //! the hooks `jobs.rs` calls. The rules are `ferry_core::pipeline_plan`; the
 //! job runner does the work.
-// Items the editor, the card menu and the zones use arrive with their tasks.
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -29,6 +27,8 @@ pub enum Trigger {
     Clipboard,
     DropZone,
     Zone(u32),
+    /// For watched folders, once their settings carry a pipeline id.
+    #[allow(dead_code)]
     Pipeline(u32),
 }
 
@@ -262,7 +262,7 @@ pub fn start_assigned(
             }
             _ => {}
         }
-        return jobs::start(app, job, level, source_seq);
+        return launch(app, job, trigger, level, source_seq);
     };
     let facts = Facts {
         stem: job.name.clone(),
@@ -299,7 +299,22 @@ pub fn start_assigned(
         compiled.main.optimised,
         compiled.main.converted,
     );
-    jobs::start(app, job, level, source_seq)
+    launch(app, job, trigger, level, source_seq)
+}
+
+/// The drop zone copies its result as a folder drop does; the rest start plainly.
+fn launch(
+    app: &AppHandle,
+    job: Job,
+    trigger: Trigger,
+    level: Level,
+    source_seq: Option<u64>,
+) -> bool {
+    if trigger == Trigger::DropZone {
+        jobs::start_auto_copied(app, job, level)
+    } else {
+        jobs::start(app, job, level, source_seq)
+    }
 }
 
 /// Run `pipeline` on a card that is already showing, from its original.

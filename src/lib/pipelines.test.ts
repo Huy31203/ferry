@@ -5,11 +5,15 @@ import {
   applySuggestion,
   duplicate,
   moveStep,
+  moveZone,
   newPipeline,
+  newZone,
   removePipeline,
   removeStep,
+  removeZone,
   setParam,
   suggest,
+  tileState,
   usage,
   usageLabel,
   type Pipelines,
@@ -132,5 +136,23 @@ describe('assign', () => {
     expect(assign(a, { kind: 'zone', zone: 4 }, 'image', 2).zones[0].pipelines.image).toBe(2);
     expect(assign(a, { kind: 'clipboard' }, 'image', null).clipboard.image).toBeNull();
     expect(assign(a, { kind: 'drop_zone' }, 'video', 2).drop_zone).toEqual({ ...none, video: 2 });
+  });
+});
+
+describe('zones', () => {
+  const tile = { pipelines: { ...none, image: 1 }, captions: { image: 'Convert to WebP' } };
+  it('enables a tile for a dragged media it has a pipeline for', () => {
+    expect(tileState(tile, ['image', 'video'])).toEqual({ enabled: true, caption: 'Convert to WebP' });
+    expect(tileState(tile, [])).toEqual({ enabled: true, caption: 'Convert to WebP' });
+  });
+  it('disables it otherwise and says why', () => {
+    expect(tileState(tile, ['video'])).toEqual({ enabled: false, caption: 'No pipeline for video' });
+    expect(tileState({ pipelines: { ...none }, captions: {} }, [])).toEqual({ enabled: false, caption: 'No pipeline for image' });
+  });
+  it('adds, moves and removes zones with their own ids', () => {
+    const a = newZone(empty(), 'A');
+    const b = newZone(a.lib, 'B');
+    expect(moveZone(b.lib, 0, 1).zones.map((z) => z.name)).toEqual(['B', 'A']);
+    expect(removeZone(b.lib, a.id).zones.map((z) => z.id)).toEqual([b.id]);
   });
 });

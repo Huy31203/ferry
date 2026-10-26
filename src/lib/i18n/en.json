@@ -904,6 +904,12 @@
   "pipe.zones.folder_skipped": "Drop files, not folders, on a preset zone",
   "pipe.zones.untitled": "Zone",
   "pipe.zones.hint_tap": "Tap Ctrl for presets",
+  "pipe.zones.icon.image": "Image",
+  "pipe.zones.icon.copy": "Copy",
+  "pipe.zones.icon.folder": "Folder",
+  "pipe.zones.icon.zap": "Bolt",
+  "pipe.zones.icon.globe": "Globe",
+  "pipe.zones.icon.star": "Star",
   "pipe.zone.none": "No pipeline for {media}",
   "pipe.zone.no_pipeline": "“{zone}” has no pipeline for {media}"
 }
