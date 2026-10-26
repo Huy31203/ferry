@@ -5,6 +5,7 @@ import {
   formatIgnore,
   newFolder,
   parseIgnore,
+  pipelineId,
   removeFolder,
   statusFor,
   statusText,
@@ -23,6 +24,7 @@ describe('watched folders', () => {
       ignore: [],
       max_files_at_once: 10,
       paused: false,
+      pipeline: null,
     });
     expect(addFolder(first.folders, '~/Downloads')).toEqual({
       folders: first.folders,
@@ -31,9 +33,14 @@ describe('watched folders', () => {
   });
 
   it('updates one folder and keeps unknown fields', () => {
-    const withUnknown = [{ ...newFolder('~/A'), pipeline: 'webp' }] as never;
+    const withUnknown = [{ ...newFolder('~/A'), later: 'x' }] as never;
     const next = updateFolder(withUnknown, 0, { paused: true });
-    expect(next[0]).toMatchObject({ paused: true, pipeline: 'webp' });
+    expect(next[0]).toMatchObject({ paused: true, later: 'x' });
+  });
+
+  it('reads the pipeline picker', () => {
+    expect(pipelineId('')).toBeNull();
+    expect(pipelineId('7')).toBe(7);
   });
 
   it('names a folder by its last part', () => {

@@ -42,6 +42,7 @@
   let checked = $state<Checked>({ issues: [], captions: [] });
 
   const pipelines = $derived(store.value?.pipelines ?? null);
+  const folders = $derived(store.value?.watch.folders ?? []);
   const current = $derived(pipelines?.library.find((p) => p.id === selected) ?? null);
 
   // The name box follows the selected pipeline.
@@ -167,6 +168,7 @@
     <div class="shell">
       <Library
         {pipelines}
+        {folders}
         {selected}
         {meta}
         {starters}
@@ -246,7 +248,7 @@
       </main>
       <aside class="right">
         {#if current}
-          <Assignments {pipelines} pipeline={current} onchange={commit} />
+          <Assignments {pipelines} {folders} pipeline={current} onchange={commit} />
           <div class="hide">
             <div>
               <div id="hide-result">{t('pipe.hide_result')}</div>

@@ -11,12 +11,14 @@
     formatIgnore,
     mediaLabel,
     parseIgnore,
+    pipelineId,
     removeFolder,
     statusFor,
     statusText,
     statusTone,
     updateFolder,
   } from '../../lib/watch';
+  import { store } from '../store.svelte';
   import { watch } from '../watchStore.svelte';
   import NumberField from './NumberField.svelte';
   import Switch from './Switch.svelte';
@@ -34,6 +36,7 @@
   } = $props();
 
   let message = $state<string | null>(null);
+  const library = $derived(store.value?.pipelines.library ?? []);
 
   function add(path: string) {
     const next = addFolder(folders, path);
@@ -88,6 +91,7 @@
         <th class="folder">{t('watch.col.folder')}</th>
         <th class="types">{t('watch.col.types')}</th>
         <th class="card">{t('watch.col.card')}</th>
+        <th class="pipeline">{t('watch.col.pipeline')}</th>
         <th class="ignore">{t('watch.col.ignore')}</th>
         <th class="atonce">{t('watch.col.at_once')}</th>
         <th class="actions"></th>
@@ -126,6 +130,19 @@
               label={t('watch.card.aria', { folder: name })}
               onchange={(on) => patch(index, { show_results: on })}
             />
+          </td>
+          <td class="pipeline">
+            <select
+              value={folder.pipeline ?? ''}
+              {disabled}
+              aria-label={t('watch.pipeline.aria', { folder: name })}
+              onchange={(event) => patch(index, { pipeline: pipelineId(event.currentTarget.value) })}
+            >
+              <option value="">{t('watch.pipeline.none')}</option>
+              {#each library as pipeline (pipeline.id)}
+                <option value={pipeline.id}>{pipeline.name}</option>
+              {/each}
+            </select>
           </td>
           <td class="ignore">
             <input
@@ -202,16 +219,19 @@
     border-top: 1px solid var(--rail-line);
   }
   .folder {
-    width: 26%;
+    width: 22%;
   }
   .types {
-    width: 28%;
+    width: 26%;
+  }
+  .pipeline {
+    width: 16%;
   }
   .card {
     width: 56px;
   }
   .ignore {
-    width: 18%;
+    width: 14%;
   }
   .atonce {
     width: 80px;
@@ -272,6 +292,17 @@
     opacity: 0.45;
     cursor: default;
   }
+  select {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 4px 6px;
+    font: inherit;
+    color: var(--fg);
+    background: var(--bg-content);
+    border: 1px solid var(--rail-line);
+    border-radius: 6px;
+  }
   input[type='text'] {
     box-sizing: border-box;
     width: 100%;
@@ -308,6 +339,7 @@
     cursor: default;
   }
   button:focus-visible,
+  select:focus-visible,
   input:focus-visible {
     outline: 2px solid var(--accent-text);
     outline-offset: 1px;

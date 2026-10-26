@@ -41,7 +41,7 @@ const SIDES: &[(&str, &str)] = &[
     ("height", "pipe.choice.height"),
     ("long_edge", "pipe.choice.long_edge"),
 ];
-const ASPECTS: &[(&str, &str)] = &[
+pub(crate) const ASPECTS: &[(&str, &str)] = &[
     ("free", "pipe.choice.free"),
     ("16:9", "pipe.choice.r16_9"),
     ("4:3", "pipe.choice.r4_3"),
@@ -300,7 +300,7 @@ fn downscale_summary(p: &Params) -> String {
 
 // ---- crop ----
 
-fn ratio(aspect: &str) -> Option<(u32, u32)> {
+pub(crate) fn ratio(aspect: &str) -> Option<(u32, u32)> {
     match aspect {
         "16:9" => Some((16, 9)),
         "4:3" => Some((4, 3)),

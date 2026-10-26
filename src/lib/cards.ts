@@ -1,5 +1,6 @@
 import type { JobState, JobUpdate } from './ipc';
-import { DEFAULT_RAIL_TOOLS, MAX_COMPACT_TOOLS, MAX_TOOLS, RAIL_TOOLS } from './rail';
+import { DEFAULT_RAIL_TOOLS, MAX_COMPACT_TOOLS, MAX_TOOLS, RAIL_TOOLS, pipelineFor, type RailPipeline } from './rail';
+import type { Media } from './watch';
 
 /** A catalog tool id (`rail.ts`) or `'more'`. Rail A is the default set (spec §5.1). */
 export type RailAction = string;
@@ -14,18 +15,31 @@ export function autoHides(state: JobState): boolean {
   return ['done', 'already_optimal', 'larger', 'restored'].includes(state.kind);
 }
 
-/** The rail's buttons for a finished card, in the user's order, then the ⋯ menu. Unknown ids are skipped; a compact card shows fewer. */
+/** The pipeline media a card belongs to. */
+export function cardMedia(card: JobUpdate): Media {
+  if (card.video) return 'video';
+  if (card.audio) return 'audio';
+  return card.source_format === 'pdf' ? 'pdf' : 'image';
+}
+
+/** The rail's buttons for a finished card, in the user's order, then the ⋯ menu. Unknown ids are skipped; a compact card shows fewer. A pipeline shows only on cards of its media. */
 export function railActions(
   card: JobUpdate,
   compact = false,
   tools: string[] = DEFAULT_RAIL_TOOLS,
+  library: RailPipeline[] = [],
 ): RailAction[] {
   if (!autoHides(card.state) || card.output === null) return [];
   const limit = compact ? MAX_COMPACT_TOOLS : MAX_TOOLS;
   const actions: RailAction[] = [];
   for (const id of tools) {
-    const tool = RAIL_TOOLS.find((candidate) => candidate.id === id);
-    if (!tool || (compact && !tool.compact) || (tool.applies && !tool.applies(card))) continue;
+    const pipeline = pipelineFor(id, library);
+    if (pipeline) {
+      if (pipeline.media !== cardMedia(card)) continue;
+    } else {
+      const tool = RAIL_TOOLS.find((candidate) => candidate.id === id);
+      if (!tool || (compact && !tool.compact) || (tool.applies && !tool.applies(card))) continue;
+    }
     if (actions.length === limit) break;
     actions.push(id);
   }
@@ -35,7 +49,7 @@ export function railActions(
 
 /** Rail buttons that work on the original, so `can_edit` turns them off. */
 export function needsOriginal(action: RailAction): boolean {
-  return RAIL_TOOLS.find((tool) => tool.id === action)?.needsOriginal ?? false;
+  return action.startsWith('pipeline:') || (RAIL_TOOLS.find((tool) => tool.id === action)?.needsOriginal ?? false);
 }
 
 /** Whether the card's file can be dragged out. */

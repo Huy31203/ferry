@@ -2,14 +2,18 @@
 //! optimise hotkeys. The rules are `ferry_core::trigger`; this file reads the
 //! clipboard and starts jobs.
 
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use chrono::Local;
 use ferry_core::i18n::{t, tf};
+use ferry_core::intake::{self, MediaKind};
 use ferry_core::optimise::Level;
 use ferry_core::pipeline::Job;
+use ferry_core::run_state::RunState;
+use ferry_core::settings::Settings;
 use ferry_core::trigger::{self, HotkeyPlan, Skip, Snapshot};
 use tauri::{AppHandle, Manager};
 use tracing::{debug, info, warn};
@@ -62,7 +66,58 @@ fn on_change(app: &AppHandle, seq: u64) {
                 tray::rebuild(app); // Paused has been spent: back to Running
             }
         }
+        Err(Skip::NoImage) if !snap.files.is_empty() => {
+            optimise_copied_files(app, &snap, &settings)
+        }
         Err(skip) => debug!(?skip, "clipboard change left alone"),
+    }
+}
+
+/// FR-T3: copied video and PDF files, when "Optimise copied video and PDF files"
+/// is on. They start as the hotkey starts copied files, under the clipboard's
+/// pipeline for their media.
+fn optimise_copied_files(app: &AppHandle, snap: &Snapshot, settings: &Settings) {
+    let state = app.state::<AppState>();
+    let wanted = |path: &Path| {
+        matches!(
+            intake::classify_file(path),
+            Ok(Some(c)) if matches!(c.kind, MediaKind::Video | MediaKind::Pdf)
+        )
+    };
+    let was_paused = *state.run_state.lock().unwrap() == RunState::Paused;
+    let plan = trigger::automatic_files(
+        snap,
+        settings,
+        &wanted,
+        &mut state.run_state.lock().unwrap(),
+    );
+    match plan {
+        Ok(files) => {
+            for path in files {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                match Job::file(&path, settings, state.gifsicle.is_some()) {
+                    Ok(job) => {
+                        if !crate::pipe_jobs::start_assigned(
+                            app,
+                            job,
+                            crate::pipe_jobs::Trigger::Clipboard,
+                            Level::Normal,
+                            None,
+                        ) {
+                            jobs::notice(app, tf("error.busy", &[("name", &name)]));
+                        }
+                    }
+                    Err(reason) => jobs::notice(app, reason),
+                }
+            }
+        }
+        Err(Skip::NotRunning) => {
+            info!("skipped copied files while paused or stopped");
+            if was_paused {
+                tray::rebuild(app); // Paused has been spent: back to Running
+            }
+        }
+        Err(skip) => debug!(?skip, "copied files left alone"),
     }
 }
 

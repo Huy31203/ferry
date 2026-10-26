@@ -1,14 +1,17 @@
 <script lang="ts">
   import { t, type StringKey } from '../lib/i18n';
   import { assign, usage, type Pipeline, type Pipelines, type Slot } from '../lib/pipelines';
+  import type { WatchedFolder } from '../lib/settings';
   import Switch from '../settings/controls/Switch.svelte';
 
   let {
     pipelines,
+    folders,
     pipeline,
     onchange,
   }: {
     pipelines: Pipelines;
+    folders: WatchedFolder[];
     pipeline: Pipeline;
     onchange: (next: Pipelines) => void;
   } = $props();
@@ -33,7 +36,7 @@
     })),
   ]);
 
-  const unassigned = $derived(usage(pipelines, pipeline.id).length === 0);
+  const unassigned = $derived(usage(pipelines, pipeline.id, folders).length === 0);
 </script>
 
 <section>

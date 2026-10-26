@@ -199,6 +199,15 @@ const all: Setting[] = [
     depends_on: 'clipboard.enabled',
   },
   {
+    id: 'optimise_files',
+    pane: 'clipboard',
+    label: 'clipboard.optimise_files',
+    help: 'clipboard.optimise_files.help',
+    path: 'clipboard.optimise_files',
+    control: { kind: 'switch' },
+    depends_on: 'clipboard.enabled',
+  },
+  {
     id: 'clipboard_max_size',
     pane: 'clipboard',
     label: 'clipboard.max_size',

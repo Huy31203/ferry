@@ -503,7 +503,7 @@ pub fn builtin() -> Registry {
     // Later streams register their steps here, one line each:
     crate::video_steps::register(&mut r); // stream A: Media::Video
     crate::audio_steps::register(&mut r); // stream B: Media::Audio
-    // crate::pdf_steps::register(&mut r);     // stream E: Media::Pdf
+    crate::pdf_steps::register(&mut r); // stream E: Media::Pdf
     r
 }
 
@@ -558,7 +558,7 @@ mod tests {
     fn only_media_with_a_transform_step_are_offered() {
         assert_eq!(
             builtin().media(),
-            [Media::Image, Media::Video, Media::Audio]
+            [Media::Image, Media::Video, Media::Audio, Media::Pdf]
         );
         assert!(builtin().get(Media::Video, "copy").is_some());
     }

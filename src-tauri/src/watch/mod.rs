@@ -18,6 +18,7 @@ use ferry_core::watch::settle::SettleConfig;
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{debug, info, warn};
 
+use crate::pipe_jobs::{self, Trigger};
 use crate::state::{AppState, relock};
 use crate::{jobs, platform, tray};
 
@@ -148,7 +149,13 @@ fn dispatch_ready(app: &AppHandle, ready: Ready) {
         relock(&state.quiet).insert(id.clone());
     }
     let started = match ready.origin {
-        Origin::Folder { .. } => jobs::start_auto_copied(app, job, Level::Normal),
+        // stream F: a folder's pipeline runs its files (and auto-copies them like a drop)
+        Origin::Folder { .. } => match ready.pipeline {
+            Some(id) => {
+                pipe_jobs::start_assigned(app, job, Trigger::Pipeline(id), Level::Normal, None)
+            }
+            None => jobs::start_auto_copied(app, job, Level::Normal),
+        },
         Origin::Capture { .. } => jobs::start(app, job, Level::Normal, None),
     };
     if !started {

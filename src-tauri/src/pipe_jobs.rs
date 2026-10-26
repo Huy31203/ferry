@@ -27,8 +27,7 @@ pub enum Trigger {
     Clipboard,
     DropZone,
     Zone(u32),
-    /// For watched folders, once their settings carry a pipeline id.
-    #[allow(dead_code)]
+    /// A watched folder's pipeline.
     Pipeline(u32),
 }
 
@@ -154,6 +153,8 @@ pub fn media_of(job: &Job) -> Media {
         Media::Video
     } else if job.is_audio() {
         Media::Audio
+    } else if job.is_pdf() {
+        Media::Pdf
     } else {
         Media::Image
     }
@@ -302,7 +303,7 @@ pub fn start_assigned(
     launch(app, job, trigger, level, source_seq)
 }
 
-/// The drop zone copies its result as a folder drop does; the rest start plainly.
+/// The drop zone and watched folders copy their results as a drop does; the rest start plainly.
 fn launch(
     app: &AppHandle,
     job: Job,
@@ -310,7 +311,7 @@ fn launch(
     level: Level,
     source_seq: Option<u64>,
 ) -> bool {
-    if trigger == Trigger::DropZone {
+    if matches!(trigger, Trigger::DropZone | Trigger::Pipeline(_)) {
         jobs::start_auto_copied(app, job, level)
     } else {
         jobs::start(app, job, level, source_seq)
@@ -392,6 +393,7 @@ pub fn options(app: &AppHandle, id: &JobId, mut o: RunOptions) -> RunOptions {
     pipe.override_output(id, &mut o.output);
     pipe.override_output(id, &mut o.video.output);
     pipe.override_output(id, &mut o.audio.settings.output);
+    pipe.override_output(id, &mut o.pdf_output); // stream E
     o
 }
 
