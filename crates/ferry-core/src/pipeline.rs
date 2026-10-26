@@ -764,7 +764,7 @@ impl Job {
             gifsicle: o.gifsicle.clone(),
             cancel: o.cancel.clone(),
             encoder: self.edits.encoder, // stream F: pipelines
-            adaptive: false,             // stream F: pipelines
+            adaptive: o.adaptive,        // stream F: pipelines
         };
         // sE pdf-formats
         if self.source_format == Format::Pdf {
@@ -1001,7 +1001,9 @@ impl Job {
             let reserved = self.twin.then_some(source.as_path());
             output::unique_except(&wanted, own.as_deref(), reserved)
         };
+        // Extracted pages never replace their PDF, signed or not.
         let trash_source = kind == OutputKind::Converted
+            && self.source_format != Format::Pdf
             && rules.converted.location == Location::InPlace
             && path != source
             && !self.twin;
@@ -2761,6 +2763,23 @@ mod tests {
     }
 
     #[test]
+    fn a_real_run_searches_for_the_adaptive_quality() {
+        let size_with = |adaptive: bool| {
+            let env = Env::new();
+            let mut s = Settings::default();
+            s.images.compression = 95;
+            s.images.adaptive = adaptive;
+            let path = env.file("photo.jpg", &testutil::photo_jpeg(256, 256, 98));
+            let mut job = Job::file(&path, &s, true).unwrap();
+            let (finished, _) = run(&mut job, Level::Normal, &options_with(&s), &env);
+            assert_eq!(finished.unwrap().update.state, JobState::Done);
+            fs::metadata(&path).unwrap().len()
+        };
+        let (slider, adaptive) = (size_with(false), size_with(true));
+        assert!(adaptive < slider, "{adaptive} vs {slider}");
+    }
+
+    #[test]
     fn a_switched_file_is_written_as_a_conversion_and_restores() {
         let env = Env::new();
         let mut s = Settings::default();
@@ -3337,5 +3356,36 @@ mod tests {
             .update;
         assert_eq!(card.state, JobState::Done);
         assert!(path.with_file_name("doc").is_dir());
+    }
+
+    #[test]
+    fn extracting_pages_keeps_the_pdf_when_converted_results_go_in_place() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let extras = PdfExtras {
+            signed: true,
+            ..Default::default()
+        };
+        let mut settings = Settings::default();
+        settings.pdf.output.converted.location = Location::InPlace;
+        for pages in [
+            serde_json::json!({ "format": "png" }),
+            serde_json::json!({ "format": "png", "pages": { "first": 1, "last": 1 } }),
+        ] {
+            let (mut job, path, input) = pages_job(&env, 2, &extras);
+            extract(&mut job, pages);
+            let card = run(&mut job, Level::Normal, &options_with(&settings), &env)
+                .0
+                .unwrap()
+                .update;
+            assert_eq!(card.state, JobState::Done);
+            assert_eq!(fs::read(&path).unwrap(), input);
+            assert!(!env.dir.path().join(".trash/doc.pdf").exists());
+            // The next round starts clean.
+            let _ = fs::remove_dir_all(path.with_file_name("doc"));
+            let _ = fs::remove_file(path.with_file_name("doc.png"));
+        }
     }
 }

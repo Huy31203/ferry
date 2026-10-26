@@ -1,8 +1,8 @@
 //! Animated WebP through libwebp's animation API: frames decode to full
 //! canvases, and `WebPAnimEncoder` writes them again, keeping every frame's
 //! duration (the `webp` crate's `AnimEncoder` loses the last one) and the
-//! loop count. An optimisation or edit that would change the frame count
-//! fails, so an animation is never flattened.
+//! loop count. An optimisation or edit that would change the running time or
+//! leave a single frame fails, so an animation is never flattened.
 
 use std::os::raw::c_int;
 use std::ptr;
@@ -302,8 +302,27 @@ fn with_extras(webp: &[u8], extras: &Extras) -> Vec<u8> {
     out
 }
 
-/// Re-encode the animation. A result with another frame count is an error, so
-/// the original is kept (R§2.4).
+/// The summed duration of an animated WebP's frames, in ms.
+fn total_duration(bytes: &[u8]) -> u64 {
+    chunks(bytes)
+        .iter()
+        .filter(|(n, _)| n == b"ANMF")
+        .filter_map(|(_, d)| d.get(12..15))
+        .map(|b| u64::from(u32::from_le_bytes([b[0], b[1], b[2], 0])))
+        .sum()
+}
+
+/// Whether `out` is still an animation of `frames`. `WebPAnimEncoder` merges
+/// a frame identical to the one before into it, so the frame count may drop;
+/// the running time may not, and several frames must not become one.
+pub fn kept_intact(frames: &[Frame], out: &[u8]) -> bool {
+    let wanted: u64 = frames.iter().map(|f| u64::from(f.duration_ms)).sum();
+    (frames.len() < 2 || frame_count(out) > 1)
+        && total_duration(out).abs_diff(wanted) <= 1 + wanted / 100
+}
+
+/// Re-encode the animation. A result that is no longer the same animation is
+/// an error, so the original is kept (R§2.4).
 pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     let animation = decode(input)?;
     let original = chunks(input);
@@ -320,7 +339,7 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
         xmp: find(b"XMP "),
     };
     let out = encode(&animation, o, &extras)?;
-    if frame_count(&out) != frame_count(input) {
+    if !kept_intact(&animation.frames, &out) {
         return Err(OptimiseError::Encode(t("pdf.anim.flattened")));
     }
     Ok(out)
@@ -362,6 +381,40 @@ mod tests {
             300
         );
         assert!(crate::sniff::is_animated(&out, crate::sniff::Format::WebP));
+    }
+
+    #[test]
+    fn a_held_frame_merged_by_the_encoder_is_not_a_flattened_animation() {
+        let input = testutil::animated_webp_held_frame(64, 48);
+        let frames = decode(&input).unwrap().frames;
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[1].rgba, frames[2].rgba);
+        let out = optimise(&input, &OptimiseOptions::default()).unwrap();
+        assert_eq!(frame_count(&out), 2);
+        assert_eq!(
+            decode(&out)
+                .unwrap()
+                .frames
+                .iter()
+                .map(|f| f.duration_ms)
+                .sum::<u32>(),
+            600
+        );
+    }
+
+    #[test]
+    fn a_result_that_lost_time_or_collapsed_is_flattened() {
+        let frame = |duration_ms| Frame {
+            rgba: Vec::new(),
+            duration_ms,
+        };
+        let three = [frame(100), frame(200), frame(300)];
+        let two = testutil::animated_webp_frames(&[100, 500], 16, 16);
+        let one = testutil::animated_webp_frames(&[600], 16, 16);
+        let short = testutil::animated_webp_frames(&[100, 100], 16, 16);
+        assert!(kept_intact(&three, &two));
+        assert!(!kept_intact(&three, &one));
+        assert!(!kept_intact(&three, &short));
     }
 
     #[test]
