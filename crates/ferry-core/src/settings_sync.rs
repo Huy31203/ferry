@@ -25,7 +25,14 @@ pub const LOCAL: &[&str] = &[
     "share",         // Stream H: chosen editor, uploader and shelf app paths
 ];
 /// Path prefixes that sync only between computers with the same OS.
-pub const PER_OS: &[&str] = &["hotkeys", "svc.shortcuts", "clipboard.ignored_apps"];
+pub const PER_OS: &[&str] = &[
+    "hotkeys",
+    "svc.shortcuts",
+    "clipboard.ignored_apps",
+    "drop_zone.ignored_apps", // stream D: bundle ids on macOS, .exe names on Windows
+    "drop_zone.show_on",      // stream D: Windows has no drag-start signal, so it defaults differently
+    "video.output",           // stream A: ~/Movies on macOS, ~/Videos on Windows
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -484,6 +491,9 @@ mod tests {
             "hotkeys.optimise",
             "svc.shortcuts.preview",
             "clipboard.ignored_apps",
+            "drop_zone.ignored_apps",
+            "drop_zone.show_on",
+            "video.output.optimised.folder",
         ] {
             assert_eq!(scope(path), Scope::PerOs, "{path}");
         }
@@ -493,6 +503,9 @@ mod tests {
             "svc.updates.pill",
             "watchers.folders",
             "svc.sync_extra",
+            "drop_zone.batch_threshold",
+            "audio.output.optimised.folder",
+            "pipelines.library",
         ] {
             assert_eq!(scope(path), Scope::Shared, "{path}");
         }
