@@ -558,7 +558,7 @@ mod tests {
             .unwrap();
         assert_eq!(copy.label, "pipe.step.copy");
         assert_eq!(
-            serde_json::to_value(&copy.params[0]).unwrap()["control"]["kind"],
+            serde_json::to_value(copy.params[0]).unwrap()["control"]["kind"],
             "template"
         );
     }

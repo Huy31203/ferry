@@ -25,7 +25,7 @@ pub fn optimise(
         return Ok((own, format));
     };
     // JPEG has no alpha: a PNG with any transparency stays a PNG.
-    if format == Format::Png && pixels.rgba.chunks_exact(4).any(|p| p[3] != 255) {
+    if format == Format::Png && pixels.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255) {
         return Ok((own, format));
     }
     let bytes = if adaptive::applies(other, o) {

@@ -116,10 +116,9 @@ fn unique_ids(ids: &mut [&mut u32]) {
             redo.push(i);
         }
     }
-    let mut next = seen.iter().max().map_or(1, |m| m + 1);
-    for i in redo {
-        *ids[i] = next;
-        next += 1;
+    let first_free = seen.iter().max().map_or(1, |m| m + 1);
+    for (i, id) in redo.into_iter().zip(first_free..) {
+        *ids[i] = id;
     }
 }
 
@@ -273,31 +272,33 @@ mod tests {
 
     #[test]
     fn sanitise_gives_duplicate_ids_new_ones_and_clears_dangling_assignments() {
-        let mut p = Pipelines::default();
-        p.library = vec![
-            Pipeline {
+        let mut p = Pipelines {
+            library: vec![
+                Pipeline {
+                    id: 1,
+                    ..Default::default()
+                },
+                Pipeline {
+                    id: 1,
+                    ..Default::default()
+                },
+                Pipeline {
+                    id: 0,
+                    ..Default::default()
+                },
+            ],
+            zones: vec![Zone {
                 id: 1,
+                pipelines: PerMedia {
+                    image: Some(9),
+                    ..Default::default()
+                },
+                icon: "rocket".into(),
                 ..Default::default()
-            },
-            Pipeline {
-                id: 1,
-                ..Default::default()
-            },
-            Pipeline {
-                id: 0,
-                ..Default::default()
-            },
-        ];
-        p.clipboard.image = Some(9);
-        p.zones = vec![Zone {
-            id: 1,
-            pipelines: PerMedia {
-                image: Some(9),
-                ..Default::default()
-            },
-            icon: "rocket".into(),
+            }],
             ..Default::default()
-        }];
+        };
+        p.clipboard.image = Some(9);
         let p = p.sanitised();
         assert_eq!(
             p.library.iter().map(|p| p.id).collect::<Vec<_>>(),
@@ -316,13 +317,15 @@ mod tests {
 
     #[test]
     fn an_assignment_to_a_pipeline_of_another_media_is_cleared() {
-        let mut p = Pipelines::default();
-        p.library = vec![Pipeline {
-            id: 1,
-            name: "v".into(),
-            media: Media::Video,
+        let mut p = Pipelines {
+            library: vec![Pipeline {
+                id: 1,
+                name: "v".into(),
+                media: Media::Video,
+                ..Default::default()
+            }],
             ..Default::default()
-        }];
+        };
         p.clipboard.image = Some(1);
         p.clipboard.video = Some(1);
         let p = p.sanitised();
