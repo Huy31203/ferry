@@ -35,6 +35,14 @@ const TEXT: &str = "public.utf8-plain-text";
 const POLL: Duration = Duration::from_millis(250);
 
 fn uti(format: Format) -> &'static str {
+    // sE pdf-formats
+    match format {
+        Format::Tiff => return "public.tiff",
+        Format::Heic => return "public.heic",
+        Format::Avif => return "public.avif",
+        Format::Pdf => return "com.adobe.pdf",
+        _ => {}
+    }
     IMAGE_TYPES
         .iter()
         .find(|(_, f)| *f == format)

@@ -10,15 +10,19 @@ pub mod clip;
 pub mod color;
 pub mod drag;
 pub mod edit;
+pub mod formats; // sE pdf-formats
 pub mod fsutil;
 pub mod geometry;
 pub mod glyph;
 pub mod i18n;
 pub mod intake;
 pub mod integrations; // stream H
+pub mod isobmff; // sE pdf-formats
 pub mod job;
 pub mod optimise;
+pub mod oscodec; // sE pdf-formats
 pub mod output;
+pub mod pdf; // sE pdf-formats
 pub mod pipeline;
 pub mod run_state;
 pub mod selfwrite; // stream C

@@ -44,6 +44,11 @@ fn format_name(format: Format) -> &'static str {
         Format::Jpeg => "JFIF",
         Format::Gif => "GIF",
         Format::WebP => "image/webp",
+        // sE pdf-formats
+        Format::Tiff => "image/tiff",
+        Format::Heic => "image/heic",
+        Format::Avif => "image/avif",
+        Format::Pdf => "application/pdf",
         // stream A: video. A video never goes on the clipboard as data.
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => "",
         // stream B: audio never goes on the clipboard as data either.

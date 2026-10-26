@@ -12,7 +12,7 @@ use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{cancel::CancelToken, sniff::Format};
+use crate::{cancel::CancelToken, i18n::tf, sniff::Format};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -153,6 +153,13 @@ pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u
         Format::Jpeg => jpeg::optimise(input, o)?,
         Format::WebP => webp::optimise(input, o)?,
         Format::Gif => gif::optimise(input, o)?,
+        // sE pdf-formats
+        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => {
+            return Err(OptimiseError::Unsupported(tf(
+                "pdf.read_unsupported",
+                &[("format", format.label())],
+            )));
+        }
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             return Err(OptimiseError::Unsupported("video is not an image".into()));

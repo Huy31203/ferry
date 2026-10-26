@@ -29,6 +29,9 @@ export function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate
       compression: null,
       fit_under: null,
       level: 'normal',
+      dpi: null,
+      pages: null,
+      uncrop: false,
       encoder: null,
       strip_metadata: null,
       adaptive: false,
@@ -43,6 +46,9 @@ export function card(state: JobState, extra: Partial<JobUpdate> = {}): JobUpdate
     edit_hint: null,
     video: null,
     audio: null,
+    poster: null,
+    pages: null,
+    choices: (['png', 'jpeg', 'webp'] as const).map((format) => ({ format, first_only: false })),
     ...extra,
   };
 }

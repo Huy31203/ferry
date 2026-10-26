@@ -16,6 +16,16 @@ export interface AppRef {
   name: string;
 }
 
+// sE pdf-formats
+export type ConvertTo = 'keep' | 'jpeg' | 'png' | 'webp';
+
+/** A screen a PDF can be cropped to; mirrors ferry_core::settings::Device. */
+export interface Device {
+  name: string;
+  width: number;
+  height: number;
+}
+
 export interface Settings {
   version: number;
   general: {
@@ -62,6 +72,16 @@ export interface Settings {
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
+  // sE pdf-formats
+  pdf: {
+    dpi: number;
+    dpi_aggressive: number;
+    extract_dpi: number;
+    max_size_mb: number;
+    output: { optimised: OutputRule; converted: OutputRule };
+    devices: Device[];
+  };
+  formats: { heic_to: ConvertTo; tiff_to: ConvertTo; avif_to: ConvertTo };
   /** Stream C: mirrors ferry_core::settings::Watch. */
   watch: Watch;
   // Stream H: integrations

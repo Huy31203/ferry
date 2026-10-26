@@ -35,6 +35,8 @@ pub enum Action {
     /// Downscale to this percent.
     Scale(u8),
     Crop,
+    // sE pdf-formats
+    Pages,
     Convert(Format),
     KeepBoth(Format),
     Restore,
@@ -53,11 +55,16 @@ pub enum Action {
     Pipe(crate::pipe_menu::PipeAction), // stream F: pipelines
 }
 
-const FORMATS: [Format; 14] = [
+const FORMATS: [Format; 18] = [
     Format::Png,
     Format::Jpeg,
     Format::Gif,
     Format::WebP,
+    // sE pdf-formats
+    Format::Tiff,
+    Format::Heic,
+    Format::Avif,
+    Format::Pdf,
     // stream A: video
     Format::Mp4,
     Format::Hevc,
@@ -96,7 +103,7 @@ fn serde_key<T: Serialize>(value: &T) -> String {
 }
 
 /// The actions without a value, by their id part.
-const NAMED: [(&str, Action); 16] = [
+const NAMED: [(&str, Action); 17] = [
     ("open", Action::Open),
     ("reveal", Action::Reveal),
     ("copy", Action::Copy),
@@ -108,6 +115,8 @@ const NAMED: [(&str, Action); 16] = [
     ("aggressive", Action::Aggressive),
     ("fit", Action::Fit),
     ("crop", Action::Crop),
+    // sE pdf-formats
+    ("pages", Action::Pages),
     ("restore", Action::Restore),
     ("close", Action::Close),
     // stream A: video
@@ -168,6 +177,8 @@ impl Action {
         Some(match self {
             Action::Rename => "rename",
             Action::Crop => "crop",
+            // sE pdf-formats
+            Action::Pages => "pages",
             Action::Fit => "fit",
             Action::Compare => "compare",
             Action::Preview => "preview",
@@ -225,7 +236,14 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         Action::Integration(_) => file,
         Action::Pipe(p) => crate::pipe_menu::enabled(card, p), // stream F: pipelines
         Action::Restore => idle && card.can_restore,
-        Action::Convert(format) => card.can_edit && card.format != Some(format),
+        // sE pdf-formats (an image or PDF card converts only to its own choices)
+        Action::Convert(format) => {
+            card.can_edit
+                && card.format != Some(format)
+                && (card.video.is_some()
+                    || card.audio.is_some()
+                    || card.choices.iter().any(|c| c.format == format))
+        }
         Action::Scale(percent) => card.can_edit && card.edits.scale.unwrap_or(100) != percent,
         Action::Rerun | Action::Aggressive | Action::Fit | Action::Crop | Action::KeepBoth(_) => {
             card.can_edit
@@ -239,11 +257,12 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         Action::ExtractCover => idle && card.audio.as_ref().is_some_and(|a| a.has_cover),
         // stream A: video
         Action::Speed | Action::Mute => card.can_edit && card.video.is_some(),
+        // sE pdf-formats
+        Action::Pages => card.can_edit && card.source_format == Some(Format::Pdf),
     }
 }
 
-/// "Convert to ▸": PNG, JPEG, WebP, and GIF first on a card that started as a
-/// GIF (like the format bar).
+/// "Convert to ▸": the card's own choices (like the format bar).
 pub fn convert_formats(card: &JobUpdate) -> Vec<Format> {
     // stream B: audio
     if card.audio.is_some() {
@@ -263,10 +282,8 @@ pub fn convert_formats(card: &JobUpdate) -> Vec<Format> {
         .filter(|&f| f != Format::Hevc || hevc)
         .collect();
     }
-    let gif = (card.source_format == Some(Format::Gif)).then_some(Format::Gif);
-    gif.into_iter()
-        .chain([Format::Png, Format::Jpeg, Format::WebP])
-        .collect()
+    // sE pdf-formats
+    card.choices.iter().map(|c| c.format).collect()
 }
 
 /// Pop the card's menu at `(x, y)`, in the stack page's CSS pixels.
@@ -377,6 +394,14 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &item(Action::Close, t("card.close"), None)?,
         ],
     )?;
+    // sE pdf-formats (right after Crop)
+    if card.source_format == Some(Format::Pdf) {
+        let crop = item_id(&card.id, Action::Crop);
+        if let Some(at) = menu.items()?.iter().position(|i| i.id().as_ref() == crop) {
+            let extract = item(Action::Pages, t("pdf.menu.extract"), None)?;
+            menu.insert(&extract, at + 1)?;
+        }
+    }
     // stream A: video (right after Crop)
     if card.video.is_some() {
         let mute = if card.edits.mute {
@@ -600,10 +625,11 @@ mod tests {
         card.source_format = Some(Format::Png);
         card.can_edit = true;
         card.can_restore = true;
+        card.choices = ferry_core::formats::choices(Format::Png, false, 1, false);
         card
     }
 
-    const ALL: [Action; 18] = [
+    const ALL: [Action; 19] = [
         Action::Open,
         Action::Reveal,
         Action::Copy,
@@ -622,6 +648,7 @@ mod tests {
         Action::Close,
         Action::Speed,
         Action::Mute,
+        Action::Pages,
     ];
 
     #[test]
@@ -642,8 +669,8 @@ mod tests {
     fn a_finished_card_offers_everything_but_its_own_format_and_scale() {
         let card = done();
         for action in ALL {
-            // Speed and Mute are for video cards only.
-            let video_only = matches!(action, Action::Speed | Action::Mute);
+            // Speed and Mute are for video cards only, Pages for PDFs.
+            let video_only = matches!(action, Action::Speed | Action::Mute | Action::Pages);
             assert_eq!(enabled(&card, action), !video_only, "{action:?}");
         }
         assert!(!enabled(&card, Action::Convert(Format::Png)));
@@ -678,6 +705,26 @@ mod tests {
         card.can_edit = false;
         let on: Vec<Action> = ALL.into_iter().filter(|&a| enabled(&card, a)).collect();
         assert_eq!(on, [Action::Close]);
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_pdf_card_offers_extract_and_converts_only_to_images() {
+        let mut card = done();
+        card.source_format = Some(Format::Pdf);
+        card.format = Some(Format::Pdf);
+        card.choices = ferry_core::formats::choices(Format::Pdf, false, 3, false);
+        assert!(enabled(&card, Action::Pages));
+        assert_eq!(
+            convert_formats(&card),
+            [Format::Pdf, Format::Png, Format::Jpeg]
+        );
+        assert_eq!(
+            parse_id(&item_id(&card.id, Action::Pages)),
+            Some((card.id.clone(), Action::Pages))
+        );
+        assert_eq!(Action::Pages.page(), Some("pages"));
+        assert!(!enabled(&done(), Action::Pages));
     }
 
     // stream A: video
@@ -759,6 +806,7 @@ mod tests {
 
     #[test]
     fn a_gif_card_can_convert_back_to_gif() {
+        use ferry_core::formats::choices;
         let mut card = done();
         assert_eq!(
             convert_formats(&card),
@@ -766,11 +814,18 @@ mod tests {
         );
         card.source_format = Some(Format::Gif);
         card.format = Some(Format::WebP);
+        card.choices = choices(Format::Gif, true, 1, false);
         assert_eq!(
             convert_formats(&card),
             [Format::Gif, Format::Png, Format::Jpeg, Format::WebP]
         );
         assert!(enabled(&card, Action::Convert(Format::Gif)));
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_format_the_card_does_not_offer_is_disabled() {
+        assert!(!enabled(&done(), Action::Convert(Format::Pdf)));
     }
 
     // ---- stream B: audio ----

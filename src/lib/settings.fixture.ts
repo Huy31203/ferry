@@ -55,6 +55,26 @@ export const sample: Settings = {
   },
   backups: { retention_days: 7 },
   hotkeys: { optimise: 'Ctrl+Shift+C', aggressive: 'Ctrl+Shift+A', cycle_state: 'Ctrl+Shift+P' },
+  // sE pdf-formats
+  pdf: {
+    dpi: 150,
+    dpi_aggressive: 100,
+    extract_dpi: 150,
+    max_size_mb: 500,
+    output: {
+      optimised: { location: 'in_place', folder: '~/Documents/Ferry', template: '%f_optimised.%e' },
+      converted: { location: 'same_folder', folder: '~/Documents/Ferry', template: '%f.%e' },
+    },
+    devices: [
+      { name: 'iPhone', width: 1179, height: 2556 },
+      { name: 'iPhone Pro Max', width: 1320, height: 2868 },
+      { name: 'iPad', width: 1640, height: 2360 },
+      { name: 'iPad Pro 13-inch', width: 2064, height: 2752 },
+      { name: 'Kindle', width: 1236, height: 1648 },
+      { name: 'reMarkable', width: 1404, height: 1872 },
+    ],
+  },
+  formats: { heic_to: 'jpeg', tiff_to: 'jpeg', avif_to: 'keep' },
   watch: { captures: { screenshots: false, recordings: false, show_results: true }, folders: [] },
   share: { edit_with: { image: null, video: null, audio: null, pdf: null }, uploader: null, shelf_apps: [] },
   clip: { auto_copy: false },

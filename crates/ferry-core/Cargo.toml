@@ -12,15 +12,21 @@ test = false
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fast_image_resize = "6.1"
+# sE pdf-formats: deflate PDF images; recompress them in parallel.
+flate2 = "1.1"
 gif = "0.14"
 imagequant = "4.4"
+# sE pdf-formats: the writer (object model only); PDFium renders, loaded at run time.
+lopdf = { version = "0.45", default-features = false }
 # No nasm_simd, so building Ferry never needs NASM. Revisit if JPEG latency matters.
 mozjpeg = { version = "0.10", default-features = false }
 # The same features mozjpeg already enables; named here for the decoder's error manager.
 mozjpeg-sys = { version = "2.2.3", default-features = false, features = ["unwinding"] }
 notify = "8.2.0"
 oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_7881", "thread_safe"] }
 png = "0.18"
+rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # stream F: pipelines (BSD-2-Clause; the perceptual metric for adaptive compression)

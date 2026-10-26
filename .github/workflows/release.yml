@@ -69,6 +69,9 @@ jobs:
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.target }}
+      - name: Fetch PDFium
+        shell: bash
+        run: scripts/fetch-pdfium.sh ${{ matrix.target }}
       - name: Check updater signing
         shell: bash
         env:

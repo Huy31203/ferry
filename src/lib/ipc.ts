@@ -9,7 +9,7 @@ export type JobState =
   | { kind: 'restored' };
 
 // stream A: video (the last six)
-export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv' | 'mp3' | 'm4a' | 'flac' | 'wav' | 'aiff' | 'ogg' | 'opus'; // stream B: audio (the last seven)
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'tiff' | 'heic' | 'avif' | 'pdf' | 'mp4' | 'hevc' | 'av1' | 'webm' | 'mov' | 'mkv' | 'mp3' | 'm4a' | 'flac' | 'wav' | 'aiff' | 'ogg' | 'opus'; // sE pdf-formats (tiff to pdf), stream B: audio (the last seven)
 
 // ---- stream B: audio ----
 export type Loudness = 'off' | 'streaming' | 'apple_music' | 'podcast' | 'broadcast';
@@ -31,6 +31,18 @@ export type Size =
   | { kind: 'long_edge'; edge: number };
 
 /** Mirrors ferry_core::edit::Edits: the recipe every run applies to the original. */
+/** Mirrors ferry_core::edit::PageRange: 1-based, inclusive. */
+export interface PageRange {
+  first: number;
+  last: number;
+}
+
+/** Mirrors ferry_core::formats::ConvertChoice. */
+export interface ConvertChoice {
+  format: Format;
+  first_only: boolean;
+}
+
 export interface Edits {
   aspect: [number, number] | null;
   framing: 'centre' | 'smart';
@@ -40,6 +52,10 @@ export interface Edits {
   compression: number | null;
   fit_under: number | null;
   level: 'normal' | 'aggressive';
+  // sE pdf-formats
+  dpi: number | null;
+  pages: PageRange | null;
+  uncrop: boolean;
   // stream F: pipelines
   encoder: 'fast' | 'small' | 'visually_lossless' | null;
   strip_metadata: boolean | null;
@@ -88,6 +104,10 @@ export interface JobUpdate {
   video: VideoMeta | null;
   // stream B: audio
   audio: AudioCard | null;
+  // sE pdf-formats
+  poster: string | null;
+  pages: number | null;
+  choices: ConvertChoice[];
 }
 
 // stream A: video (mirrors ferry_core::job::VideoMeta)
@@ -104,7 +124,7 @@ export interface VideoMeta {
 /** Rust → stack: a menu item or hover key that ends in the page (`menu.rs`, `hover_keys.rs`). */
 export interface CardAction {
   id: string;
-  action: 'rename' | 'crop' | 'fit' | 'compare' | 'preview' | 'close' | 'speed' | 'share';
+  action: 'rename' | 'crop' | 'fit' | 'pages' | 'compare' | 'preview' | 'close' | 'speed' | 'share';
 }
 
 export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';

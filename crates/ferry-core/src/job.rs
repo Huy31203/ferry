@@ -94,6 +94,16 @@ pub struct JobUpdate {
     // stream B: audio
     #[serde(default)]
     pub audio: Option<crate::audio::AudioCard>,
+    // sE pdf-formats
+    /// A PNG of the original for formats the webviews cannot draw (TIFF, HEIC, PDF).
+    #[serde(default)]
+    pub poster: Option<PathBuf>,
+    /// The page count of a PDF, or of a multi-page TIFF.
+    #[serde(default)]
+    pub pages: Option<u32>,
+    /// The format bar's chips and the Convert menu, for an image or a PDF.
+    #[serde(default)]
+    pub choices: Vec<crate::formats::ConvertChoice>,
 }
 
 // stream A: video
@@ -117,6 +127,7 @@ pub struct VideoMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::ConvertChoice;
     use std::collections::HashSet;
 
     #[test]
@@ -180,6 +191,12 @@ mod tests {
             edit_hint: None,
             video: None,
             audio: None,
+            poster: None,
+            pages: Some(3),
+            choices: vec![ConvertChoice {
+                format: Format::Jpeg,
+                first_only: true,
+            }],
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains(r#""source":"clipboard""#), "{json}");
@@ -235,6 +252,9 @@ mod tests {
             edit_hint: None,
             video: Some(meta),
             audio: None,
+            poster: None,
+            pages: None,
+            choices: Vec::new(),
         };
         let json = serde_json::to_string(&update).unwrap();
         assert_eq!(serde_json::from_str::<JobUpdate>(&json).unwrap(), update);
