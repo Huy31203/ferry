@@ -480,8 +480,7 @@ mod tests {
 
     #[test]
     fn only_media_with_a_transform_step_are_offered() {
-        // Only the common steps exist until the image steps register (Task 6).
-        assert_eq!(builtin().media(), []);
+        assert_eq!(builtin().media(), [Media::Image]);
         assert!(builtin().get(Media::Video, "copy").is_some());
     }
 
