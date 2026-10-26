@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { draggable, hoverTarget, isBusy, openTool, remove, upsert, type OpenTool, type Tool } from '../lib/cards';
+  import { draggable, hoverTarget, isBusy, isPopover, openTool, remove, upsert, type OpenTool, type Tool } from '../lib/cards';
   import type { CropFrame } from '../lib/edits';
   import type { CardAction, EditsPatch, JobUpdate, StackConfig } from '../lib/ipc';
   import type { Settings } from '../lib/settings';
@@ -16,7 +16,8 @@ import { shareAnchor } from '../lib/share'; // Stream H
   import CompactList from './CompactList.svelte'; // Stream D
   import CropPopover from './CropPopover.svelte';
   import FitPopover from './FitPopover.svelte';
-  import PdfCropPopover from './PdfCropPopover.svelte'; // sE pdf-formats
+  import PagesPopover from './PagesPopover.svelte'; // sE pdf-formats
+  import PdfCropPopover from './PdfCropPopover.svelte';
   import SpeedPopover from './SpeedPopover.svelte'; // stream A: video
   import DragAllBar from './DragAllBar.svelte';
   import UpdatePill from './UpdatePill.svelte';
@@ -117,7 +118,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
 
   // A click elsewhere in the stack closes a popover (spec §5.3 "click-away").
   function clickAway(event: PointerEvent) {
-    if (tool === null || (tool.kind !== 'crop' && tool.kind !== 'fit' && tool.kind !== 'speed')) return;
+    if (tool === null || !isPopover(tool.kind)) return;
     const target = event.target as Element;
     if (target.closest('[data-popover]') || target.closest(`[data-action="${tool.kind}"]`)) return;
     tool = null;
@@ -337,6 +338,9 @@ import { shareAnchor } from '../lib/share'; // Stream H
         />
       {:else if owner && tool?.kind === 'fit'}
         <FitPopover card={owner} onapply={(edits) => apply(owner.id, edits)} onclose={() => setTool(owner.id, null)} />
+      {:else if owner && tool?.kind === 'pages'}
+        <!-- sE pdf-formats -->
+        <PagesPopover card={owner} onapply={(edits) => apply(owner.id, edits)} onclose={() => setTool(owner.id, null)} />
       {:else if owner && tool?.kind === 'speed'}
         <SpeedPopover
           card={owner}
@@ -385,6 +389,9 @@ import { shareAnchor } from '../lib/share'; // Stream H
         />
       {:else if open === 'fit'}
         <FitPopover {card} onapply={(edits) => apply(card.id, edits)} onclose={() => setTool(card.id, null)} />
+      {:else if open === 'pages'}
+        <!-- sE pdf-formats -->
+        <PagesPopover {card} onapply={(edits) => apply(card.id, edits)} onclose={() => setTool(card.id, null)} />
       {:else if open === 'speed'}
         <!-- stream A: video -->
         <SpeedPopover

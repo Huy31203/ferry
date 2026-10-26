@@ -3,7 +3,9 @@
 //! result is placed by the same `put` / `put_back` rules as an image's, under
 //! the PDF output rules.
 
-use super::{Content, Deliver, Finished, Job, RunOptions, bytes_label};
+use std::fs;
+
+use super::{Content, Deliver, Finished, Job, OutputKind, RunOptions, bytes_label, shown};
 use crate::i18n::{t, tf};
 use crate::job::{JobState, JobUpdate};
 use crate::optimise::{self, Level, OptimiseError, OptimiseOptions, Outcome};
@@ -61,6 +63,7 @@ impl Job {
                 emit(job.update(JobState::Optimising { progress, step }, None));
             }
         };
+        let mut extracted = None;
         // (state, Some((bytes, fit target missed)))
         let (state, result) = if plain {
             match pdf::optimise(original, dpi, options, &mut |p| report(p, step.clone())) {
@@ -78,12 +81,13 @@ impl Job {
                     bytes,
                     missed_target,
                 }) => (JobState::Done, Some((bytes, missed_target))),
-                Ok(PdfResult::Pages { .. }) => {
-                    let e = OptimiseError::Unsupported(tf(
-                        "pdf.write_unsupported",
-                        &[("format", self.edits.format.map_or("", Format::label))],
-                    ));
-                    return Some(self.fail(self.reason(&e), e));
+                Ok(PdfResult::Pages {
+                    format,
+                    pages,
+                    size,
+                }) => {
+                    extracted = Some((format, pages, size));
+                    (JobState::Done, None)
                 }
                 Err(OptimiseError::Cancelled) => return None,
                 Err(e) => return Some(self.fail(self.reason(&e), e)),
@@ -95,8 +99,15 @@ impl Job {
         }
         self.pdf_dpi = Some(dpi);
         self.dims_after = None;
-        let written = match result {
-            Some((bytes, missed)) => {
+        let written = match (result, extracted) {
+            (_, Some((format, pages, size))) => {
+                self.note = None;
+                self.dims_after = Some(size);
+                let after = pages.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+                self.put_pages(format, &pages, original, o, deliver)
+                    .map(|()| Some(after))
+            }
+            (Some((bytes, missed)), None) => {
                 self.note = missed.then(|| {
                     let target = bytes_label(self.edits.fit_under.unwrap_or_default());
                     tf("card.note.fit_missed", &[("size", &target)])
@@ -111,7 +122,7 @@ impl Job {
                 )
                 .map(|()| Some(after))
             }
-            None => {
+            (None, None) => {
                 self.note = None;
                 let replace = self.changed;
                 self.put_back(Content::Bytes(original), replace, o, deliver)
@@ -127,17 +138,92 @@ impl Job {
         })
     }
 
-    /// "3 pages · 150 dpi", plus "cropped" and "aggressive" when they apply.
+    /// Write extracted pages: one page is a file beside the PDF, several are
+    /// a folder of numbered images (made aside, then renamed into place, so
+    /// nothing partial is ever left).
+    fn put_pages(
+        &mut self,
+        format: Format,
+        pages: &[(u32, Vec<u8>)],
+        original: &[u8],
+        o: &RunOptions,
+        deliver: Deliver,
+    ) -> Result<(), (String, String)> {
+        if let [(_, bytes)] = pages {
+            return self.put(
+                Content::Bytes(bytes),
+                format,
+                Content::Bytes(original),
+                o,
+                deliver,
+            );
+        }
+        let ext = format.extension();
+        let digits = self.pages.unwrap_or(1).to_string().len();
+        self.place_result(
+            ext,
+            OutputKind::Converted,
+            true,
+            Content::Bytes(original),
+            o,
+            &mut |_, folder| {
+                let name = folder
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                let tmp = folder.with_file_name(format!("{name}.ferry-tmp"));
+                let _ = fs::remove_dir_all(&tmp);
+                let made = fs::create_dir_all(&tmp)
+                    .and_then(|()| {
+                        pages.iter().try_for_each(|(n, bytes)| {
+                            fs::write(tmp.join(format!("{name}-{n:0digits$}.{ext}")), bytes)
+                        })
+                    })
+                    .and_then(|()| {
+                        // This job's own earlier result.
+                        if folder.exists() {
+                            (o.trash)(folder)?;
+                        }
+                        fs::rename(&tmp, folder)
+                    });
+                made.map_err(|e| {
+                    let _ = fs::remove_dir_all(&tmp);
+                    let parent = folder.parent().unwrap_or(folder);
+                    (tf("error.write", &[("dir", &shown(parent))]), e.to_string())
+                })
+            },
+        )?;
+        self.format = format;
+        self.ext = String::new();
+        self.changed = true;
+        Ok(())
+    }
+
+    /// "3 pages · 150 dpi", plus "cropped" and "aggressive" when they apply;
+    /// for extracted pages "3 × PNG · 150 dpi".
     pub(super) fn pdf_detail(&self) -> String {
         let pages = self.pages.unwrap_or(1);
-        let mut parts = vec![tf(
-            if pages == 1 {
-                "pdf.detail.page"
-            } else {
-                "pdf.detail.pages"
-            },
-            &[("n", &pages.to_string())],
-        )];
+        let mut parts = if self.format == Format::Pdf {
+            vec![tf(
+                if pages == 1 {
+                    "pdf.detail.page"
+                } else {
+                    "pdf.detail.pages"
+                },
+                &[("n", &pages.to_string())],
+            )]
+        } else {
+            let (first, last) = self
+                .edits
+                .pages
+                .map_or((1, pages), |r| (r.first, r.last.min(pages)));
+            vec![tf(
+                "pdf.detail.images",
+                &[
+                    ("n", &(last + 1).saturating_sub(first).to_string()),
+                    ("format", self.format.label()),
+                ],
+            )]
+        };
         if let Some(dpi) = self.pdf_dpi {
             parts.push(tf("pdf.detail.dpi", &[("n", &dpi.to_string())]));
         }

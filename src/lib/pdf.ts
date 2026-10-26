@@ -1,6 +1,7 @@
 // sE pdf-formats: the PDF card's pure helpers (crop, and below, extracting pages).
 import { fitRatio, type CropFrame } from './edits';
-import type { Edits, EditsPatch } from './ipc';
+import { t } from './i18n';
+import type { Edits, EditsPatch, JobUpdate } from './ipc';
 import type { Device } from './settings';
 
 /** What the PDF tools read from settings; `pdf_config` fills it. */
@@ -50,4 +51,44 @@ export function pdfCropForm(edits: Edits): PdfCropForm {
 
 export function pdfCropPatch(form: PdfCropForm): EditsPatch {
   return { aspect: form.aspect, uncrop: form.uncrop };
+}
+
+/** The resolutions the DPI choices step through, highest first (mirrors ferry_core::pdf::DPI_STOPS). */
+export const DPI_STOPS = [300, 250, 200, 150, 100, 72, 48];
+
+export function dpiLabel(n: number): string {
+  return t('pdf.dpi.label', { n });
+}
+
+export interface PagesForm {
+  format: 'png' | 'jpeg';
+  all: boolean;
+  from: string;
+  to: string;
+  dpi: number;
+}
+
+export function pagesForm(card: JobUpdate, cfg: PdfConfig): PagesForm {
+  const range = card.edits.pages;
+  return {
+    format: card.edits.format === 'jpeg' ? 'jpeg' : 'png',
+    all: range === null,
+    from: String(range?.first ?? 1),
+    to: String(range?.last ?? card.pages ?? 1),
+    dpi: card.edits.dpi ?? cfg.extract_dpi,
+  };
+}
+
+const whole = (text: string): number | null => (/^\d+$/.test(text.trim()) ? Number(text) : null);
+
+/** The patch for extracting `form`'s pages, or why it can't be (`count` is the PDF's page count). */
+export function checkPages(form: PagesForm, count: number | null): { patch: EditsPatch | null; error: string | null } {
+  const patch = (pages: { first: number; last: number } | null): EditsPatch => ({ format: form.format, pages, dpi: form.dpi });
+  if (form.all) return { patch: patch(null), error: null };
+  const first = whole(form.from);
+  const last = whole(form.to);
+  if (first === null || last === null || first < 1 || last < first || (count !== null && last > count)) {
+    return { patch: null, error: t('pdf.pages.invalid', { n: count ?? '?' }) };
+  }
+  return { patch: patch({ first, last }), error: null };
 }

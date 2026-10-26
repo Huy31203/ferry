@@ -5,6 +5,7 @@ import {
   dragAllFiles,
   hoverTarget,
   isBusy,
+  isPopover,
   needsOriginal,
   openTool,
   railActions,
@@ -157,5 +158,12 @@ describe('audio cards', () => {
     expect(railActions(a)).toEqual(['downscale', 'compression', 'restore', 'copy', 'more']);
     expect(railActions({ ...a, audio: { ...a.audio!, has_cover: false, lossless: true } })).toEqual(['restore', 'copy', 'more']);
     expect(railActions(a, true)).toEqual(['downscale', 'restore', 'copy', 'more']);
+  });
+});
+
+describe('popover tools', () => {
+  it('knows which tools are popovers', () => {
+    expect(isPopover('pages')).toBe(true);
+    expect(isPopover('rename')).toBe(false);
   });
 });

@@ -901,7 +901,7 @@ impl Job {
                 } else {
                     OutputKind::Converted
                 };
-                self.place_result(&ext, kind, original, o, &mut |job, path| {
+                self.place_result(&ext, kind, false, original, o, &mut |job, path| {
                     let source = job
                         .source_path
                         .clone()
@@ -919,10 +919,13 @@ impl Job {
     /// Choose where a file job's result goes, make room for it (the previous
     /// result goes to the Trash, a conversion may trash the source) and have
     /// `write` make it there. Returns the path, which is now the job's output.
+    /// A `folder` result takes the name the rules give a file, without its
+    /// extension.
     fn place_result(
         &mut self,
         ext: &str,
         kind: OutputKind,
+        folder: bool,
         original: Content,
         o: &RunOptions,
         write: Write,
@@ -955,6 +958,11 @@ impl Job {
             &o.home,
             Local::now().date_naive(),
         );
+        let wanted = if folder && wanted.extension().is_some_and(|e| e == ext) {
+            wanted.with_extension("")
+        } else {
+            wanted
+        };
         let own = self.last.as_ref().map(|w| w.path.clone());
         // Over the source, unless that is gone to the Trash and
         // something else has taken its place.
@@ -2942,5 +2950,211 @@ mod tests {
         }
         job.restore(&options(), &mut |_, _, _| Ok(()));
         assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    fn extract(job: &mut Job, patch: serde_json::Value) {
+        job.edit(serde_json::from_value(patch).unwrap());
+    }
+
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn pages_job(env: &Env, count: usize, extras: &PdfExtras) -> (Job, PathBuf, Vec<u8>) {
+        let (path, input) = pdf_file(env, "doc.pdf", &vec![PdfPage::default(); count], extras);
+        (
+            Job::file(&path, &Settings::default(), true).unwrap(),
+            path,
+            input,
+        )
+    }
+
+    #[test]
+    fn extracting_pages_writes_a_folder_beside_the_pdf() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, input) = pages_job(&env, 3, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        let folder = path.with_file_name("doc");
+        assert_eq!(names(&folder), ["doc-1.png", "doc-2.png", "doc-3.png"]);
+        assert_eq!(
+            (card.output.as_deref(), card.ext.as_str(), card.converted),
+            (Some(folder.as_path()), "", true)
+        );
+        assert_eq!(card.detail, "3 × PNG · 150 dpi");
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn twelve_pages_are_numbered_with_two_digits() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 12, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "jpeg", "dpi": 48 }));
+        run(&mut job, Level::Normal, &options(), &env);
+        let found = names(&path.with_file_name("doc"));
+        assert_eq!(found.len(), 12);
+        assert_eq!(
+            (found[0].as_str(), found[11].as_str()),
+            ("doc-01.jpg", "doc-12.jpg")
+        );
+    }
+
+    #[test]
+    fn a_single_page_becomes_one_image_file() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(
+            &mut job,
+            serde_json::json!({ "format": "jpeg", "pages": { "first": 2, "last": 2 } }),
+        );
+        run(&mut job, Level::Normal, &options(), &env);
+        let image = path.with_file_name("doc.jpg");
+        assert_eq!(sniff::sniff(&fs::read(&image).unwrap()), Some(Format::Jpeg));
+        assert!(!path.with_file_name("doc").exists());
+    }
+
+    #[test]
+    fn a_page_past_the_end_says_how_many_there_are() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, _, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(
+            &mut job,
+            serde_json::json!({ "format": "png", "pages": { "first": 5, "last": 6 } }),
+        );
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            card.state,
+            JobState::Error {
+                reason: tf("pdf.error.no_page", &[("count", "3")])
+            }
+        );
+    }
+
+    #[test]
+    fn re_extracting_replaces_its_own_folder() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        run(&mut job, Level::Normal, &options(), &env);
+        extract(&mut job, serde_json::json!({ "dpi": 72 }));
+        run(&mut job, Level::Normal, &options(), &env);
+        assert_eq!(names(&path.with_file_name("doc")).len(), 3);
+        assert!(!path.with_file_name("doc (2)").exists());
+        assert!(env.dir.path().join(".trash/doc").is_dir());
+    }
+
+    #[test]
+    fn a_taken_folder_name_gets_a_number() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 2, &PdfExtras::default());
+        let taken = path.with_file_name("doc");
+        fs::create_dir(&taken).unwrap();
+        fs::write(taken.join("mine.txt"), b"keep").unwrap();
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(
+            card.output.as_deref(),
+            Some(path.with_file_name("doc (2)").as_path())
+        );
+        assert_eq!(names(&taken), ["mine.txt"]);
+        assert_eq!(
+            names(&path.with_file_name("doc (2)")),
+            ["doc (2)-1.png", "doc (2)-2.png"]
+        );
+    }
+
+    #[test]
+    fn a_cancelled_extraction_leaves_nothing_behind() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, _) = pages_job(&env, 3, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let o = options();
+        let token = o.cancel.clone();
+        let finished = job.run(
+            Level::Normal,
+            &o,
+            &env.backups,
+            &mut |u| {
+                if matches!(&u.state, JobState::Optimising { step, .. } if step == &tf("pdf.step.page", &[("n", "2"), ("total", "3")]))
+                {
+                    token.cancel();
+                }
+            },
+            &mut |_, _, _| Ok(()),
+        );
+        assert!(finished.is_none());
+        assert!(!path.with_file_name("doc").exists());
+        assert!(!path.with_file_name("doc.ferry-tmp").exists());
+    }
+
+    #[test]
+    fn restore_trashes_the_extracted_pages() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let (mut job, path, input) = pages_job(&env, 2, &PdfExtras::default());
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        run(&mut job, Level::Normal, &options(), &env);
+        let card = job.restore(&options(), &mut |_, _, _| Ok(())).update;
+        assert_eq!(card.state, JobState::Restored);
+        assert!(!path.with_file_name("doc").exists());
+        assert!(env.dir.path().join(".trash/doc").is_dir());
+        assert_eq!(fs::read(&path).unwrap(), input);
+    }
+
+    #[test]
+    fn a_signed_pdf_can_still_be_extracted() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let env = Env::new();
+        let extras = PdfExtras {
+            signed: true,
+            ..Default::default()
+        };
+        let (mut job, path, _) = pages_job(&env, 2, &extras);
+        extract(&mut job, serde_json::json!({ "format": "png" }));
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert_eq!(card.state, JobState::Done);
+        assert!(path.with_file_name("doc").is_dir());
     }
 }
