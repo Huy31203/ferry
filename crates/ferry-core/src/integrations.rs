@@ -142,7 +142,7 @@ pub const DROPSHARE: KnownApp = KnownApp {
 };
 
 /// The bundle ids are unverified, so the name search is the fallback.
-pub const SHELVES: [KnownApp; 3] = [
+pub const SHELVES: [KnownApp; 4] = [
     KnownApp {
         name: "Yoink",
         bundle_ids: &["at.EternalStorms.Yoink", "at.EternalStorms.Yoink-setapp"],
@@ -157,6 +157,11 @@ pub const SHELVES: [KnownApp; 3] = [
         name: "Dockside",
         bundle_ids: &[],
         bundle_names: &["Dockside.app"],
+    },
+    KnownApp {
+        name: "Dropshelf",
+        bundle_ids: &["com.pilotmoon.Dropshelf"],
+        bundle_names: &["Dropshelf.app"],
     },
 ];
 
