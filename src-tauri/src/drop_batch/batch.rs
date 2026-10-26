@@ -85,6 +85,7 @@ pub fn add(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) {
         let state = app.state::<AppState>();
         let options = ScanOptions {
             exclude: vec![state.backups_dir.clone(), state.work_dir.clone()],
+            own: crate::state::own_outputs(&state.jobs.lock().unwrap()),
             ..ScanOptions::default()
         };
         let found = scan(&paths, &options);

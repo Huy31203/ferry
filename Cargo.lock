@@ -1446,6 +1446,7 @@ dependencies = [
  "chrono",
  "clipboard-win",
  "ferry-core",
+ "glob",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
