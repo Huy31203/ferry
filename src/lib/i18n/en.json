@@ -327,6 +327,7 @@
   "slider.extreme": "Extreme",
   "error.write": "Can't write to {dir}",
   "error.read": "Can't read {name}: {why}",
+  "error.folder": "{name} is a folder. Drop it on Ferry's drop zone to optimise what is inside.",
   "error.not_an_image": "{name} is not a PNG, JPEG, GIF or WebP image",
   "error.decode": "Can't read this {format} — it may be damaged",
   "error.encode": "Encoder failed ({format})",
