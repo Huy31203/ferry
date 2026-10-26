@@ -3,16 +3,19 @@
 //! profile kept. Optimising is lossless:
 //! every page keeps its colour type, bit depth, ICC profile, resolution and
 //! orientation and is written again with Deflate and a horizontal predictor.
+//! Unless metadata is stripped, a page's other tags (EXIF and GPS directories,
+//! XMP, IPTC, Copyright, Artist, ...) are copied as they are. A file with
+//! Photoshop layers is not rewritten at all.
 
 use std::io::{Cursor, Seek, Write};
 
-use tiff::ColorType;
-use tiff::TiffError;
 use tiff::decoder::{Decoder, DecodingResult, Limits, ifd::Value};
 use tiff::encoder::colortype::{self, ColorType as Encodable};
 use tiff::encoder::compression::DeflateLevel;
 use tiff::encoder::{Compression, Predictor, Rational, TiffEncoder, TiffKindStandard, TiffValue};
+use tiff::tags::{ByteOrder, Type, ValueBuffer};
 use tiff::tags::{ExtraSamples, Tag};
+use tiff::{ColorType, Directory, TiffError};
 
 use super::png::MAX_PIXELS;
 use super::{OptimiseError, OptimiseOptions};
@@ -59,6 +62,38 @@ struct Native {
     orientation: Option<u16>,
     resolution: Option<Resolution>,
     alpha: ExtraSamples,
+    extras: Extras,
+}
+
+/// Tags copied byte for byte.
+type RawTags = Vec<(Tag, ValueBuffer)>;
+
+/// What a page carries besides what `Native` names: its other tags and the
+/// entries of its EXIF and GPS directories.
+#[derive(Default)]
+struct Extras {
+    tags: RawTags,
+    exif: RawTags,
+    gps: RawTags,
+}
+
+/// Photoshop's layer data (`ImageSourceData`) and image resources.
+const PHOTOSHOP_LAYERS: u16 = 37724;
+const PHOTOSHOP_RESOURCES: u16 = 34377;
+const EXIF_POINTER: u16 = 34665;
+const GPS_POINTER: u16 = 34853;
+const INTEROP_POINTER: u16 = 40965;
+const MAKER_NOTE: u16 = 37500;
+
+/// Tags the encoder writes itself, that describe how the image data is
+/// stored, or that point elsewhere in the file: never copied as they are.
+fn is_own_tag(tag: u16) -> bool {
+    matches!(
+        tag,
+        256..=266 | 273 | 274 | 277..=284 | 296 | 317 | 320 | 322..=325 | 330 | 338..=341
+            | 347 | 512..=521 | 529..=532 | 34675 | PHOTOSHOP_LAYERS | PHOTOSHOP_RESOURCES
+            | EXIF_POINTER | GPS_POINTER | INTEROP_POINTER | MAKER_NOTE
+    )
 }
 
 enum Samples {
@@ -66,8 +101,59 @@ enum Samples {
     Sixteen(Vec<u16>),
 }
 
-/// The current page, as stored.
-fn read_native(decoder: &mut Reader) -> Result<Native, OptimiseError> {
+/// The entries of `dir` that can be copied: whole values, not offsets into the
+/// old file. One that cannot be read is left out.
+fn read_raw(decoder: &mut Reader, dir: &Directory) -> RawTags {
+    let tags: Vec<Tag> = dir
+        .iter()
+        .filter(|(tag, entry)| {
+            !is_own_tag(tag.to_u16())
+                && !matches!(
+                    entry.field_type(),
+                    Type::IFD | Type::IFD8 | Type::LONG8 | Type::SLONG8
+                )
+        })
+        .map(|(tag, _)| tag)
+        .collect();
+    let mut ifd = decoder.read_directory_tags(dir);
+    tags.into_iter()
+        .filter_map(|tag| {
+            let mut value = ValueBuffer::empty(Type::BYTE);
+            ifd.find_tag_buf(tag, &mut value).ok()??;
+            value.set_byte_order(ByteOrder::native());
+            Some((tag, value))
+        })
+        .collect()
+}
+
+/// The entries of the directory the current page's `pointer` tag leads to.
+fn read_sub(decoder: &mut Reader, pointer: u16) -> RawTags {
+    let dir = decoder
+        .find_tag(Tag::from_u16_exhaustive(pointer))
+        .ok()
+        .flatten()
+        .and_then(|v| v.into_ifd_pointer().ok())
+        .and_then(|at| decoder.read_directory(at).ok());
+    dir.map_or_else(Vec::new, |dir| read_raw(decoder, &dir))
+}
+
+/// The current page's tags that are kept as they are.
+fn read_extras(decoder: &mut Reader) -> Extras {
+    let Some(dir) = decoder
+        .ifd_pointer()
+        .and_then(|at| decoder.read_directory(at).ok())
+    else {
+        return Extras::default();
+    };
+    Extras {
+        tags: read_raw(decoder, &dir),
+        exif: read_sub(decoder, EXIF_POINTER),
+        gps: read_sub(decoder, GPS_POINTER),
+    }
+}
+
+/// The current page, as stored; `keep` also reads the tags to copy.
+fn read_native(decoder: &mut Reader, keep: bool) -> Result<Native, OptimiseError> {
     let (width, height) = decoder.dimensions().map_err(decode_err)?;
     if u64::from(width) * u64::from(height) > MAX_PIXELS {
         return Err(unsupported());
@@ -102,6 +188,11 @@ fn read_native(decoder: &mut Reader) -> Result<Native, OptimiseError> {
         Some(0) => ExtraSamples::Unspecified,
         _ => ExtraSamples::UnassociatedAlpha,
     };
+    let extras = if keep {
+        read_extras(decoder)
+    } else {
+        Extras::default()
+    };
     Ok(Native {
         width,
         height,
@@ -116,6 +207,7 @@ fn read_native(decoder: &mut Reader) -> Result<Native, OptimiseError> {
             .flatten(),
         resolution,
         alpha,
+        extras,
         samples: match decoder.read_image().map_err(decode_err)? {
             DecodingResult::U8(v) => Samples::Eight(v),
             DecodingResult::U16(v) => Samples::Sixteen(v),
@@ -166,7 +258,7 @@ pub fn decode_raster(bytes: &[u8]) -> Result<Raster, OptimiseError> {
 /// The current page. Samples of 16 bits are narrowed with `>> 8`; grey
 /// becomes RGB; CMYK is converted naively (no colour management).
 fn decode_page(decoder: &mut Reader) -> Result<Raster, OptimiseError> {
-    let page = read_native(decoder)?;
+    let page = read_native(decoder, false)?;
     let samples = match page.samples {
         Samples::Eight(v) => v,
         Samples::Sixteen(v) => v.into_iter().map(|s| (s >> 8) as u8).collect(),
@@ -211,16 +303,34 @@ fn to_rgba(colour: ColorType, s: &[u8]) -> Option<Vec<u8>> {
     })
 }
 
+/// Whether the current page has Photoshop's layers, or its image resources
+/// that metadata settings leave alone. Rewriting it would lose them.
+fn is_photoshop(decoder: &mut Reader, o: &OptimiseOptions) -> bool {
+    let ifd = decoder.image_ifd();
+    ifd.find_entry(Tag::from_u16_exhaustive(PHOTOSHOP_LAYERS))
+        .is_some()
+        || (!o.strip_metadata
+            && ifd
+                .find_entry(Tag::from_u16_exhaustive(PHOTOSHOP_RESOURCES))
+                .is_some())
+}
+
 /// Lossless: every page is written again, in its own colour type, with
-/// Deflate and a horizontal predictor. Pages are handled one at a time.
-pub fn optimise(input: &[u8], _o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
+/// Deflate and a horizontal predictor. Pages are handled one at a time. A
+/// file with Photoshop data comes back as it is (so it is "already optimal").
+pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     let mut decoder = open(input)?;
     let mut out = Cursor::new(Vec::new());
     let mut enc = encoder(&mut out)?;
-    write_native(&mut enc, &read_native(&mut decoder)?)?;
-    while decoder.more_images() {
+    loop {
+        if is_photoshop(&mut decoder, o) {
+            return Ok(input.to_vec());
+        }
+        write_native(&mut enc, &read_native(&mut decoder, !o.strip_metadata)?)?;
+        if !decoder.more_images() {
+            break;
+        }
         decoder.next_image().map_err(decode_err)?;
-        write_native(&mut enc, &read_native(&mut decoder)?)?;
     }
     Ok(out.into_inner())
 }
@@ -270,6 +380,11 @@ struct Tags<'a> {
     icc: Option<&'a [u8]>,
     orientation: Option<u16>,
     resolution: Option<Resolution>,
+    /// Copied as they are, with the offsets of the EXIF and GPS directories
+    /// already written.
+    raw: &'a [(Tag, ValueBuffer)],
+    exif: Option<u32>,
+    gps: Option<u32>,
 }
 
 impl<'a> Tags<'a> {
@@ -324,6 +439,20 @@ where
             .write_tag(Tag::IccProfile, icc)
             .map_err(encode_err)?;
     }
+    for (tag, value) in tags.raw {
+        image
+            .encoder()
+            .write_tag_buf(*tag, value)
+            .map_err(encode_err)?;
+    }
+    for (tag, offset) in [
+        (Tag::ExifDirectory, tags.exif),
+        (Tag::GpsDirectory, tags.gps),
+    ] {
+        if let Some(offset) = offset {
+            image.encoder().write_tag(tag, offset).map_err(encode_err)?;
+        }
+    }
     image.write_data(data).map_err(encode_err)
 }
 
@@ -331,10 +460,25 @@ fn write_native<W: Write + Seek>(
     enc: &mut TiffEncoder<W, TiffKindStandard>,
     p: &Native,
 ) -> Result<(), OptimiseError> {
+    // A directory is written before the page that points to it.
+    let mut directory = |entries: &RawTags| -> Result<Option<u32>, OptimiseError> {
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        let mut dir = enc.extra_directory().map_err(encode_err)?;
+        for (tag, value) in entries {
+            dir.write_tag_buf(*tag, value).map_err(encode_err)?;
+        }
+        Ok(Some(dir.finish_with_offsets().map_err(encode_err)?.offset))
+    };
+    let (exif, gps) = (directory(&p.extras.exif)?, directory(&p.extras.gps)?);
     let tags = Tags {
         icc: p.icc.as_deref(),
         orientation: p.orientation,
         resolution: p.resolution,
+        raw: &p.extras.tags,
+        exif,
+        gps,
     };
     let (w, h, a) = (p.width, p.height, p.alpha);
     match (p.colour, &p.samples) {
@@ -423,6 +567,126 @@ mod tests {
         assert!(
             matches!(decode_pages_within(&bytes, 3 * page - 1), Err(OptimiseError::Unsupported(m)) if m == t("pdf.tiff.too_large"))
         );
+    }
+
+    /// Two grey pages carrying the tags a camera or an editor leaves, an EXIF
+    /// directory, and the given extra tags (Photoshop's, say).
+    fn tagged(extra: &[u16]) -> Vec<u8> {
+        use tiff::encoder::{TiffEncoder, colortype};
+        let mut out = Cursor::new(Vec::new());
+        let mut enc = TiffEncoder::new(&mut out).unwrap();
+        for _ in 0..2 {
+            let exif = {
+                let mut dir = enc.extra_directory().unwrap();
+                dir.write_tag(Tag::Unknown(34855), 400_u16).unwrap();
+                dir.finish_with_offsets().unwrap().offset
+            };
+            let mut image = enc.new_image::<colortype::Gray8>(64, 48).unwrap();
+            let dir = image.encoder();
+            dir.write_tag(Tag::Artist, "Ann").unwrap();
+            dir.write_tag(Tag::Copyright, "(c) Ann").unwrap();
+            dir.write_tag(Tag::Unknown(700), &b"<x:xmpmeta/>"[..])
+                .unwrap();
+            dir.write_tag(Tag::Unknown(33723), &[1_u8, 2, 3, 4, 5, 6][..])
+                .unwrap();
+            dir.write_tag(Tag::ExifDirectory, exif).unwrap();
+            for &tag in extra {
+                dir.write_tag(Tag::Unknown(tag), &[9_u8; 8][..]).unwrap();
+            }
+            image.write_data(&[7_u8; 64 * 48]).unwrap();
+        }
+        out.into_inner()
+    }
+
+    fn keeping() -> OptimiseOptions {
+        OptimiseOptions {
+            strip_metadata: false,
+            ..OptimiseOptions::default()
+        }
+    }
+
+    type Kept = (
+        Option<String>,
+        Option<String>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<u16>,
+    );
+
+    /// The Artist, Copyright, XMP and IPTC of a page, and its EXIF ISO.
+    fn page_tags(bytes: &[u8], page: usize) -> Kept {
+        let mut d = Decoder::new(Cursor::new(bytes)).unwrap();
+        d.seek_to_image(page).unwrap();
+        let exif = d
+            .find_tag(Tag::ExifDirectory)
+            .unwrap()
+            .map(|v| d.read_directory(v.into_ifd_pointer().unwrap()).unwrap());
+        let iso = exif.and_then(|dir| {
+            d.read_directory_tags(&dir)
+                .find_tag_unsigned::<u16>(Tag::Unknown(34855))
+                .unwrap()
+        });
+        (
+            d.find_tag(Tag::Artist)
+                .unwrap()
+                .map(|v| v.into_string().unwrap()),
+            d.find_tag(Tag::Copyright)
+                .unwrap()
+                .map(|v| v.into_string().unwrap()),
+            d.find_tag(Tag::Unknown(700))
+                .unwrap()
+                .map(|v| v.into_u8_vec().unwrap()),
+            d.find_tag(Tag::Unknown(33723))
+                .unwrap()
+                .map(|v| v.into_u8_vec().unwrap()),
+            iso,
+        )
+    }
+
+    #[test]
+    fn metadata_survives_optimising_unless_stripping() {
+        let input = tagged(&[]);
+        let out = optimise(&input, &keeping()).unwrap();
+        assert!(out.len() < input.len());
+        for page in 0..2 {
+            assert_eq!(
+                page_tags(&out, page),
+                (
+                    Some("Ann".into()),
+                    Some("(c) Ann".into()),
+                    Some(b"<x:xmpmeta/>".to_vec()),
+                    Some(vec![1, 2, 3, 4, 5, 6]),
+                    Some(400)
+                ),
+                "page {page}"
+            );
+        }
+        assert_eq!(decode_pages(&out).unwrap(), decode_pages(&input).unwrap());
+        let stripped = optimise(&input, &OptimiseOptions::default()).unwrap();
+        assert_eq!(page_tags(&stripped, 0), (None, None, None, None, None));
+    }
+
+    #[test]
+    fn a_file_with_photoshop_layers_is_left_alone() {
+        for strip in [true, false] {
+            let o = OptimiseOptions {
+                strip_metadata: strip,
+                ..OptimiseOptions::default()
+            };
+            let input = tagged(&[PHOTOSHOP_LAYERS]);
+            assert_eq!(optimise(&input, &o).unwrap(), input);
+            assert_eq!(
+                crate::optimise::optimise(&input, Format::Tiff, &o).unwrap(),
+                Outcome::AlreadyOptimal
+            );
+        }
+    }
+
+    #[test]
+    fn photoshop_resources_are_metadata() {
+        let input = tagged(&[PHOTOSHOP_RESOURCES]);
+        assert_eq!(optimise(&input, &keeping()).unwrap(), input);
+        assert!(optimise(&input, &OptimiseOptions::default()).unwrap().len() < input.len());
     }
 
     #[test]
