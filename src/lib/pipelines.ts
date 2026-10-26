@@ -246,3 +246,38 @@ export function assign(lib: Pipelines, slot: Slot, media: Media, id: number | nu
   if (slot.kind === 'drop_zone') return { ...lib, drop_zone: put(lib.drop_zone) };
   return { ...lib, zones: lib.zones.map((z) => (z.id === slot.zone ? { ...z, pipelines: put(z.pipelines) } : z)) };
 }
+
+// ---- preset zones ----
+
+export const ZONE_ICONS = ['image', 'copy', 'folder', 'zap', 'globe', 'star'] as const;
+
+/** A new zone with the next id, an image icon and nothing assigned. */
+export function newZone(lib: Pipelines, name: string): { lib: Pipelines; id: number } {
+  const id = lib.zones.reduce((max, z) => Math.max(max, z.id), 0) + 1;
+  const zone: Zone = { id, name, icon: 'image', pipelines: { image: null, video: null, audio: null, pdf: null } };
+  return { lib: { ...lib, zones: [...lib.zones, zone] }, id };
+}
+
+export function removeZone(lib: Pipelines, id: number): Pipelines {
+  return { ...lib, zones: lib.zones.filter((z) => z.id !== id) };
+}
+
+/** Move the zone at `from` so it ends at `to`. */
+export function moveZone(lib: Pipelines, from: number, to: number): Pipelines {
+  if (from === to || from < 0 || from >= lib.zones.length || to < 0 || to >= lib.zones.length) return lib;
+  const zones = [...lib.zones];
+  zones.splice(to, 0, zones.splice(from, 1)[0]);
+  return { ...lib, zones };
+}
+
+/** Whether a tile takes the dragged files, and the line it shows: its pipeline's caption, or why it has none. */
+export function tileState(
+  tile: { pipelines: PerMedia; captions: Partial<Record<Media, string>> },
+  dragged: Media[],
+): { enabled: boolean; caption: string } {
+  const candidates = dragged.length > 0 ? dragged : MEDIA;
+  const hit = candidates.find((m) => tile.pipelines[m] !== null);
+  if (hit) return { enabled: true, caption: tile.captions[hit] ?? '' };
+  const media = t(`pipe.media.one.${candidates[0]}` as StringKey);
+  return { enabled: false, caption: t('pipe.zone.none', { media }) };
+}

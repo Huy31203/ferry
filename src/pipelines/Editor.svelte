@@ -26,6 +26,7 @@
   import StepList from './StepList.svelte';
   import TestWell from './TestWell.svelte';
   import TextMode from './TextMode.svelte';
+  import ZonesTab from './ZonesTab.svelte';
   import Switch from '../settings/controls/Switch.svelte';
 
   type Tab = 'pipelines' | 'zones';
@@ -258,7 +259,7 @@
       </aside>
     </div>
   {:else}
-    <div class="shell zones"></div>
+    <ZonesTab {pipelines} {meta} onchange={commit} />
   {/if}
 </div>
 
@@ -292,9 +293,6 @@
     flex: 1;
     grid-template-columns: 240px minmax(0, 1fr) 280px;
     min-height: 0;
-  }
-  .shell.zones {
-    grid-template-columns: 1fr;
   }
   .centre {
     padding: 16px;
