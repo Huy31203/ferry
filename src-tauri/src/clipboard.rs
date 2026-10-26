@@ -126,7 +126,8 @@ fn start_clipboard_job(app: &AppHandle, snap: Snapshot, level: Level) {
         &template,
         &state.work_dir,
         now,
-    );
+    )
+    .with_default_conversion(&state.settings.read().unwrap().formats); // sE pdf-formats
     jobs::start(app, job, level, Some(seq));
 }
 

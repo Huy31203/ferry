@@ -180,6 +180,8 @@ impl Job {
             twin: false,
             video: None,
             audio: Some(AudioJob::default()),
+            poster: None,
+            pages: None,
         })
     }
 

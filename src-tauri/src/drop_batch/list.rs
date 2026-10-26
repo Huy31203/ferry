@@ -51,11 +51,16 @@ pub enum ListItem {
     Convert(Format),
 }
 
-const FORMATS: [Format; 10] = [
+const FORMATS: [Format; 14] = [
     Format::Png,
     Format::Jpeg,
     Format::Gif,
     Format::WebP,
+    // sE pdf-formats
+    Format::Tiff,
+    Format::Heic,
+    Format::Avif,
+    Format::Pdf,
     Format::Mp4,
     Format::Hevc,
     Format::Av1,
@@ -308,6 +313,7 @@ mod tests {
         card.can_edit = true;
         card.format = Some(format);
         card.source_format = Some(source);
+        card.choices = ferry_core::formats::choices(source, false, 1, false);
         card
     }
 

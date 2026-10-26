@@ -278,6 +278,7 @@
     const choice = formatChoices(card).find((c) => c.format === format);
     if (!choice) return '';
     if (choice.firstFrame) return t('card.first_frame');
+    if (choice.firstPage) return t('pdf.first_page');
     return t(isMac ? 'format.tip.mac' : 'format.tip.windows', { format: choice.label });
   }
 

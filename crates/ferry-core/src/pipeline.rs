@@ -14,10 +14,12 @@ use serde::Serialize;
 use crate::backup::Backups;
 use crate::cancel::CancelToken;
 use crate::edit::{self, Edits, EditsPatch};
+use crate::formats;
 use crate::fsutil::{self, Times};
 use crate::i18n::{t, tf};
 use crate::job::{JobId, JobState, JobUpdate, Source};
 use crate::optimise::{self, Level, OptimiseError, OptimiseOptions, Outcome};
+use crate::oscodec;
 use crate::output::{self, OutputKind};
 use crate::settings::{self as settings_model, Location, Settings, contract_home};
 use crate::sniff::{self, Format};
@@ -165,6 +167,11 @@ pub struct Job {
     video: Option<VideoState>,
     // stream B: audio
     audio: Option<AudioJob>,
+    // sE pdf-formats
+    /// A PNG of the original for formats the webviews cannot draw.
+    poster: Option<PathBuf>,
+    /// A PDF's page count, or a multi-page TIFF's.
+    pages: Option<u32>,
 }
 
 /// A file job's result on disk (spec §4.4: one result per job).
@@ -272,6 +279,7 @@ impl Job {
         let ext = format.extension();
         let dims = edit::raster::display_dims(&bytes, format);
         let animated = sniff::is_animated(&bytes, format);
+        let pages = tiff_pages(&bytes, format); // sE pdf-formats
         let name = template::clipboard_name(file_template, ext, dims.unwrap_or_default(), now);
         let output = work_dir
             .join("clipboard")
@@ -306,6 +314,8 @@ impl Job {
             twin: false,
             video: None,
             audio: None,
+            poster: None,
+            pages,
         }
     }
 
@@ -348,6 +358,7 @@ impl Job {
         if format == Format::Gif && !has_gifsicle {
             return Err(Skip::NeedsGifsicle.reason());
         }
+        let pages = tiff_pages(&bytes, format); // sE pdf-formats
         Ok(Job {
             id: JobId::generate(),
             source: Source::File,
@@ -377,7 +388,10 @@ impl Job {
             twin: false,
             video: None,
             audio: None,
-        })
+            poster: None,
+            pages,
+        }
+        .with_default_conversion(&settings.formats))
     }
 
     /// This job's card in `state`.
@@ -428,6 +442,14 @@ impl Job {
             video: self.video_meta(),
             // stream B: audio
             audio: self.audio.as_ref().map(|_| self.audio_card()),
+            // sE pdf-formats
+            poster: self.poster.clone(),
+            pages: self.pages,
+            choices: if self.video.is_some() || self.audio.is_some() {
+                Vec::new()
+            } else {
+                self.choices()
+            },
         }
     }
 
@@ -476,6 +498,27 @@ impl Job {
         Ok(())
     }
 
+    // sE pdf-formats
+    /// The formats this job's card can convert to.
+    fn choices(&self) -> Vec<formats::ConvertChoice> {
+        formats::choices(
+            self.source_format,
+            self.animated,
+            self.pages.unwrap_or(1),
+            oscodec::can_encode(Format::Heic),
+        )
+    }
+
+    /// Start with the conversion the settings give this source (a HEIC photo
+    /// becomes a JPEG), when the card offers it.
+    pub fn with_default_conversion(mut self, f: &settings_model::Formats) -> Job {
+        let wanted = formats::default_target(self.source_format, self.pages.unwrap_or(1), f);
+        if let Some(format) = wanted.filter(|w| self.choices().iter().any(|c| c.format == *w)) {
+            self.edits.format = Some(format);
+        }
+        self
+    }
+
     /// Merge what the card asked for. Asking for the source format, or for
     /// GIF, clears the conversion.
     pub fn edit(&mut self, patch: EditsPatch) {
@@ -492,13 +535,20 @@ impl Job {
                 self.edits.format,
                 Some(f) if !crate::audio::TARGETS.contains(&f)
             ),
+            // sE pdf-formats (only the card's own choices are kept)
             (None, None) => matches!(
                 self.edits.format,
-                Some(f) if f == self.source_format || f == Format::Gif || f.is_audio()
+                Some(f) if f == self.source_format || !self.choices().iter().any(|c| c.format == f)
             ),
         };
         if cleared {
             self.edits.format = None;
+        }
+        // sE pdf-formats
+        if self.source_format == Format::Pdf {
+            (self.edits.size, self.edits.scale) = (None, None);
+        } else {
+            (self.edits.dpi, self.edits.pages, self.edits.uncrop) = (None, None, false);
         }
         self.level = self.edits.level;
     }
@@ -556,6 +606,8 @@ impl Job {
             twin: true,
             video: self.video.clone(),
             audio: self.audio.clone(),
+            poster: self.poster.clone(),
+            pages: self.pages,
         }
     }
 
@@ -1117,7 +1169,19 @@ pub fn notice(reason: String) -> JobUpdate {
         video: None,
         // stream B: audio
         audio: None,
+        // sE pdf-formats
+        poster: None,
+        pages: None,
+        choices: Vec::new(),
     }
+}
+
+// sE pdf-formats
+/// A multi-page TIFF's page count; `None` for any other file.
+fn tiff_pages(bytes: &[u8], format: Format) -> Option<u32> {
+    (format == Format::Tiff)
+        .then(|| sniff::tiff_page_count(bytes))
+        .filter(|&n| n > 1)
 }
 
 /// "1 MB", "250 KB", "1.5 MB": decimal units, like formatBytes in src/lib/format.ts.
@@ -2532,5 +2596,50 @@ mod tests {
         job.rename("diagram").unwrap();
         assert_eq!(job.output.file_name().unwrap(), "diagram.png");
         assert!(job.output.exists() && !first.output.unwrap().exists());
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_heic_file_starts_with_its_default_conversion() {
+        let env = Env::new();
+        let path = env.file("photo.heic", &testutil::heif(b"heic", &[(64, 48)], None));
+        let job = Job::file(&path, &Settings::default(), true).unwrap();
+        assert_eq!(job.edits.format, Some(Format::Jpeg));
+        let card = job.update(JobState::Queued, None);
+        assert_eq!(card.choices[0].format, Format::Heic);
+        assert_eq!(card.dims_before, Some((64, 48)));
+    }
+
+    #[test]
+    fn a_multi_page_tiff_is_not_converted_by_default() {
+        let env = Env::new();
+        let path = env.file("fax.tiff", &testutil::tiff_ifds(&[(8, 8), (8, 8)], None));
+        let job = Job::file(&path, &Settings::default(), true).unwrap();
+        assert_eq!(
+            (job.edits.format, job.update(JobState::Queued, None).pages),
+            (None, Some(2))
+        );
+    }
+
+    #[test]
+    fn a_conversion_the_source_cannot_take_is_dropped() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        job.edit(convert(Format::Pdf));
+        assert_eq!(job.edits.format, None);
+        job.edit(convert(Format::Avif)); // read-only for now
+        assert_eq!(job.edits.format, None);
+        job.edit(convert(Format::WebP));
+        assert_eq!(job.edits.format, Some(Format::WebP));
+    }
+
+    #[test]
+    fn pdf_only_edits_are_dropped_on_images() {
+        let env = Env::new();
+        let (mut job, _) = clipboard_png(&env, "%f");
+        job.edit(
+            serde_json::from_value(serde_json::json!({ "dpi": 150, "uncrop": true })).unwrap(),
+        );
+        assert_eq!((job.edits.dpi, job.edits.uncrop), (None, false));
     }
 }

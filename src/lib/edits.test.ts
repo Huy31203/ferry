@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { card } from './card.fixture';
-import type { JobUpdate } from './ipc';
+import type { ConvertChoice, Format, JobUpdate } from './ipc';
 import {
   BITRATE_STOPS,
   QUALITY_STOPS,
@@ -44,6 +44,11 @@ import {
 } from './edits';
 
 const edits = card({ kind: 'done' }).edits;
+
+/** Choices as `ferry_core::formats::choices` makes them; `firstOnly` lists the targets that keep one frame or page. */
+function choices(formats: Format[], firstOnly: Format[]): ConvertChoice[] {
+  return formats.map((format) => ({ format, first_only: firstOnly.includes(format) }));
+}
 
 describe('downscale steps', () => {
   it('has 100 on top, then 90 to 10 in fives', () => {
@@ -213,19 +218,33 @@ describe('format bar', () => {
   });
 
   it('puts a GIF first and marks the others first frame only', () => {
-    const gif = card({ kind: 'done' }, { format: 'gif', source_format: 'gif', ext: 'gif' });
+    const gif = card(
+      { kind: 'done' },
+      { format: 'gif', source_format: 'gif', ext: 'gif', choices: choices(['gif', 'png', 'jpeg', 'webp'], ['png', 'jpeg']) },
+    );
     expect(pick(formatChoices(gif))).toEqual([
       ['GIF', true, false],
       ['PNG', false, true],
       ['JPEG', false, true],
-      ['WebP', false, true],
+      ['WebP', false, false],
     ]);
   });
 
   it('keeps the GIF chip after a GIF was converted, so it can go back', () => {
-    const converted = card({ kind: 'done' }, { format: 'webp', source_format: 'gif', converted: true });
+    const converted = card(
+      { kind: 'done' },
+      { format: 'webp', source_format: 'gif', converted: true, choices: choices(['gif', 'png', 'jpeg', 'webp'], ['png', 'jpeg']) },
+    );
     expect(formatChoices(converted).map((c) => c.format)).toEqual(['gif', 'png', 'jpeg', 'webp']);
     expect(formatChoices(converted).find((c) => c.current)?.format).toBe('webp');
+  });
+
+  it('says a multi-page TIFF converts to its first page only', () => {
+    const tiff = card({ kind: 'done' }, { format: 'tiff', source_format: 'tiff', choices: choices(['tiff', 'png'], ['png']) });
+    expect(formatChoices(tiff)).toEqual([
+      { format: 'tiff', label: 'TIFF', current: true, firstFrame: false, firstPage: false },
+      { format: 'png', label: 'PNG', current: false, firstFrame: false, firstPage: true },
+    ]);
   });
 
   it('ignores a plain click on the current format but keeps both on ⌥-click', () => {

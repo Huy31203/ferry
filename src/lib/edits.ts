@@ -192,6 +192,8 @@ export interface FormatChoice {
   current: boolean;
   /** Converting a GIF keeps only its first frame. */
   firstFrame: boolean;
+  /** Converting a multi-page TIFF keeps only its first page. */
+  firstPage: boolean;
 }
 
 const FORMAT_LABELS: Record<Format, string> = {
@@ -224,12 +226,12 @@ const FORMAT_LABELS: Record<Format, string> = {
 /** The format bar on an audio card, as `ferry_core::audio::BAR`. */
 const AUDIO_TARGETS: Format[] = ['mp3', 'm4a', 'opus', 'wav'];
 
-/** PNG · JPEG · WebP, with GIF first on a card that started as a GIF. */
+/** The card's own choices: PNG · JPEG · WebP, with a GIF, TIFF or HEIC source first. */
 export function formatChoices(card: JobUpdate): FormatChoice[] {
   const source = card.source_format ?? card.format;
   // stream B: audio
   if (card.audio) {
-    return AUDIO_TARGETS.map((format) => ({ format, label: FORMAT_LABELS[format], current: card.format === format, firstFrame: false }));
+    return AUDIO_TARGETS.map((format) => ({ format, label: FORMAT_LABELS[format], current: card.format === format, firstFrame: false, firstPage: false }));
   }
   // stream A: video (HEVC is hardware only: a chip where an encoder exists, or where the card already is HEVC)
   if (isVideo(source)) {
@@ -237,14 +239,15 @@ export function formatChoices(card: JobUpdate): FormatChoice[] {
     const targets: Format[] = ['mp4', 'hevc', 'av1', 'webm', 'gif'];
     return targets
       .filter((format) => format !== 'hevc' || hevc)
-      .map((format) => ({ format, label: FORMAT_LABELS[format], current: card.format === format, firstFrame: false }));
+      .map((format) => ({ format, label: FORMAT_LABELS[format], current: card.format === format, firstFrame: false, firstPage: false }));
   }
-  const formats: Format[] = source === 'gif' ? ['gif', 'png', 'jpeg', 'webp'] : ['png', 'jpeg', 'webp'];
-  return formats.map((format) => ({
+  // sE pdf-formats: the card says what it converts to
+  return card.choices.map(({ format, first_only }) => ({
     format,
     label: FORMAT_LABELS[format],
     current: card.format === format,
-    firstFrame: source === 'gif' && format !== 'gif',
+    firstFrame: first_only && source !== 'tiff',
+    firstPage: first_only && source === 'tiff',
   }));
 }
 
