@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq, ser::Serializ
 use crate::{
     edit::Edits,
     i18n::{t, tf},
-    settings::OutputRule,
+    settings::{Location, OutputRule},
     template,
 };
 
@@ -312,6 +312,82 @@ fn required<'a>(p: &'a Params, name: &str, label: &str) -> Result<&'a str, Strin
         .ok_or_else(|| tf("pipe.error.required", &[("name", &shown(label))]))
 }
 
+// ---- where a result goes, shared by every media's optimise and convert ----
+
+/// Where a pipeline step may send its result. `keep` leaves it to File handling.
+pub const LOCATIONS: &[(&str, &str)] = &[
+    ("keep", "pipe.choice.keep"),
+    ("in_place", "pipe.choice.in_place"),
+    ("same_folder", "pipe.choice.same_folder"),
+    ("folder", "pipe.choice.folder"),
+    ("temporary", "pipe.choice.temporary"),
+];
+
+/// A param list followed by the three params that say where a result goes.
+macro_rules! with_location {
+    ($($before:expr),* $(,)?) => {
+        &[
+            $($before,)*
+            $crate::pipeline_steps::Param {
+                name: "location",
+                label: "pipe.param.location",
+                control: $crate::pipeline_steps::Control::Choice {
+                    options: $crate::pipeline_steps::LOCATIONS,
+                },
+                required: false,
+                shown_when: None,
+            },
+            $crate::pipeline_steps::Param {
+                name: "folder",
+                label: "pipe.param.folder",
+                control: $crate::pipeline_steps::Control::Folder,
+                required: false,
+                shown_when: Some(("location", &["folder"])),
+            },
+            $crate::pipeline_steps::Param {
+                name: "template",
+                label: "pipe.param.template",
+                control: $crate::pipeline_steps::Control::Template,
+                required: false,
+                shown_when: Some(("location", &["same_folder", "folder"])),
+            },
+        ]
+    };
+}
+pub(crate) use with_location;
+
+/// `location`/`folder`/`template` as an output rule; `None` keeps the File handling rule.
+pub fn output_rule(
+    p: &Params,
+    default_folder: &str,
+    default_template: &str,
+) -> Result<Option<OutputRule>, String> {
+    let Some(pick) = choice(p, "location", "pipe.param.location", LOCATIONS)? else {
+        return Ok(None);
+    };
+    let location = match pick {
+        "in_place" => Location::InPlace,
+        "same_folder" => Location::SameFolder,
+        "folder" => Location::Folder,
+        "temporary" => Location::Temporary,
+        _ => return Ok(None),
+    };
+    let template = text(p, "template")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_template);
+    template::validate(template)
+        .map_err(|tokens| tf("pipe.error.template", &[("tokens", &tokens.join(", "))]))?;
+    Ok(Some(OutputRule {
+        location,
+        folder: text(p, "folder")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(default_folder)
+            .to_owned(),
+        template: template.to_owned(),
+        ..OutputRule::default()
+    }))
+}
+
 // ---- the steps every media type shares ----
 
 const COPY_PARAMS: &[Param] = &[Param {
@@ -425,8 +501,8 @@ pub fn builtin() -> Registry {
     }
     crate::image_steps::register(&mut r);
     // Later streams register their steps here, one line each:
-    // crate::video_steps::register(&mut r);   // stream A: Media::Video
-    // crate::audio_steps::register(&mut r);   // stream B: Media::Audio
+    crate::video_steps::register(&mut r); // stream A: Media::Video
+    crate::audio_steps::register(&mut r); // stream B: Media::Audio
     // crate::pdf_steps::register(&mut r);     // stream E: Media::Pdf
     r
 }
@@ -480,7 +556,10 @@ mod tests {
 
     #[test]
     fn only_media_with_a_transform_step_are_offered() {
-        assert_eq!(builtin().media(), [Media::Image]);
+        assert_eq!(
+            builtin().media(),
+            [Media::Image, Media::Video, Media::Audio]
+        );
         assert!(builtin().get(Media::Video, "copy").is_some());
     }
 
