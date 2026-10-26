@@ -31,6 +31,9 @@ use video_job::VideoState;
 
 mod video_job;
 
+// sE pdf-formats
+mod formats_run;
+
 // ---- stream B: audio ----
 mod audio;
 use audio::AudioJob;
@@ -673,6 +676,7 @@ impl Job {
             Ok(bytes) => bytes,
             Err(e) => return Some(self.fail(tf("error.backup", &[("why", &describe(&e))]), e)),
         };
+        self.capture_poster(&original, backups); // sE pdf-formats
         // A twin is a copy the user asked for: it always writes, never "no gain".
         let plain = self.edits.is_plain() && !self.twin;
         let step = t(match (plain, self.source_format) {
