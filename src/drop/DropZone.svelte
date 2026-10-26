@@ -4,7 +4,8 @@
   import { listen } from '@tauri-apps/api/event';
   import { t } from '../lib/i18n';
   import type { ZoneView } from '../lib/drop-ipc';
-  import { zoneText } from '../lib/zone';
+  import type { Settings } from '../lib/settings';
+  import { presetsHint, zoneText } from '../lib/zone';
 
   let view = $state<ZoneView>({
     state: 'hidden',
@@ -14,6 +15,8 @@
     opens_batch: false,
   });
   const text = $derived(zoneText(view));
+  let zones = $state(0); // preset zones in settings: the Ctrl tap opens them
+  const hint = $derived(presetsHint(view, zones));
 
   onMount(() => {
     // Listen first, then ask what to show, so nothing falls in between.
@@ -23,8 +26,13 @@
         return stop;
       },
     );
+    const follow = listen<Settings>('settings:changed', (e) => (zones = e.payload.pipelines.zones.length));
+    invoke<Settings>('settings_get')
+      .then((settings) => (zones = settings.pipelines.zones.length))
+      .catch((e) => console.warn('settings_get', e));
     return () => {
       unlisten.then((stop) => stop());
+      follow.then((stop) => stop());
     };
   });
 </script>
@@ -47,6 +55,7 @@
       <strong role="status">{text.label}</strong>
       {#if text.sub}<span>{text.sub}</span>{/if}
       {#if text.keep}<span class="keep">{text.keep}</span>{/if}
+      {#if hint}<span class="hint">{hint}</span>{/if}
     </div>
   </div>
 {/if}
@@ -65,6 +74,7 @@
     padding: 12px;
   }
   .zone {
+    position: relative;
     box-sizing: border-box;
     width: 220px;
     height: 140px;
@@ -101,6 +111,12 @@
   span {
     font-size: 12px;
     color: var(--fg-2);
+  }
+  .hint {
+    position: absolute;
+    bottom: 8px;
+    font-size: 11px;
+    opacity: 0.8;
   }
   .keep {
     color: var(--accent-text);

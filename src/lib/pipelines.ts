@@ -1,11 +1,22 @@
 // Stream F: pipelines. Types mirror ferry_core::{pipeline_def, pipeline_steps,
 // pipeline_plan, pipeline_text, pipeline_test}; the pure helpers keep the
 // library edits out of the components.
+import en from './i18n/en.json';
 import { t, type StringKey } from './i18n';
 import { MEDIA, folderName, type Media } from './watch';
 
 export { MEDIA };
 export type { Media };
+
+/**
+ * The "Images" label of `media` (or "image" with `one`). A pipeline from a newer Ferry
+ * arrives as `other` (Rust `Media::Other`, typed as `Media` here so the slot maps stay
+ * total), and anything unknown reads as "Other".
+ */
+export function mediaName(media: string, one = false): string {
+  const key = `pipe.media.${one ? 'one.' : ''}${media}`;
+  return t((key in en ? key : `pipe.media.${one ? 'one.' : ''}other`) as StringKey);
+}
 
 export type Params = Record<string, unknown>;
 
@@ -155,7 +166,7 @@ export function usageLabel(list: Usage[]): string {
     if (u.kind === 'drop_zone') return t('pipe.assign.drop_zone');
     if (u.kind === 'zone') return t('pipe.assign.zone', { name: u.zone });
     if (u.kind === 'folder') return t('pipe.assign.folder', { name: u.folder });
-    return t('pipe.assign.clipboard', { media: t(`pipe.media.${u.media}` as StringKey).toLowerCase() });
+    return t('pipe.assign.clipboard', { media: mediaName(u.media).toLowerCase() });
   });
   return [...new Set(parts)].join(' · ');
 }
@@ -244,6 +255,7 @@ export type Slot = { kind: 'clipboard' } | { kind: 'drop_zone' } | { kind: 'zone
 
 /** Make pipeline `id` (or none) the one that runs in `slot` for `media`. */
 export function assign(lib: Pipelines, slot: Slot, media: Media, id: number | null): Pipelines {
+  if (!(MEDIA as readonly string[]).includes(media)) return lib; // `other` has no slot
   const put = (slots: PerMedia): PerMedia => ({ ...slots, [media]: id });
   if (slot.kind === 'clipboard') return { ...lib, clipboard: put(lib.clipboard) };
   if (slot.kind === 'drop_zone') return { ...lib, drop_zone: put(lib.drop_zone) };
@@ -281,6 +293,6 @@ export function tileState(
   const candidates = dragged.length > 0 ? dragged : MEDIA;
   const hit = candidates.find((m) => tile.pipelines[m] !== null);
   if (hit) return { enabled: true, caption: tile.captions[hit] ?? '' };
-  const media = t(`pipe.media.one.${candidates[0]}` as StringKey);
+  const media = mediaName(candidates[0], true);
   return { enabled: false, caption: t('pipe.zone.none', { media }) };
 }

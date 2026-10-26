@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BatchRow, BatchStatus, Tally } from './drop-ipc';
-import { mergeRows, orderRows, statusLine, toolbar } from './batchview';
+import { isFormTarget, mergeRows, orderRows, statusLine, toolbar } from './batchview';
 
 const row = (index: number, over: Partial<BatchRow> = {}): BatchRow => ({
   index,
@@ -93,5 +93,15 @@ describe('batch view', () => {
     const slow = { ...running, eta_secs: 300 };
     expect(statusLine(slow)).toBe('50 of 100 · 2.5 files/s · 5 min left');
     expect(statusLine({ ...running, eta_secs: null })).toBe('50 of 100');
+  });
+});
+
+describe('isFormTarget', () => {
+  it('is true for the controls that keep their own keys', () => {
+    for (const tagName of ['INPUT', 'SELECT', 'BUTTON', 'TEXTAREA']) expect(isFormTarget({ tagName })).toBe(true);
+  });
+  it('is false for the grid itself, rows and no target', () => {
+    for (const tagName of ['DIV', 'SPAN']) expect(isFormTarget({ tagName })).toBe(false);
+    expect(isFormTarget(null)).toBe(false);
   });
 });

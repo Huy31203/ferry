@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { t, type StringKey } from '../lib/i18n';
-  import { assign, usage, type Pipeline, type Pipelines, type Slot } from '../lib/pipelines';
+  import { t } from '../lib/i18n';
+  import { assign, mediaName, usage, type Pipeline, type Pipelines, type Slot } from '../lib/pipelines';
   import type { WatchedFolder } from '../lib/settings';
   import Switch from '../settings/controls/Switch.svelte';
 
@@ -16,7 +16,7 @@
     onchange: (next: Pipelines) => void;
   } = $props();
 
-  const media = $derived(t(`pipe.media.${pipeline.media}` as StringKey).toLowerCase());
+  const media = $derived(mediaName(pipeline.media).toLowerCase());
 
   const rows = $derived<{ slot: Slot; label: string; on: boolean }[]>([
     {

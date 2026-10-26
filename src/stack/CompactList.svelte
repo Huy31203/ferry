@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { flushSync } from 'svelte';
+  import { flushSync, onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { canDrag, draggable, isBusy, type OpenTool, type Tool } from '../lib/cards';
   import { t } from '../lib/i18n';
@@ -12,21 +12,26 @@
     escapeSel,
     extendTo,
     headerText,
+    keyPatch,
     listKey,
     listTotals,
     moveCursor,
     prune,
     rowsHeld,
     selectAll,
-    stepDown,
     targets as targetsOf,
     toggle,
     type Sel,
   } from '../lib/selection';
+  import { loadPdfConfig, pdfConfig } from '../lib/pdfConfig.svelte';
   import { visibleRange } from '../lib/virtual';
   import DragAllBar from './DragAllBar.svelte';
   import ListRow from './ListRow.svelte';
   import SelectionBar from './SelectionBar.svelte';
+
+  onMount(() => {
+    loadPdfConfig().catch((e) => console.warn('pdf_config', e));
+  });
 
   /** Past this many rows only the ones in view are drawn. */
   const WINDOWED = 50;
@@ -161,8 +166,8 @@
       case 'scale':
       case 'step_down': {
         if (!row || !row.can_edit || isBusy(row.state)) break;
-        const scale = key.kind === 'scale' ? key.percent : stepDown(row.edits.scale);
-        if (scale !== null) invoke('card_edit', { id: row.id, edits: { scale } }).catch((e) => console.warn('card_edit', e));
+        const edits = keyPatch(key, row, pdfConfig);
+        if (edits) invoke('card_edit', { id: row.id, edits }).catch((e) => console.warn('card_edit', e));
         break;
       }
     }
