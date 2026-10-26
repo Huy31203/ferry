@@ -316,7 +316,13 @@ fresh ffmpeg
   --enable-gpl --enable-version3 --disable-autodetect --disable-shared --enable-static \
   --disable-doc --disable-debug --enable-stripping --disable-ffplay --disable-ffprobe --disable-network \
   --enable-zlib --enable-libx264 --enable-libvpx --enable-libsvtav1 --enable-libdav1d --enable-libopus \
-  --enable-libmp3lame "${FFMPEG_EXTRA[@]}" >/dev/null
+  --enable-libmp3lame "${FFMPEG_EXTRA[@]}" >"$WORK/ffmpeg-configure.out" 2>&1 || {
+  echo "ffmpeg configure failed" >&2
+  tail -n 40 "$WORK/ffmpeg-configure.out" >&2
+  echo "== ffbuild/config.log (tail)" >&2
+  tail -n 80 ffbuild/config.log >&2 || true
+  exit 1
+}
 make -j"$JOBS" >/dev/null
 BIN="$WORK/ffmpeg/ffmpeg$EXT"
 strip "$BIN"
