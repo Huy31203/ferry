@@ -178,6 +178,7 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            pdf_dpi: None,
             video: None,
             audio: Some(AudioJob::default()),
             poster: None,

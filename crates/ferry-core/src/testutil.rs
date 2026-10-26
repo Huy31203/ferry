@@ -463,31 +463,257 @@ pub fn pdfium() -> bool {
 /// A PDF with one blank page per `(width_pt, height_pt)`, each holding a small
 /// filled rectangle.
 pub fn blank_pdf(pages: &[(f32, f32)]) -> Vec<u8> {
-    use lopdf::{Document, Object, Stream, dictionary};
-    let mut doc = Document::with_version("1.5");
-    let tree = doc.new_object_id();
-    let kids: Vec<Object> = pages
+    let pages: Vec<PdfPage> = pages
         .iter()
-        .map(|&(w, h)| {
-            let content = doc.add_object(Stream::new(
-                dictionary! {},
-                b"0.2 g 10 10 40 40 re f".to_vec(),
-            ));
-            doc.add_object(dictionary! {
-                "Type" => "Page",
-                "Parent" => tree,
-                "MediaBox" => vec![0.into(), 0.into(), w.into(), h.into()],
-                "Contents" => content,
-            })
-            .into()
+        .map(|&(w, h)| PdfPage {
+            media: [0.0, 0.0, w, h],
+            ..PdfPage::default()
         })
         .collect();
-    doc.objects.insert(
-        tree,
-        dictionary! { "Type" => "Pages", "Count" => kids.len() as i64, "Kids" => kids }.into(),
-    );
-    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => tree });
+    pdf(&pages, &PdfExtras::default())
+}
+
+/// What an image XObject of a `PdfImage` is made of.
+#[allow(dead_code)] // the image tests of Task 14 use every kind
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageKind {
+    #[default]
+    DctRgb,
+    DctGray,
+    /// Tagged CMYK; the bytes are not a real CMYK JPEG (nothing decodes it).
+    DctCmyk,
+    FlateScreenshot,
+    FlatePhoto,
+    OneBit,
+    /// Tagged JPEG 2000; the bytes are not a real image.
+    Jpx,
+}
+
+/// An image on a page: `px` pixels drawn `drawn` points big, lower left at the corner.
+#[derive(Clone, Debug)]
+pub struct PdfImage {
+    pub px: (u32, u32),
+    pub drawn: (f32, f32),
+    pub kind: ImageKind,
+}
+
+impl Default for PdfImage {
+    fn default() -> Self {
+        Self {
+            px: (8, 8),
+            drawn: (72.0, 72.0),
+            kind: ImageKind::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PdfPage {
+    /// `[x0, y0, x1, y1]`, letter size by default.
+    pub media: [f32; 4],
+    pub crop: Option<[f32; 4]>,
+    pub rotate: i64,
+    pub images: Vec<PdfImage>,
+    /// Bytes of uncompressed comment content, to make a bloated file.
+    pub padding: usize,
+}
+
+impl Default for PdfPage {
+    fn default() -> Self {
+        Self {
+            media: [0.0, 0.0, 612.0, 792.0],
+            crop: None,
+            rotate: 0,
+            images: Vec::new(),
+            padding: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PdfExtras {
+    /// An AcroForm with a signature field that has a value.
+    pub signed: bool,
+    /// An XMP packet declaring PDF/A-1.
+    pub pdfa1: bool,
+    /// A trailer `/Encrypt` dictionary (the content stays readable).
+    pub encrypt_dict: bool,
+    /// Page 2 draws page 1's first image again, 360 points wide.
+    pub shared_image: bool,
+}
+
+fn pdf_image(image: &PdfImage) -> lopdf::Stream {
+    use lopdf::{Stream, dictionary};
+    let (w, h) = image.px;
+    let mut dict = dictionary! {
+        "Type" => "XObject", "Subtype" => "Image",
+        "Width" => i64::from(w), "Height" => i64::from(h),
+        "BitsPerComponent" => 8, "ColorSpace" => "DeviceRGB",
+    };
+    let rgb = |pixel: &dyn Fn(u32, u32) -> [u8; 3]| -> Vec<u8> {
+        (0..h)
+            .flat_map(|y| (0..w).flat_map(move |x| pixel(x, y)))
+            .collect()
+    };
+    let (content, flate) = match image.kind {
+        ImageKind::DctRgb => {
+            dict.set("Filter", "DCTDecode");
+            (jpeg(w, h, 90, &JpegExtras::default()), false)
+        }
+        ImageKind::DctGray => {
+            dict.set("Filter", "DCTDecode");
+            dict.set("ColorSpace", "DeviceGray");
+            (jpeg_gray(w, h, 90), false)
+        }
+        ImageKind::DctCmyk => {
+            dict.set("Filter", "DCTDecode");
+            dict.set("ColorSpace", "DeviceCMYK");
+            (
+                jpeg(w.min(64), h.min(64), 90, &JpegExtras::default()),
+                false,
+            )
+        }
+        ImageKind::FlateScreenshot => {
+            let shot = screenshot_rgba(w, h);
+            (
+                shot.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect(),
+                true,
+            )
+        }
+        ImageKind::FlatePhoto => {
+            // A gradient with hashed noise: thousands of colours, like a photo.
+            let noise = |x: u32, y: u32, k: u32| {
+                let h = (x.wrapping_mul(73_856_093)
+                    ^ y.wrapping_mul(19_349_663)
+                    ^ k.wrapping_mul(83_492_791))
+                .wrapping_mul(2_654_435_761);
+                (h >> 27) as u8
+            };
+            let bytes = rgb(&|x, y| {
+                [
+                    (x * 200 / w.max(1)) as u8 + noise(x, y, 1),
+                    (y * 200 / h.max(1)) as u8 + noise(x, y, 2),
+                    100 + noise(x, y, 3),
+                ]
+            });
+            (bytes, true)
+        }
+        ImageKind::OneBit => {
+            dict.set("BitsPerComponent", 1);
+            dict.set("ColorSpace", "DeviceGray");
+            (vec![0xAA; (w.div_ceil(8) * h) as usize], true)
+        }
+        ImageKind::Jpx => {
+            dict.set("Filter", "JPXDecode");
+            (b"\0\0\0\x0cjP  \r\n\x87\n".to_vec(), false)
+        }
+    };
+    let mut stream = Stream::new(dict, content);
+    if flate {
+        stream.compress().unwrap();
+    }
+    stream
+}
+
+/// A PDF of `pages`, built with lopdf. When every page has the same `crop` it
+/// sits on the page tree and the pages inherit it.
+pub fn pdf(pages: &[PdfPage], extras: &PdfExtras) -> Vec<u8> {
+    use lopdf::{Dictionary, Document, Object, ObjectId, Stream, StringFormat, dictionary};
+    let mut doc = Document::with_version("1.5");
+    let tree = doc.new_object_id();
+    let shared_crop = pages
+        .first()
+        .and_then(|p| p.crop)
+        .filter(|c| pages.iter().all(|p| p.crop == Some(*c)));
+    let numbers = |b: [f32; 4]| -> Object {
+        b.iter()
+            .map(|&v| Object::from(v))
+            .collect::<Vec<_>>()
+            .into()
+    };
+    let mut first_image: Option<ObjectId> = None;
+    let mut kids = Vec::new();
+    for (n, page) in pages.iter().enumerate() {
+        let (mut xobjects, mut content) = (Dictionary::new(), String::new());
+        for (i, image) in page.images.iter().enumerate() {
+            let id = doc.add_object(pdf_image(image));
+            first_image.get_or_insert(id);
+            xobjects.set(format!("Im{i}"), id);
+            content += &format!(
+                "q {} 0 0 {} 0 0 cm /Im{i} Do Q\n",
+                image.drawn.0, image.drawn.1
+            );
+        }
+        if extras.shared_image
+            && n == 1
+            && let Some(id) = first_image
+        {
+            xobjects.set("Im0", id);
+            content += "q 360 0 0 180 0 0 cm /Im0 Do Q\n";
+        }
+        content += "0.2 g 10 10 40 40 re f\n";
+        if page.padding > 0 {
+            content += &format!("% {}\n", "x".repeat(page.padding));
+        }
+        let contents = doc.add_object(Stream::new(dictionary! {}, content.into_bytes()));
+        let mut dict = dictionary! {
+            "Type" => "Page", "Parent" => tree, "MediaBox" => numbers(page.media),
+            "Contents" => contents,
+        };
+        if !xobjects.is_empty() {
+            dict.set("Resources", dictionary! { "XObject" => xobjects });
+        }
+        if let Some(crop) = page.crop.filter(|_| shared_crop.is_none()) {
+            dict.set("CropBox", numbers(crop));
+        }
+        if page.rotate != 0 {
+            dict.set("Rotate", page.rotate);
+        }
+        kids.push(Object::from(doc.add_object(dict)));
+    }
+    let mut pages_dict =
+        dictionary! { "Type" => "Pages", "Count" => kids.len() as i64, "Kids" => kids };
+    if let Some(crop) = shared_crop {
+        pages_dict.set("CropBox", numbers(crop));
+    }
+    doc.objects.insert(tree, pages_dict.into());
+    let mut catalog = dictionary! { "Type" => "Catalog", "Pages" => tree };
+    if extras.signed {
+        let value = doc.add_object(dictionary! {
+            "Type" => "Sig", "Filter" => "Adobe.PPKLite", "SubFilter" => "adbe.pkcs7.detached",
+            "Contents" => Object::String(vec![0; 8], StringFormat::Hexadecimal),
+        });
+        let field = doc.add_object(dictionary! {
+            "FT" => "Sig", "T" => Object::string_literal("Signature1"), "V" => value,
+        });
+        catalog.set(
+            "AcroForm",
+            dictionary! { "Fields" => vec![Object::from(field)], "SigFlags" => 3 },
+        );
+    }
+    if extras.pdfa1 {
+        let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+            <rdf:Description xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>1</pdfaid:part>\
+            <pdfaid:conformance>B</pdfaid:conformance></rdf:Description></rdf:RDF></x:xmpmeta>";
+        let metadata = doc.add_object(
+            Stream::new(
+                dictionary! { "Type" => "Metadata", "Subtype" => "XML" },
+                xmp.as_bytes().to_vec(),
+            )
+            .with_compression(false),
+        );
+        catalog.set("Metadata", metadata);
+    }
+    let catalog = doc.add_object(catalog);
     doc.trailer.set("Root", catalog);
+    if extras.encrypt_dict {
+        let encrypt = doc.add_object(dictionary! {
+            "Filter" => "Standard", "V" => 1, "R" => 2, "P" => -4,
+            "O" => Object::String(vec![1; 32], StringFormat::Hexadecimal),
+            "U" => Object::String(vec![2; 32], StringFormat::Hexadecimal),
+        });
+        doc.trailer.set("Encrypt", encrypt);
+    }
     let mut out = Vec::new();
     doc.save_to(&mut out).unwrap();
     out

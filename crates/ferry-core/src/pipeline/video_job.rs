@@ -159,6 +159,7 @@ impl Job {
             times: None,
             changed: false,
             twin: false,
+            pdf_dpi: None,
             video: Some(VideoState::default()),
             audio: None,
             poster: None,
