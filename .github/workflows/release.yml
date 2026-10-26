@@ -96,7 +96,8 @@ jobs:
           releaseBody: >-
             Unsigned build. Windows: SmartScreen shows "Windows protected your PC";
             choose More info → Run anyway. macOS: right-click Ferry.app → Open the first time.
-          releaseDraft: false
+          # A draft keeps every asset (installers, latest.json) private until the publish job below.
+          releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
@@ -134,3 +135,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" ferry-*-third-party-sources.tar.xz --clobber
+
+  publish:
+    name: publish release
+    needs: [release, updater-manifest, sources]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Only now do the installers, latest.json and the corresponding-source archive go public together.
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
