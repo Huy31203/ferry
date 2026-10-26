@@ -165,7 +165,8 @@ pub async fn pipe_run(app: AppHandle, id: JobId, pipeline: u32) -> Result<(), St
     blocking(app, move |app| pipe_jobs::run_on_card(app, &id, pipeline)).await
 }
 
-#[tauri::command]
+/// Async: building a window inside a sync command deadlocks on Windows.
+#[tauri::command(async)]
 pub fn pipe_open_editor(app: AppHandle, pipeline: Option<u32>, tab: Option<String>) {
     pipe_windows::open_editor(&app, pipeline, tab.as_deref());
 }

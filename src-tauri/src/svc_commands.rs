@@ -158,8 +158,9 @@ pub fn svc_open_release(app: AppHandle) -> Result<(), String> {
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
-/// Main thread (a plain command): the stack's pill opens About and updates.
-#[tauri::command]
+/// The stack's pill opens About and updates. Async: building the Settings
+/// window inside a sync command deadlocks on Windows.
+#[tauri::command(async)]
 pub fn svc_open_about(app: AppHandle) {
     open_settings_at(&app, "about", None);
 }
