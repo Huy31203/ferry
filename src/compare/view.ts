@@ -13,6 +13,11 @@ export interface Shot {
   kind: 'image' | 'video';
   duration_ms: number | null;
   fps: number | null;
+  // sE pdf-formats
+  /** What the page draws: `path`, or a PNG poster of it (TIFF, HEIC, a PDF page, a pages-folder page). */
+  src: string;
+  /** How many pages `src` can step through; null for a plain image. */
+  pages: number | null;
 }
 
 /** Mirrors compare::CompareView. `original` is null in single-image mode (Windows quick preview). */
@@ -21,6 +26,8 @@ export interface CompareView {
   name: string;
   original: Shot | null;
   now: Shot;
+  /** The 1-based page shown (sE pdf-formats). */
+  page: number;
 }
 
 export type Mode = 'slider' | 'sides';
@@ -82,4 +89,15 @@ export function dividerAt(x: number, left: number, width: number): number {
 /** An asset URL that changes when the file does, so the webview never shows a cached older result. */
 export function versioned(url: string, shot: Shot): string {
   return `${url}?v=${shot.version}`;
+}
+
+/** How many pages the window steps through (sE pdf-formats): the result's, else the original's. */
+export function pageCount(view: Pick<CompareView, 'original' | 'now'>): number | null {
+  return view.now.pages ?? view.original?.pages ?? null;
+}
+
+/** The page `delta` away, or null when that is outside `1..=pages`. */
+export function stepPage(page: number, pages: number | null, delta: number): number | null {
+  const next = page + delta;
+  return pages === null || next < 1 || next > pages ? null : next;
 }

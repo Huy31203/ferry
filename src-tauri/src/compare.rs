@@ -10,6 +10,7 @@ use std::time::UNIX_EPOCH;
 use ferry_core::geometry::{Rect, center, fit_image};
 use ferry_core::i18n::{t, tf};
 use ferry_core::job::{JobId, JobState, JobUpdate};
+use ferry_core::poster;
 use ferry_core::sniff::{self, Format};
 use serde::Serialize;
 use tauri::{
@@ -51,6 +52,11 @@ pub struct Shot {
     pub kind: &'static str,
     pub duration_ms: Option<u64>,
     pub fps: Option<f32>,
+    // sE pdf-formats
+    /// What the page draws: `path`, or a PNG poster of it (TIFF, HEIC, a PDF page, a pages-folder page).
+    pub src: PathBuf,
+    /// How many pages `src` can step through; `None` for a plain image.
+    pub pages: Option<u32>,
 }
 
 /// Everything the page needs. `original` is `None` in single-image mode.
@@ -61,6 +67,8 @@ pub struct CompareView {
     pub name: String,
     pub original: Option<Shot>,
     pub now: Shot,
+    /// The 1-based page shown (sE pdf-formats).
+    pub page: u32,
 }
 
 /// What the window shows for `card`, or why it can't. `single` leaves the
@@ -103,6 +111,7 @@ pub fn view(card: &JobUpdate, single: bool) -> Result<CompareView, String> {
         },
         original,
         now,
+        page: 1,
     })
 }
 
@@ -113,7 +122,7 @@ fn same_view(shown: Option<&CompareView>, id: &JobId, single: bool) -> bool {
 }
 
 fn existing(path: Option<&Path>) -> Option<&Path> {
-    path.filter(|p| p.is_file())
+    path.filter(|p| p.is_file() || p.is_dir()) // sE pdf-formats: a pages folder is a result too
 }
 
 fn shot(path: &Path, dims: Option<(u32, u32)>) -> Shot {
@@ -121,7 +130,13 @@ fn shot(path: &Path, dims: Option<(u32, u32)>) -> Shot {
     let format = head_format(path);
     Shot {
         path: path.to_owned(),
-        bytes: meta.as_ref().map_or(0, |m| m.len()),
+        src: path.to_owned(), // sE pdf-formats
+        pages: None,
+        bytes: if path.is_dir() {
+            folder_bytes(path)
+        } else {
+            meta.as_ref().map_or(0, |m| m.len())
+        },
         dims,
         format: format.map_or("", Format::label),
         kind: if format.is_some_and(Format::is_video) {
@@ -175,15 +190,18 @@ pub fn is_active(app: &AppHandle) -> bool {
 /// Show card `id` (`single`: its result alone) and give the window focus.
 /// Asking again for what is already on show closes the window instead.
 pub fn show(app: &AppHandle, id: &JobId, single: bool) -> Result<(), String> {
-    let view = view(&card(app, id)?, single)?;
+    let mut view = view(&card(app, id)?, single)?;
     if same_view(SHOWN.lock().unwrap().as_ref(), id, single) && is_active(app) {
         close(app);
         return Ok(());
     }
+    let work_dir = app.state::<AppState>().work_dir.clone();
+    with_posters(&mut view, &work_dir); // sE pdf-formats
     // The configured scope only covers backups; results can be anywhere.
     let scope = app.asset_protocol_scope();
     for shot in view.original.iter().chain([&view.now]) {
         scope.allow_file(&shot.path).map_err(|e| e.to_string())?;
+        scope.allow_file(&shot.src).map_err(|e| e.to_string())?; // sE pdf-formats
     }
     let shown = view.original.as_ref().unwrap_or(&view.now);
     let mut image = shown.dims;
@@ -324,6 +342,106 @@ pub fn compare_ready() -> Option<CompareView> {
 #[tauri::command]
 pub fn compare_close(app: AppHandle) {
     close(&app);
+}
+
+// ---- sE pdf-formats ----
+
+/// The total size of the files in a pages folder.
+fn folder_bytes(dir: &Path) -> u64 {
+    page_files(dir)
+        .iter()
+        .filter_map(|file| std::fs::metadata(file).ok())
+        .map(|meta| meta.len())
+        .sum()
+}
+
+/// The files of a pages folder sorted by name.
+fn page_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    files.sort();
+    files
+}
+
+/// Page `index` (1-based) of a pages folder, by file name order.
+fn page_file(dir: &Path, index: u32) -> Option<PathBuf> {
+    let at = usize::try_from(index.checked_sub(1)?).ok()?;
+    page_files(dir).into_iter().nth(at)
+}
+
+/// The number a page file's name ends in: `doc-03.png` is 3.
+fn page_number(file: &Path) -> Option<u32> {
+    let stem = file.file_stem()?.to_str()?;
+    let digits = stem.len() - stem.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    stem[stem.len() - digits..].parse().ok()
+}
+
+/// How many pages the window can step through: the result's, else the original's.
+fn page_count(view: &CompareView) -> Option<u32> {
+    view.now
+        .pages
+        .or_else(|| view.original.as_ref().and_then(|o| o.pages))
+}
+
+/// Fill in what the page draws: a poster for each TIFF, HEIC or PDF shot, and
+/// the shown page of a pages folder. A shot that can't be drawn keeps
+/// `src = path`, so the page shows its error state.
+pub fn with_posters(view: &mut CompareView, work_dir: &Path) {
+    let page = view.page;
+    let mut original_page = page;
+    if view.now.path.is_dir() {
+        let dir = view.now.path.clone();
+        view.now.pages = u32::try_from(page_files(&dir).len()).ok();
+        if let Some(file) = page_file(&dir, page) {
+            original_page = page_number(&file).unwrap_or(page);
+            if let Ok(bytes) = std::fs::read(&file) {
+                let format = sniff::sniff(&bytes);
+                view.now.dims = format.and_then(|f| sniff::dimensions(&bytes, f));
+                view.now.format = format.map_or("", Format::label);
+            }
+            view.now.src = file;
+        }
+    }
+    let shots = view
+        .original
+        .iter_mut()
+        .map(|shot| (shot, original_page))
+        .chain([(&mut view.now, page)]);
+    for (shot, page) in shots {
+        if !shot.path.is_file() || !head_format(&shot.path).is_some_and(poster::needs_poster) {
+            continue;
+        }
+        if let Ok(shown) = poster::viewable(&shot.path, page, work_dir) {
+            shot.src = shown.src;
+            shot.dims = shown.dims.or(shot.dims);
+            shot.pages = shown.pages;
+        }
+    }
+}
+
+/// Page Up and Page Down, or the stepper, in the window: show page `page`.
+#[tauri::command]
+pub fn compare_page(app: AppHandle, page: u32) -> Result<(), String> {
+    let mut view = SHOWN
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("nothing is being compared")?;
+    view.page = page.clamp(1, page_count(&view).unwrap_or(1));
+    let work_dir = app.state::<AppState>().work_dir.clone();
+    with_posters(&mut view, &work_dir);
+    let scope = app.asset_protocol_scope();
+    for shot in view.original.iter().chain([&view.now]) {
+        scope.allow_file(&shot.src).map_err(|e| e.to_string())?;
+    }
+    *SHOWN.lock().unwrap() = Some(view.clone());
+    app.emit_to(COMPARE, "compare:show", &view)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -516,6 +634,55 @@ mod tests {
         assert_eq!(json["now"]["dims"], serde_json::json!([1440, 900]));
         assert_eq!(json["original"]["format"], "PNG");
         assert!(json["id"].is_string());
+    }
+
+    // sE pdf-formats
+    fn pages_folder(dir: &Path) -> PathBuf {
+        let folder = dir.join("doc");
+        fs::create_dir(&folder).unwrap();
+        for n in ["doc-02.png", "doc-03.png"] {
+            fs::write(folder.join(n), PNG).unwrap();
+        }
+        folder
+    }
+
+    #[test]
+    fn a_pages_folder_compares_page_by_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = pages_folder(dir.path());
+        assert_eq!(page_file(&folder, 2), Some(folder.join("doc-03.png")));
+        assert_eq!(page_file(&folder, 3), None);
+        assert_eq!(page_file(&folder, 0), None);
+        assert_eq!(page_number(&folder.join("doc-03.png")), Some(3));
+        assert_eq!(page_number(&folder.join("doc.png")), None);
+    }
+
+    #[test]
+    fn a_folder_result_can_be_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = pages_folder(dir.path());
+        let card = JobUpdate {
+            output: Some(folder.clone()),
+            ..converted(dir.path())
+        };
+        let mut view = view(&card, true).unwrap();
+        assert_eq!(view.now.bytes, 2 * PNG.len() as u64);
+        with_posters(&mut view, dir.path());
+        assert_eq!(view.now.src, folder.join("doc-02.png"));
+        assert_eq!((view.now.pages, view.now.format), (Some(2), "PNG"));
+        view.page = 2;
+        with_posters(&mut view, dir.path());
+        assert_eq!(view.now.src, folder.join("doc-03.png"));
+        assert_eq!(page_count(&view), Some(2));
+    }
+
+    #[test]
+    fn a_plain_image_is_drawn_as_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut view = view(&converted(dir.path()), false).unwrap();
+        with_posters(&mut view, dir.path());
+        assert_eq!(view.now.src, view.now.path);
+        assert_eq!(view.original.unwrap().pages, None);
     }
 
     // stream B: audio

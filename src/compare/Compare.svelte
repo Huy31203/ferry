@@ -11,7 +11,9 @@
     cssScale,
     dividerAt,
     nowBox,
+    pageCount,
     shotLabel,
+    stepPage,
     versioned,
     type CompareView,
     type Mode,
@@ -49,7 +51,7 @@
   }
 
   function src(shot: Shot): string {
-    return versioned(convertFileSrc(shot.path), shot);
+    return versioned(convertFileSrc(shot.src), shot);
   }
 
   /** CSS for an image of `box` image pixels, centred in its pane and panned. */
@@ -59,11 +61,22 @@
     return `width:${width}px;height:${height}px;transform:translate(${offset[0] - width / 2}px,${offset[1] - height / 2}px)`;
   }
 
+  const pages = $derived(view ? pageCount(view) : null);
+
   function show(next: CompareView | null) {
+    // Another page of the same card keeps the zoom and the divider.
+    const turned = next !== null && next.id === view?.id;
     view = next;
+    if (turned) return;
     zoom = 'fit';
     divider = 0.5;
     pan = [0, 0];
+  }
+
+  /** sE pdf-formats: show another page; Rust rebuilds the view and sends it back. */
+  function turn(delta: number) {
+    const page = view ? stepPage(view.page, pages, delta) : null;
+    if (page !== null) void invoke('compare_page', { page });
   }
 
   function close() {
@@ -75,6 +88,9 @@
     if (closesCompare(event, isMac)) {
       event.preventDefault();
       close();
+    } else if (event.key === 'PageDown' || event.key === 'PageUp') {
+      event.preventDefault();
+      turn(event.key === 'PageDown' ? 1 : -1);
     }
   }
 
@@ -128,6 +144,17 @@
 
 <svelte:window {onkeydown} />
 
+<!-- sE pdf-formats -->
+{#snippet pager()}
+  {#if view}
+    <span class="pager">
+      <button type="button" aria-label={t('pdf.compare.prev')} disabled={view.page <= 1} onclick={() => turn(-1)}>‹</button>
+      {t('pdf.compare.page', { n: view.page, total: pages ?? 1 })}
+      <button type="button" aria-label={t('pdf.compare.next')} disabled={view.page >= (pages ?? 1)} onclick={() => turn(1)}>›</button>
+    </span>
+  {/if}
+{/snippet}
+
 {#if view && view.now.kind === 'video'}
   <!-- stream A: video -->
   <VideoCompare {view} />
@@ -136,9 +163,11 @@
     <header class:single>
       {#if view.original}
         <span><b>{t('compare.original')}</b> {shotLabel(view.original)}</span>
+        {#if pages !== null && pages > 1}{@render pager()}{/if}
         <span><b>{t('compare.now')}</b> {shotLabel(view.now, view.original.bytes)}</span>
       {:else}
         <span>{shotLabel(view.now)}</span>
+        {#if pages !== null && pages > 1}{@render pager()}{/if}
       {/if}
     </header>
 
@@ -220,6 +249,25 @@
     height: 36px;
     justify-content: space-between;
     border-bottom: 1px solid var(--rail-line);
+  }
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pager button {
+    padding: 0 8px;
+    font: inherit;
+    color: var(--fg);
+    background: none;
+    border: 0;
+    border-radius: 5px;
+  }
+  .pager button:disabled {
+    opacity: 0.4;
+  }
+  .pager button:focus-visible {
+    outline: 2px solid var(--accent-text);
   }
   header.single {
     justify-content: center;
