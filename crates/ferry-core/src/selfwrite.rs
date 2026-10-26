@@ -1,7 +1,8 @@
 //! A ledger of the files Ferry itself wrote, so a watcher that sees one of them
 //! change never starts a job on it (R§3.3 "No self-loops"). An entry is a path
 //! plus the `(len, mtime)` it had when Ferry finished writing; a file whose
-//! current stamp differs (the user edited it since) is not ours.
+//! length differs (the user edited it since) is not ours. A changed date alone
+//! is not an edit.
 
 use std::collections::HashMap;
 use std::fs;
@@ -92,10 +93,12 @@ impl Ledger {
         }
     }
 
+    /// Compares the length only: Spotlight, tag edits and sync clients change
+    /// the dates of a file Ferry wrote, and that is not the user's edit.
     pub fn is_own(&self, key: &Path, stamp: &Stamp, now: Instant) -> bool {
         self.entries
             .get(key)
-            .is_some_and(|(own, at)| own == stamp && now.duration_since(*at) < self.ttl)
+            .is_some_and(|(own, at)| own.len == stamp.len && now.duration_since(*at) < self.ttl)
     }
 }
 
@@ -147,6 +150,18 @@ mod tests {
             "the user's later edit is not ours"
         );
         assert!(!l.is_own(Path::new("/w/b.png"), &stamp(10), t0));
+    }
+
+    #[test]
+    fn a_touched_file_is_still_own() {
+        let t0 = Instant::now();
+        let mut l = Ledger::new(TTL, CAP);
+        l.record("/w/a.png".into(), stamp(10), t0);
+        let touched = Stamp {
+            len: 10,
+            modified: UNIX_EPOCH + Duration::from_secs(99),
+        };
+        assert!(l.is_own(Path::new("/w/a.png"), &touched, t0));
     }
 
     #[test]
