@@ -14,11 +14,13 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting, NSWorks
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 /// Read order: the first type present wins.
-const IMAGE_TYPES: [(&str, Format); 4] = [
+const IMAGE_TYPES: [(&str, Format); 5] = [
     ("public.png", Format::Png),
     ("public.jpeg", Format::Jpeg),
     ("com.compuserve.gif", Format::Gif),
     ("org.webmproject.webp", Format::WebP),
+    // sE pdf-formats (last: a screenshot also carries a TIFF beside its PNG)
+    ("public.tiff", Format::Tiff),
 ];
 
 /// Markers password managers and clipboard tools put on secret or throwaway content
@@ -237,6 +239,51 @@ mod tests {
         assert_eq!(snap.image, Some((Format::Png, PNG.to_vec())));
         assert!(!snap.concealed);
         assert!(snap.files.is_empty());
+    }
+
+    // sE pdf-formats
+    /// A 1 x 1 grey TIFF: a header, one pixel and one IFD.
+    fn tiny_tiff() -> Vec<u8> {
+        let mut out = b"II*\0".to_vec();
+        out.extend_from_slice(&10_u32.to_le_bytes()); // the IFD, after the pixel
+        out.extend_from_slice(&[0x80, 0]); // the pixel, padded to a word
+        let tags: [(u16, u16, u32); 8] = [
+            (256, 3, 1), // width
+            (257, 3, 1), // height
+            (258, 3, 8), // bits per sample
+            (259, 3, 1), // no compression
+            (262, 3, 1), // black is zero
+            (273, 4, 8), // the strip
+            (277, 3, 1), // samples per pixel
+            (279, 4, 1), // the strip's size
+        ];
+        out.extend_from_slice(&(tags.len() as u16).to_le_bytes());
+        for (tag, kind, value) in tags {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&1_u32.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&0_u32.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn a_tiff_on_the_clipboard_is_read_when_nothing_better_is_there() {
+        let pb = Private::new();
+        let tiff = tiny_tiff();
+        pb.0.clearContents();
+        pb.0.setData_forType(
+            Some(&NSData::with_bytes(&tiff)),
+            &NSString::from_str("public.tiff"),
+        );
+        assert_eq!(read_from(&pb.0).image.map(|(f, _)| f), Some(Format::Tiff));
+        // A PNG beside it wins.
+        pb.0.setData_forType(
+            Some(&NSData::with_bytes(PNG)),
+            &NSString::from_str("public.png"),
+        );
+        assert_eq!(read_from(&pb.0).image.map(|(f, _)| f), Some(Format::Png));
     }
 
     #[test]

@@ -491,8 +491,10 @@ pub fn tiff(pages: &[TiffPage]) -> Vec<u8> {
             ($colour:ty, $data:expr) => {{
                 let mut image = enc.new_image::<$colour>(w, h).unwrap();
                 if page.colour == TiffColour::Rgba8 {
+                    let extra = [tiff::tags::ExtraSamples::UnassociatedAlpha.to_u16()];
                     image
-                        .extra_samples(&[tiff::tags::ExtraSamples::UnassociatedAlpha])
+                        .encoder()
+                        .write_tag(tiff::tags::Tag::ExtraSamples, &extra[..])
                         .unwrap();
                 }
                 image
@@ -515,8 +517,7 @@ pub fn tiff(pages: &[TiffPage]) -> Vec<u8> {
                     .flat_map(|p| [p[0], p[1], p[2]])
                     .collect::<Vec<u8>>()
             ),
-            // The encoder counts alpha as an extra sample of RGB8.
-            TiffColour::Rgba8 => write!(colortype::RGB8, rgba),
+            TiffColour::Rgba8 => write!(colortype::RGBA8, rgba),
             TiffColour::Gray8 => write!(
                 colortype::Gray8,
                 px.iter().map(|p| p[0]).collect::<Vec<u8>>()
@@ -536,6 +537,29 @@ pub fn tiff(pages: &[TiffPage]) -> Vec<u8> {
         }
     }
     out.into_inner()
+}
+
+/// A one-page TIFF with `dpi` in its resolution tags, the unit being inches.
+pub fn tiff_with_resolution(dpi: u32) -> Vec<u8> {
+    use tiff::encoder::{Rational, TiffEncoder, colortype};
+    use tiff::tags::{ResolutionUnit, Tag};
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut enc = TiffEncoder::new(&mut out).unwrap();
+    let mut image = enc.new_image::<colortype::Gray8>(32, 32).unwrap();
+    image.resolution(ResolutionUnit::Inch, Rational { n: dpi, d: 1 });
+    image.encoder().write_tag(Tag::Orientation, 1_u16).unwrap();
+    image.write_data(&[7_u8; 32 * 32]).unwrap();
+    out.into_inner()
+}
+
+/// The X resolution of a TIFF's first page, when it is a whole number.
+pub fn tiff_resolution(bytes: &[u8]) -> Option<u32> {
+    use tiff::decoder::{Decoder, ifd::Value};
+    let mut d = Decoder::new(std::io::Cursor::new(bytes)).ok()?;
+    match d.find_tag(tiff::tags::Tag::XResolution).ok()?? {
+        Value::Rational(n, 1) => Some(n),
+        _ => None,
+    }
 }
 
 // ---- stream B: audio fixtures ----

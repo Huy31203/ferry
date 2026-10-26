@@ -52,6 +52,11 @@ describe('railActions', () => {
     ]);
   });
 
+  it('has no Compression button on a TIFF, which is lossless', () => {
+    expect(railActions(card({ kind: 'done' }, { format: 'tiff' }))).not.toContain('compression');
+    expect(railActions(card({ kind: 'done' }, { format: 'jpeg' }))).toContain('compression');
+  });
+
   it('leaves Compression and Compare off a compact card', () => {
     expect(railActions(card({ kind: 'done' }, { can_restore: true }), true)).toEqual([
       'downscale',

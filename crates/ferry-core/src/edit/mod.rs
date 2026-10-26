@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::audio::{CoverPolicy, Loudness};
 use crate::i18n::tf;
-use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, gif};
+use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, gif, tiff};
 use crate::sniff::{self, Format};
 use geometry::Rect;
 use raster::Raster;
@@ -374,9 +374,17 @@ enum Work<'a> {
     },
     /// Same format, same pixels: the format's optimiser at a new quality, so
     /// Cycle 1's metadata rules stay exactly as they were.
-    Encoder { input: &'a [u8], format: Format },
+    Encoder {
+        input: &'a [u8],
+        format: Format,
+    },
     /// Everything else: decoded, cut and re-encoded.
-    Pixels { raster: Raster, format: Format },
+    Pixels {
+        raster: Raster,
+        format: Format,
+    },
+    // sE pdf-formats: a multi-page TIFF, every page cut on its own.
+    TiffPages(Vec<Raster>),
 }
 
 impl Work<'_> {
@@ -385,6 +393,7 @@ impl Work<'_> {
             Work::Gifsicle { input, crop, size } => gif::edit(input, *crop, *size, o),
             Work::Encoder { input, format } => optimise::encode(input, *format, o),
             Work::Pixels { raster, format } => raster::encode(raster, *format, o),
+            Work::TiffPages(pages) => tiff::encode_rasters(pages),
         }
     }
 }
@@ -421,6 +430,23 @@ fn prepare<'a>(
             },
             dims,
         ));
+    }
+    // sE pdf-formats
+    if source == Format::Tiff
+        && target == Format::Tiff
+        && edits.reshapes()
+        && sniff::tiff_page_count(original) > 1
+    {
+        let mut pages = Vec::new();
+        for page in tiff::decode_pages(original)? {
+            let full = (page.width, page.height);
+            let window = geometry::crop_size(full, edits);
+            let crop = place(full, window, edits.framing, Some(&page));
+            let out = geometry::output_size(window, edits);
+            pages.push(raster::cut(&page, crop, out)?);
+        }
+        let dims = pages.first().map_or((0, 0), |p| (p.width, p.height));
+        return Ok((Work::TiffPages(pages), dims));
     }
     let decoded = raster::decode(original, source)?;
     let full = (decoded.width, decoded.height);
@@ -874,6 +900,57 @@ mod tests {
         });
         assert_eq!(e.encoder, Some(Encoder::Small));
         assert!(e.is_plain());
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn cropping_a_multi_page_tiff_crops_every_page() {
+        let input = testutil::tiff(&[
+            testutil::TiffPage {
+                size: (300, 200),
+                ..testutil::TiffPage::default()
+            },
+            testutil::TiffPage {
+                size: (100, 100),
+                ..testutil::TiffPage::default()
+            },
+        ]);
+        let a = applied(&input, Format::Tiff, |e| e.aspect = Some((1, 1)));
+        let pages = tiff::decode_pages(&a.bytes).unwrap();
+        assert_eq!(
+            pages
+                .iter()
+                .map(|p| (p.width, p.height))
+                .collect::<Vec<_>>(),
+            [(200, 200), (100, 100)]
+        );
+        assert_eq!((a.format, a.dims), (Format::Tiff, (200, 200)));
+    }
+
+    #[test]
+    fn a_single_page_tiff_crops_through_the_raster_path() {
+        let a = applied(
+            &testutil::tiff(&[testutil::TiffPage {
+                size: (300, 200),
+                ..testutil::TiffPage::default()
+            }]),
+            Format::Tiff,
+            |e| e.scale = Some(50),
+        );
+        assert_eq!((a.format, a.dims), (Format::Tiff, (150, 100)));
+    }
+
+    #[test]
+    fn a_tiff_converts_to_a_jpeg_from_its_first_page() {
+        let input = testutil::tiff(&[
+            testutil::TiffPage::default(),
+            testutil::TiffPage {
+                size: (10, 10),
+                ..testutil::TiffPage::default()
+            },
+        ]);
+        let a = applied(&input, Format::Tiff, |e| e.format = Some(Format::Jpeg));
+        assert_eq!((a.format, a.dims), (Format::Jpeg, (64, 48)));
     }
 
     #[test]

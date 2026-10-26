@@ -66,15 +66,19 @@ fn unsupported_write(format: Format) -> OptimiseError {
 
 /// The pixels are always RGBA, so a grey profile (colour space `GRAY` at bytes
 /// 16..20 of the header) would mislabel them.
-fn rgb_profile(icc: Option<Vec<u8>>) -> Option<Vec<u8>> {
+pub(crate) fn rgb_profile(icc: Option<Vec<u8>>) -> Option<Vec<u8>> {
     icc.filter(|p| p.get(16..20) != Some(b"GRAY".as_slice()))
 }
 
-/// The size a card shows for the original: the header's, turned for JPEG
-/// orientations 5–8.
+/// The size a card shows for the original: the header's, turned for JPEG and
+/// TIFF orientations 5–8.
 pub fn display_dims(bytes: &[u8], format: Format) -> Option<(u32, u32)> {
     let (w, h) = sniff::dimensions(bytes, format)?;
-    let turned = format == Format::Jpeg && matches!(jpeg::orientation(bytes), 5..=8);
+    let turned = match format {
+        Format::Jpeg => matches!(jpeg::orientation(bytes), 5..=8),
+        Format::Tiff => matches!(sniff::tiff_orientation(bytes), 5..=8), // sE pdf-formats
+        _ => false,
+    };
     Some(if turned { (h, w) } else { (w, h) })
 }
 
@@ -160,7 +164,8 @@ pub fn encode(r: &Raster, format: Format, o: &OptimiseOptions) -> Result<Vec<u8>
             "GIF output comes only from gifsicle".into(),
         )),
         // sE pdf-formats
-        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_write(format)),
+        Format::Tiff => tiff::encode_rasters(std::slice::from_ref(r)),
+        Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_write(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
@@ -397,6 +402,27 @@ mod tests {
         // Re-encoded, it is upright and carries no orientation.
         let out = encode(&r, Format::Jpeg, &OptimiseOptions::default()).unwrap();
         assert_eq!(jpeg::orientation(&out), 1);
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_turned_tiff_shows_its_turned_size() {
+        let tiff = testutil::tiff(&[testutil::TiffPage {
+            size: (40, 20),
+            orientation: 6,
+            ..testutil::TiffPage::default()
+        }]);
+        assert_eq!(display_dims(&tiff, Format::Tiff), Some((20, 40)));
+        let r = decode(&tiff, Format::Tiff).unwrap();
+        assert_eq!((r.width, r.height), (20, 40));
+    }
+
+    #[test]
+    fn a_tiff_written_from_pixels_is_upright_and_lossless() {
+        let r = raster(16, 8, |x, y| [x as u8 * 10, y as u8 * 20, 7, 255]);
+        let out = encode(&r, Format::Tiff, &OptimiseOptions::default()).unwrap();
+        assert_eq!(sniff(&out), Some(Format::Tiff));
+        assert_eq!(decode(&out, Format::Tiff).unwrap(), r);
     }
 
     #[test]
