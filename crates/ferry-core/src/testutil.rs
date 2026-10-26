@@ -539,6 +539,25 @@ pub fn tiff(pages: &[TiffPage]) -> Vec<u8> {
     out.into_inner()
 }
 
+/// A HEIC of `screenshot_rgba`, tagged with an EXIF `orientation`; `None` when
+/// this Mac has no HEIC encoder.
+#[cfg(target_os = "macos")]
+pub fn heic(w: u32, h: u32, orientation: u16) -> Option<Vec<u8>> {
+    use crate::edit::raster::Raster;
+    use crate::oscodec;
+    use crate::sniff::Format;
+    if !oscodec::can_encode(Format::Heic) {
+        return None;
+    }
+    let r = Raster {
+        width: w,
+        height: h,
+        rgba: screenshot_rgba(w, h),
+        icc: None,
+    };
+    oscodec::macos::encode_oriented(&r, Format::Heic, 90, Some(orientation)).ok()
+}
+
 /// A one-page TIFF with `dpi` in its resolution tags, the unit being inches.
 pub fn tiff_with_resolution(dpi: u32) -> Vec<u8> {
     use tiff::encoder::{Rational, TiffEncoder, colortype};

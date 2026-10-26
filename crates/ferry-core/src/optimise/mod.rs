@@ -2,6 +2,7 @@
 //! the caller keeps the original unless the result is `Smaller`.
 
 pub(crate) mod gif;
+pub(crate) mod heic; // sE pdf-formats
 pub(crate) mod jpeg;
 pub(crate) mod png;
 pub(crate) mod tiff; // sE pdf-formats
@@ -134,7 +135,8 @@ pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u
         Format::Gif => gif::optimise(input, o)?,
         // sE pdf-formats
         Format::Tiff => tiff::optimise(input, o)?,
-        Format::Heic | Format::Avif | Format::Pdf => {
+        Format::Heic => heic::optimise(input, o)?,
+        Format::Avif | Format::Pdf => {
             return Err(OptimiseError::Unsupported(tf(
                 "pdf.read_unsupported",
                 &[("format", format.label())],

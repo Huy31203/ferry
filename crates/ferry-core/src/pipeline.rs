@@ -687,7 +687,8 @@ impl Job {
             (true, Format::Gif) => "card.step.gif",
             // sE pdf-formats (later tasks give each its own step)
             (true, Format::Tiff) => "pdf.step.tiff",
-            (true, Format::Heic | Format::Avif | Format::Pdf) => "card.step.edit",
+            (true, Format::Heic) => "pdf.step.heic",
+            (true, Format::Avif | Format::Pdf) => "card.step.edit",
             // stream A: video (never reached once videos are dispatched earlier)
             (
                 true,
@@ -2638,6 +2639,25 @@ mod tests {
             crate::sniff::dimensions(&fs::read(poster).unwrap(), Format::Png),
             Some((300, 200))
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_heic_photo_becomes_a_jpeg_and_gets_a_poster() {
+        let Some(bytes) = testutil::heic(200, 120, 1) else {
+            return;
+        };
+        let env = Env::new();
+        let path = env.file("photo.heic", &bytes);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+        let card = finished.unwrap().update;
+        assert_eq!(
+            (card.state, card.format, card.converted),
+            (JobState::Done, Some(Format::Jpeg), true)
+        );
+        assert!(path.with_extension("jpg").exists());
+        assert!(card.poster.is_some());
     }
 
     #[test]
