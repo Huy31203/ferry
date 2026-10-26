@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ferry: Rust crate licences</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }
+  pre { white-space: pre-wrap; background: #f4f4f4; padding: 1rem; overflow-x: auto; }
+  @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #ddd; } pre { background: #2a2a2a; } a { color: #8ab4f8; } }
+</style>
+</head>
+<body>
+<h1>Rust crates linked into Ferry</h1>
+<p>Ferry is GPL-3.0-or-later. It includes the open-source Rust crates below. Crates under the Mozilla Public License 2.0
+are used unmodified; their source is on crates.io at the version in Ferry's Cargo.lock. See THIRD-PARTY-NOTICES.md.</p>
+
+<h2>Licences</h2>
+<ul>
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<h3>Used by</h3>
+<ul>
+{{#each used_by}}
+  <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>
