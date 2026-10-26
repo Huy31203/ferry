@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { t, type StringKey } from '../../lib/i18n';
-  import { duplicate, removePipeline, usage, usageLabel, type Pipelines } from '../../lib/pipelines';
+  import { t } from '../../lib/i18n';
+  import { duplicate, mediaName, removePipeline, usage, usageLabel, type Pipelines } from '../../lib/pipelines';
 
   let {
     pipelines,
@@ -41,7 +41,7 @@
       <li>
         <div class="text">
           <span class="name">{pipeline.name}</span>
-          <span class="badge">{t(`pipe.media.${pipeline.media}` as StringKey)}</span>
+          <span class="badge">{mediaName(pipeline.media)}</span>
           <span class="usage">{usageLabel(usage(pipelines, pipeline.id))}</span>
         </div>
         <div class="actions">
