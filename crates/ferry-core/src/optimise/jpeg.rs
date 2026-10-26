@@ -352,6 +352,28 @@ fn minimal_exif(orientation: u16) -> Vec<u8> {
     out
 }
 
+// sE pdf-formats
+/// A grayscale picture as a progressive JPEG (a PDF's gray images stay gray).
+pub(crate) fn encode_gray(
+    width: u32,
+    height: u32,
+    luma: &[u8],
+    o: &OptimiseOptions,
+) -> Result<Vec<u8>, OptimiseError> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let encode_err = |e: std::io::Error| OptimiseError::Encode(e.to_string());
+        let mut encoder = Compress::new(ColorSpace::JCS_GRAYSCALE);
+        encoder.set_size(width as usize, height as usize);
+        encoder.set_quality(f32::from(quality(o)));
+        encoder.set_progressive_mode();
+        encoder.set_optimize_coding(true);
+        let mut encoder = encoder.start_compress(Vec::new()).map_err(encode_err)?;
+        encoder.write_scanlines(luma).map_err(encode_err)?;
+        encoder.finish().map_err(encode_err)
+    }))
+    .map_err(|_| OptimiseError::Encode("mozjpeg failed".into()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

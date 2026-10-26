@@ -2,6 +2,7 @@
 //! are rendered with PDFium, which is loaded at run time from the bundled
 //! library (`render::init`).
 
+mod images;
 pub mod render;
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
@@ -238,7 +239,7 @@ pub fn facts(bytes: &[u8]) -> Result<Facts, OptimiseError> {
 /// Content streams, fonts, links and forms are kept byte for byte.
 pub fn optimise(
     input: &[u8],
-    _dpi: u16,
+    dpi: u16,
     o: &OptimiseOptions,
     progress: &mut dyn FnMut(f32),
 ) -> Result<Vec<u8>, OptimiseError> {
@@ -246,6 +247,7 @@ pub fn optimise(
         return Err(OptimiseError::Cancelled);
     }
     let mut doc = load(input)?;
+    images::recompress_all(&mut doc, dpi, o, &mut |p| progress(p * 0.95))?;
     doc.prune_objects();
     doc.delete_zero_length_streams();
     // The old object and xref streams are gone; their numbers are free again,

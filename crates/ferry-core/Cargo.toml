@@ -12,6 +12,8 @@ test = false
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fast_image_resize = "6.1"
+# sE pdf-formats: deflate PDF images; recompress them in parallel.
+flate2 = "1.1"
 gif = "0.14"
 imagequant = "4.4"
 # sE pdf-formats: the writer (object model only); PDFium renders, loaded at run time.
@@ -24,6 +26,7 @@ notify = "8.2.0"
 oxipng = { version = "10.2", default-features = false, features = ["parallel"] }
 pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_7881", "thread_safe"] }
 png = "0.18"
+rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Default features pull in the `image` crate, which Ferry does not use.

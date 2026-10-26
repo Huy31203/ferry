@@ -474,7 +474,6 @@ pub fn blank_pdf(pages: &[(f32, f32)]) -> Vec<u8> {
 }
 
 /// What an image XObject of a `PdfImage` is made of.
-#[allow(dead_code)] // the image tests of Task 14 use every kind
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImageKind {
     #[default]
@@ -538,7 +537,7 @@ pub struct PdfExtras {
     pub pdfa1: bool,
     /// A trailer `/Encrypt` dictionary (the content stays readable).
     pub encrypt_dict: bool,
-    /// Page 2 draws page 1's first image again, 360 points wide.
+    /// Page 2 draws page 1's first image again, half as big.
     pub shared_image: bool,
 }
 
@@ -574,11 +573,17 @@ fn pdf_image(image: &PdfImage) -> lopdf::Stream {
             )
         }
         ImageKind::FlateScreenshot => {
-            let shot = screenshot_rgba(w, h);
-            (
-                shot.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect(),
-                true,
-            )
+            // Flat panels and dark "text": a handful of colours.
+            let bytes = rgb(&|x, y| {
+                if (y / 12) % 3 == 0 && (x / 5) % 4 != 0 && x > w / 5 {
+                    [40, 40, 48]
+                } else if x < w / 5 {
+                    [233, 233, 237]
+                } else {
+                    [250, 250, 252]
+                }
+            });
+            (bytes, true)
         }
         ImageKind::FlatePhoto => {
             // A gradient with hashed noise: thousands of colours, like a photo.
@@ -631,13 +636,13 @@ pub fn pdf(pages: &[PdfPage], extras: &PdfExtras) -> Vec<u8> {
             .collect::<Vec<_>>()
             .into()
     };
-    let mut first_image: Option<ObjectId> = None;
+    let mut first_image: Option<(ObjectId, (f32, f32))> = None;
     let mut kids = Vec::new();
     for (n, page) in pages.iter().enumerate() {
         let (mut xobjects, mut content) = (Dictionary::new(), String::new());
         for (i, image) in page.images.iter().enumerate() {
             let id = doc.add_object(pdf_image(image));
-            first_image.get_or_insert(id);
+            first_image.get_or_insert((id, image.drawn));
             xobjects.set(format!("Im{i}"), id);
             content += &format!(
                 "q {} 0 0 {} 0 0 cm /Im{i} Do Q\n",
@@ -646,10 +651,14 @@ pub fn pdf(pages: &[PdfPage], extras: &PdfExtras) -> Vec<u8> {
         }
         if extras.shared_image
             && n == 1
-            && let Some(id) = first_image
+            && let Some((id, drawn)) = first_image
         {
             xobjects.set("Im0", id);
-            content += "q 360 0 0 180 0 0 cm /Im0 Do Q\n";
+            content += &format!(
+                "q {} 0 0 {} 0 0 cm /Im0 Do Q\n",
+                drawn.0 / 2.0,
+                drawn.1 / 2.0
+            );
         }
         content += "0.2 g 10 10 40 40 re f\n";
         if page.padding > 0 {
