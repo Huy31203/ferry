@@ -35,13 +35,12 @@ pub fn choices(
     }
     // AVIF is read but not written yet (its encoder is a later cycle's), so it is
     // only ever offered as a source.
-    let mut standard = vec![Format::Png, Format::Jpeg, Format::WebP];
-    if heic_encoder {
-        standard.push(Format::Heic);
-    }
-    let own = (!standard.contains(&source)).then_some(source);
+    let base = [Format::Png, Format::Jpeg, Format::WebP];
+    let own = (!base.contains(&source)).then_some(source);
+    let heic = (heic_encoder && source != Format::Heic).then_some(Format::Heic);
     own.into_iter()
-        .chain(standard)
+        .chain(base)
+        .chain(heic)
         .map(|format| ConvertChoice {
             format,
             first_only: format != source
@@ -93,6 +92,11 @@ mod tests {
         );
         assert_eq!(
             formats(&choices(Format::Heic, false, 1, false)),
+            [Format::Heic, Format::Png, Format::Jpeg, Format::WebP]
+        );
+        // A HEIC source stays first on a Mac that can also write HEIC.
+        assert_eq!(
+            formats(&choices(Format::Heic, false, 1, true)),
             [Format::Heic, Format::Png, Format::Jpeg, Format::WebP]
         );
         assert_eq!(

@@ -14,12 +14,13 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting, NSWorks
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 /// Read order: the first type present wins.
-const IMAGE_TYPES: [(&str, Format); 5] = [
+const IMAGE_TYPES: [(&str, Format); 6] = [
     ("public.png", Format::Png),
     ("public.jpeg", Format::Jpeg),
     ("com.compuserve.gif", Format::Gif),
     ("org.webmproject.webp", Format::WebP),
     // sE pdf-formats (last: a screenshot also carries a TIFF beside its PNG)
+    ("public.heic", Format::Heic),
     ("public.tiff", Format::Tiff),
 ];
 
@@ -284,6 +285,25 @@ mod tests {
             &NSString::from_str("public.png"),
         );
         assert_eq!(read_from(&pb.0).image.map(|(f, _)| f), Some(Format::Png));
+    }
+
+    #[test]
+    fn a_heic_on_the_clipboard_is_read_before_a_tiff() {
+        let raster = ferry_core::edit::raster::Raster {
+            width: 2,
+            height: 2,
+            rgba: [90, 120, 200, 255].repeat(4),
+            icc: None,
+        };
+        let Ok(heic) = ferry_core::oscodec::encode(&raster, Format::Heic, 80) else {
+            return; // this Mac has no HEIC encoder
+        };
+        let pb = Private::new();
+        pb.0.clearContents();
+        for (bytes, uti) in [(tiny_tiff(), "public.tiff"), (heic, "public.heic")] {
+            pb.0.setData_forType(Some(&NSData::with_bytes(&bytes)), &NSString::from_str(uti));
+        }
+        assert_eq!(read_from(&pb.0).image.map(|(f, _)| f), Some(Format::Heic));
     }
 
     #[test]

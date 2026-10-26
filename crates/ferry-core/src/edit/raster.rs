@@ -7,7 +7,8 @@ use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer
 
 use super::geometry::Rect;
 use crate::i18n::tf;
-use crate::optimise::{OptimiseError, OptimiseOptions, jpeg, png, tiff, webp};
+use crate::optimise::{OptimiseError, OptimiseOptions, jpeg, png, quality, tiff, webp};
+use crate::oscodec;
 use crate::sniff::{self, Format};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +38,8 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
         Format::Gif => first_gif_frame(bytes),
         // sE pdf-formats
         Format::Tiff => tiff::decode_raster(bytes),
-        Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_read(format)),
+        Format::Heic => oscodec::decode(bytes, Format::Heic),
+        Format::Avif | Format::Pdf => Err(unsupported_read(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
@@ -165,7 +167,8 @@ pub fn encode(r: &Raster, format: Format, o: &OptimiseOptions) -> Result<Vec<u8>
         )),
         // sE pdf-formats
         Format::Tiff => tiff::encode_rasters(std::slice::from_ref(r)),
-        Format::Heic | Format::Avif | Format::Pdf => Err(unsupported_write(format)),
+        Format::Heic => oscodec::encode(r, Format::Heic, quality(o)),
+        Format::Avif | Format::Pdf => Err(unsupported_write(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))
