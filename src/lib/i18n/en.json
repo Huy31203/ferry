@@ -881,6 +881,7 @@
   "pipe.test.would_copy": "Would copy to {path}",
   "pipe.test.not_image": "{name} isn't an image Ferry can read",
   "pipe.test.reveal": "Show test folder",
+  "pipe.test.pick": "Choose a sample image",
   "pipe.test.ms": "{ms} ms",
   "pipe.test.disabled": "Fix the problems above to test.",
   "pipe.last_run": "Last run {time}",

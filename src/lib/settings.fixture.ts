@@ -99,4 +99,10 @@ export const sample: Settings = {
       converted: { location: 'in_place', folder: '~/Music/Ferry', template: '%f.%e' },
     },
   },
+  pipelines: {
+    library: [],
+    clipboard: { image: null, video: null, audio: null, pdf: null },
+    drop_zone: { image: null, video: null, audio: null, pdf: null },
+    zones: [],
+  },
 };
