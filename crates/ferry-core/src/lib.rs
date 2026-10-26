@@ -36,6 +36,7 @@ pub mod workdir;
 pub mod image_steps;
 pub mod metric;
 pub mod pipeline_def;
+pub mod pipeline_plan;
 pub mod pipeline_steps;
 
 // stream A: video
