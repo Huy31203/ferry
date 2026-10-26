@@ -103,15 +103,26 @@ impl Harness {
 
     fn expect_ready(&self) -> Ready {
         let end = Instant::now() + READY_WITHIN;
+        let mut statuses = Vec::new();
         loop {
             match self
                 .rx
                 .recv_timeout(end.saturating_duration_since(Instant::now()))
             {
                 Ok(Notice::Ready(ready)) => return ready,
-                Ok(Notice::Status(_)) => {}
+                Ok(Notice::Status(status)) => statuses.push(status),
                 Ok(other) => panic!("unexpected {other:?}"),
-                Err(e) => panic!("no file became ready: {e:?}"),
+                Err(e) => {
+                    let probes: Vec<_> = fs::read_dir(self.dir("watched"))
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|f| (f.file_name(), super::probe::probe(&f.path())))
+                        .collect();
+                    panic!(
+                        "no file became ready: {e:?}; statuses: {statuses:?}; probes: {probes:?}"
+                    )
+                }
             }
         }
     }
