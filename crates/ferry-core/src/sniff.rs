@@ -272,8 +272,10 @@ fn sniff_audio(bytes: &[u8]) -> Option<Format> {
         } else {
             0
         };
+        // A head cut inside the tag cannot tell, so it stays MP3.
         return match bytes.get(10 + size + footer..) {
             Some(after) if after.starts_with(b"fLaC") => Some(Format::Flac),
+            Some(after) if after.len() >= 3 && !is_mp3_frame(after) => None,
             _ => Some(Format::Mp3),
         };
     }
@@ -301,17 +303,20 @@ fn sniff_audio(bytes: &[u8]) -> Option<Format> {
         let video_major = VIDEO_MAJORS.iter().any(|b| b.as_slice() == major);
         return (audio_major || (compatible && !video_major)).then_some(Format::M4a);
     }
-    // MPEG-1/2 Layer III frame sync (layer bits 00 are ADTS AAC).
+    is_mp3_frame(bytes).then_some(Format::Mp3)
+}
+
+/// MPEG-1/2 Layer III frame sync (layer bits 00 are ADTS AAC).
+fn is_mp3_frame(bytes: &[u8]) -> bool {
     let [b0, b1, b2, ..] = *bytes else {
-        return None;
+        return false;
     };
-    (b0 == 0xFF
+    b0 == 0xFF
         && b1 & 0xE0 == 0xE0
         && (b1 >> 1) & 3 == 1
         && (b1 >> 3) & 3 != 1
         && b2 >> 4 != 0xF
-        && (b2 >> 2) & 3 != 3)
-        .then_some(Format::Mp3)
+        && (b2 >> 2) & 3 != 3
 }
 
 /// ISO BMFF brands that are video (`qt  ` is MOV). Others, such as HEIC, AVIF
@@ -804,6 +809,19 @@ mod tests {
             Some(Format::M4a)
         );
         assert_eq!(sniff(&ftyp(b"M4B ", &[])), Some(Format::M4a));
+    }
+
+    #[test]
+    fn an_id3_tag_before_adts_aac_is_not_mp3() {
+        let tagged = |after: &[u8]| [&b"ID3\x03\0\0\0\0\0\x00"[..], after].concat();
+        assert_eq!(sniff(&tagged(&[0xFF, 0xF1, 0x50, 0x80, 0, 0])), None);
+        assert_eq!(
+            sniff(&tagged(&[0xFF, 0xFB, 0x90, 0x64, 0, 0])),
+            Some(Format::Mp3)
+        );
+        assert_eq!(sniff(&tagged(b"fLaC\0\0\0\x22")), Some(Format::Flac));
+        // A head cut inside the tag cannot tell: it stays MP3 until more is read.
+        assert_eq!(sniff(b"ID3\x03\0\0\0\0\x7f\x7f"), Some(Format::Mp3));
     }
 
     #[test]
