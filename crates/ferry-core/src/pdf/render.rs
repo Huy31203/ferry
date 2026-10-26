@@ -208,6 +208,20 @@ mod tests {
     }
 
     #[test]
+    fn a_cropped_page_renders_at_its_crop_box() {
+        if !testutil::pdfium() {
+            return;
+        }
+        let page = testutil::PdfPage {
+            crop: Some([0.0, 0.0, 306.0, 396.0]),
+            ..testutil::PdfPage::default()
+        };
+        let pdf = testutil::pdf(&[page], &testutil::PdfExtras::default());
+        let r = render_page(&pdf, 1, 72, u32::MAX).unwrap();
+        assert_eq!((r.width, r.height), (306, 396));
+    }
+
+    #[test]
     fn a_library_that_is_not_there_says_reinstall() {
         assert_eq!(
             load(Path::new("/nowhere/libpdfium.dylib")).err(),

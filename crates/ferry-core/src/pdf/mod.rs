@@ -2,6 +2,7 @@
 //! are rendered with PDFium, which is loaded at run time from the bundled
 //! library (`render::init`).
 
+pub(crate) mod crop;
 mod images;
 pub mod render;
 
@@ -122,20 +123,13 @@ fn read_box(doc: &Document, object: &Object) -> Option<[f32; 4]> {
 
 /// Page 1 as displayed: `MediaBox` and `CropBox` overlap, turned by `/Rotate`.
 fn displayed_size(doc: &Document, page: ObjectId) -> (u32, u32) {
-    let get = |key: &[u8]| inherited(doc, page, key).and_then(|o| read_box(doc, o));
-    let media = get(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-    let crop = get(b"CropBox").unwrap_or(media);
-    let (x0, y0) = (media[0].max(crop[0]), media[1].max(crop[1]));
-    let (x1, y1) = (media[2].min(crop[2]), media[3].min(crop[3]));
-    let (w, h) = if x1 > x0 && y1 > y0 {
-        (x1 - x0, y1 - y0)
-    } else {
-        (media[2] - media[0], media[3] - media[1])
-    };
+    let media = crop::page_box(doc, page, b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let [x0, y0, x1, y1] = crop::visible_box(media, crop::page_box(doc, page, b"CropBox"));
     let rotate = inherited(doc, page, b"Rotate")
         .and_then(|o| o.as_i64().ok())
         .unwrap_or(0)
         .rem_euclid(360);
+    let (w, h) = (x1 - x0, y1 - y0);
     let (w, h) = if rotate == 90 || rotate == 270 {
         (h, w)
     } else {
@@ -243,11 +237,25 @@ pub fn optimise(
     o: &OptimiseOptions,
     progress: &mut dyn FnMut(f32),
 ) -> Result<Vec<u8>, OptimiseError> {
+    rewrite(input, dpi, None, o, progress)
+}
+
+/// `optimise`, cropping every page first: to an `(aspect, uncrop)` pair.
+fn rewrite(
+    input: &[u8],
+    dpi: u16,
+    crop: Option<(Option<(u32, u32)>, bool)>,
+    o: &OptimiseOptions,
+    progress: &mut dyn FnMut(f32),
+) -> Result<Vec<u8>, OptimiseError> {
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
     }
     let mut doc = load(input)?;
     images::recompress_all(&mut doc, dpi, o, &mut |p| progress(p * 0.95))?;
+    if let Some((aspect, uncrop)) = crop {
+        crop::apply_crop(&mut doc, aspect, uncrop)?;
+    }
     doc.prune_objects();
     doc.delete_zero_length_streams();
     // The old object and xref streams are gone; their numbers are free again,
@@ -292,16 +300,14 @@ pub fn apply(
     d: &Defaults,
     progress: &mut dyn FnMut(f32, String),
 ) -> Result<PdfResult, OptimiseError> {
-    if edits.aspect.is_some()
-        || edits.uncrop
-        || matches!(edits.format, Some(Format::Png | Format::Jpeg))
-    {
+    if matches!(edits.format, Some(Format::Png | Format::Jpeg)) {
         return Err(OptimiseError::Unsupported(tf(
             "pdf.write_unsupported",
             &[("format", Format::Pdf.label())],
         )));
     }
     let dpi = target_dpi(edits, d, false);
+    let crop = (edits.aspect.is_some() || edits.uncrop).then_some((edits.aspect, edits.uncrop));
     let step = t("pdf.step.pdf");
     let mut base = o.clone();
     base.level = edits.level;
@@ -319,12 +325,14 @@ pub fn apply(
                     level: Level::Normal,
                     ..base.clone()
                 };
-                optimise(original, dpi, &attempt, &mut |_| {})
+                rewrite(original, dpi, crop, &attempt, &mut |_| {})
             })?;
             (fitted.bytes, fitted.missed)
         }
         None => (
-            optimise(original, dpi, &base, &mut |p| progress(p, step.clone()))?,
+            rewrite(original, dpi, crop, &base, &mut |p| {
+                progress(p, step.clone());
+            })?,
             false,
         ),
     };
