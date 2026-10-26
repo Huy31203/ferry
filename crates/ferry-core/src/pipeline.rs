@@ -764,7 +764,7 @@ impl Job {
             gifsicle: o.gifsicle.clone(),
             cancel: o.cancel.clone(),
             encoder: self.edits.encoder, // stream F: pipelines
-            adaptive: false,             // stream F: pipelines
+            adaptive: o.adaptive,        // stream F: pipelines
         };
         // sE pdf-formats
         if self.source_format == Format::Pdf {
@@ -2760,6 +2760,23 @@ mod tests {
         let mut s = Settings::default();
         s.images.adaptive = true;
         assert!(options_with(&s).adaptive);
+    }
+
+    #[test]
+    fn a_real_run_searches_for_the_adaptive_quality() {
+        let size_with = |adaptive: bool| {
+            let env = Env::new();
+            let mut s = Settings::default();
+            s.images.compression = 95;
+            s.images.adaptive = adaptive;
+            let path = env.file("photo.jpg", &testutil::photo_jpeg(256, 256, 98));
+            let mut job = Job::file(&path, &s, true).unwrap();
+            let (finished, _) = run(&mut job, Level::Normal, &options_with(&s), &env);
+            assert_eq!(finished.unwrap().update.state, JobState::Done);
+            fs::metadata(&path).unwrap().len()
+        };
+        let (slider, adaptive) = (size_with(false), size_with(true));
+        assert!(adaptive < slider, "{adaptive} vs {slider}");
     }
 
     #[test]
