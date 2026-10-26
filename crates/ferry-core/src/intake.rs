@@ -62,6 +62,10 @@ pub fn classify(head: &[u8]) -> Option<Classified> {
     let format = sniff::sniff(head)?;
     let kind = if format.is_video() {
         MediaKind::Video
+    } else if format.is_audio() {
+        MediaKind::Audio
+    } else if format == Format::Pdf {
+        MediaKind::Pdf
     } else {
         MediaKind::Image
     };
@@ -452,6 +456,14 @@ mod tests {
             images,
             ..Summary::default()
         }
+    }
+
+    #[test]
+    fn pdf_and_audio_are_their_own_kinds_and_tiff_stays_an_image() {
+        let kind = |head: &[u8]| classify(head).map(|c| c.kind);
+        assert_eq!(kind(b"%PDF-1.7\n"), Some(MediaKind::Pdf));
+        assert_eq!(kind(b"fLaC\0\0\0\x22"), Some(MediaKind::Audio));
+        assert_eq!(kind(b"II*\0\x08\0\0\0\0\0\0\0"), Some(MediaKind::Image));
     }
 
     #[test]
