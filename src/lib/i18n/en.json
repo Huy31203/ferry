@@ -809,6 +809,8 @@
   "pipe.caption.long_edge": "Downscale to {n} px long edge",
   "pipe.caption.crop": "Crop {ratio}",
   "pipe.caption.crop_size": "Crop to {w}×{h}",
+  "pipe.caption.long_edge_crop": "Crop to {n} px long edge",
+  "pipe.caption.auto": "auto",
   "pipe.caption.smart": "smart",
   "pipe.caption.strip": "Strip metadata",
   "pipe.caption.copy": "Copy to {dir}",
