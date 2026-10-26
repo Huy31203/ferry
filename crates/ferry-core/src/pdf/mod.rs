@@ -8,6 +8,7 @@ pub mod render;
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
+use crate::edit::raster;
 use crate::edit::{self, Edits, MAX_DPI, MIN_DPI};
 use crate::i18n::{t, tf};
 use crate::optimise::{Level, OptimiseError, OptimiseOptions};
@@ -300,11 +301,8 @@ pub fn apply(
     d: &Defaults,
     progress: &mut dyn FnMut(f32, String),
 ) -> Result<PdfResult, OptimiseError> {
-    if matches!(edits.format, Some(Format::Png | Format::Jpeg)) {
-        return Err(OptimiseError::Unsupported(tf(
-            "pdf.write_unsupported",
-            &[("format", Format::Pdf.label())],
-        )));
+    if let Some(format @ (Format::Png | Format::Jpeg)) = edits.format {
+        return extract(original, format, edits, o, d, progress);
     }
     let dpi = target_dpi(edits, d, false);
     let crop = (edits.aspect.is_some() || edits.uncrop).then_some((edits.aspect, edits.uncrop));
@@ -339,6 +337,66 @@ pub fn apply(
     Ok(PdfResult::Pdf {
         bytes,
         missed_target,
+    })
+}
+
+/// The pages of the recipe's range as images, rendered at the recipe's DPI
+/// (cropped first when it asks for a crop). The original is never touched.
+fn extract(
+    original: &[u8],
+    format: Format,
+    edits: &Edits,
+    o: &OptimiseOptions,
+    d: &Defaults,
+    progress: &mut dyn FnMut(f32, String),
+) -> Result<PdfResult, OptimiseError> {
+    let count = render::page_count(original)?;
+    let (first, last) = edits
+        .pages
+        .map_or((1, count), |range| (range.first, range.last.min(count)));
+    if first > last {
+        return Err(OptimiseError::Unsupported(tf(
+            "pdf.error.no_page",
+            &[("count", &count.to_string())],
+        )));
+    }
+    let cropped;
+    let source = if edits.aspect.is_some() || edits.uncrop {
+        let mut doc = load(original)?;
+        crop::apply_crop(&mut doc, edits.aspect, edits.uncrop)?;
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes)
+            .map_err(|e| OptimiseError::Encode(e.to_string()))?;
+        cropped = bytes;
+        &cropped
+    } else {
+        original
+    };
+    let total = last - first + 1;
+    let (mut pages, mut size) = (Vec::new(), (0, 0));
+    render::render_pages(
+        source,
+        first..=last,
+        target_dpi(edits, d, true),
+        &o.cancel,
+        &mut |number, picture| {
+            if pages.is_empty() {
+                size = (picture.width, picture.height);
+            }
+            pages.push((number, raster::encode(&picture, format, o)?));
+            let done = number - first + 1;
+            let step = tf(
+                "pdf.step.page",
+                &[("n", &done.to_string()), ("total", &total.to_string())],
+            );
+            progress(done as f32 / total as f32, step);
+            Ok(())
+        },
+    )?;
+    Ok(PdfResult::Pages {
+        format,
+        pages,
+        size,
     })
 }
 

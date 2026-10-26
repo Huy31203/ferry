@@ -35,6 +35,8 @@ pub enum Action {
     /// Downscale to this percent.
     Scale(u8),
     Crop,
+    // sE pdf-formats
+    Pages,
     Convert(Format),
     KeepBoth(Format),
     Restore,
@@ -100,7 +102,7 @@ fn serde_key<T: Serialize>(value: &T) -> String {
 }
 
 /// The actions without a value, by their id part.
-const NAMED: [(&str, Action); 16] = [
+const NAMED: [(&str, Action); 17] = [
     ("open", Action::Open),
     ("reveal", Action::Reveal),
     ("copy", Action::Copy),
@@ -112,6 +114,8 @@ const NAMED: [(&str, Action); 16] = [
     ("aggressive", Action::Aggressive),
     ("fit", Action::Fit),
     ("crop", Action::Crop),
+    // sE pdf-formats
+    ("pages", Action::Pages),
     ("restore", Action::Restore),
     ("close", Action::Close),
     // stream A: video
@@ -170,6 +174,8 @@ impl Action {
         Some(match self {
             Action::Rename => "rename",
             Action::Crop => "crop",
+            // sE pdf-formats
+            Action::Pages => "pages",
             Action::Fit => "fit",
             Action::Compare => "compare",
             Action::Preview => "preview",
@@ -247,6 +253,8 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         Action::ExtractCover => idle && card.audio.as_ref().is_some_and(|a| a.has_cover),
         // stream A: video
         Action::Speed | Action::Mute => card.can_edit && card.video.is_some(),
+        // sE pdf-formats
+        Action::Pages => card.can_edit && card.source_format == Some(Format::Pdf),
     }
 }
 
@@ -376,6 +384,14 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &item(Action::Close, t("card.close"), None)?,
         ],
     )?;
+    // sE pdf-formats (right after Crop)
+    if card.source_format == Some(Format::Pdf) {
+        let crop = item_id(&card.id, Action::Crop);
+        if let Some(at) = menu.items()?.iter().position(|i| i.id().as_ref() == crop) {
+            let extract = item(Action::Pages, t("pdf.menu.extract"), None)?;
+            menu.insert(&extract, at + 1)?;
+        }
+    }
     // stream A: video (right after Crop)
     if card.video.is_some() {
         let mute = if card.edits.mute {
@@ -598,7 +614,7 @@ mod tests {
         card
     }
 
-    const ALL: [Action; 18] = [
+    const ALL: [Action; 19] = [
         Action::Open,
         Action::Reveal,
         Action::Copy,
@@ -617,6 +633,7 @@ mod tests {
         Action::Close,
         Action::Speed,
         Action::Mute,
+        Action::Pages,
     ];
 
     #[test]
@@ -637,8 +654,8 @@ mod tests {
     fn a_finished_card_offers_everything_but_its_own_format_and_scale() {
         let card = done();
         for action in ALL {
-            // Speed and Mute are for video cards only.
-            let video_only = matches!(action, Action::Speed | Action::Mute);
+            // Speed and Mute are for video cards only, Pages for PDFs.
+            let video_only = matches!(action, Action::Speed | Action::Mute | Action::Pages);
             assert_eq!(enabled(&card, action), !video_only, "{action:?}");
         }
         assert!(!enabled(&card, Action::Convert(Format::Png)));
@@ -673,6 +690,26 @@ mod tests {
         card.can_edit = false;
         let on: Vec<Action> = ALL.into_iter().filter(|&a| enabled(&card, a)).collect();
         assert_eq!(on, [Action::Close]);
+    }
+
+    // sE pdf-formats
+    #[test]
+    fn a_pdf_card_offers_extract_and_converts_only_to_images() {
+        let mut card = done();
+        card.source_format = Some(Format::Pdf);
+        card.format = Some(Format::Pdf);
+        card.choices = ferry_core::formats::choices(Format::Pdf, false, 3, false);
+        assert!(enabled(&card, Action::Pages));
+        assert_eq!(
+            convert_formats(&card),
+            [Format::Pdf, Format::Png, Format::Jpeg]
+        );
+        assert_eq!(
+            parse_id(&item_id(&card.id, Action::Pages)),
+            Some((card.id.clone(), Action::Pages))
+        );
+        assert_eq!(Action::Pages.page(), Some("pages"));
+        assert!(!enabled(&done(), Action::Pages));
     }
 
     // stream A: video
