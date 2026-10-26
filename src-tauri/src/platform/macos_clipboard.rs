@@ -14,12 +14,13 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting, NSWorks
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 /// Read order: the first type present wins.
-const IMAGE_TYPES: [(&str, Format); 6] = [
+const IMAGE_TYPES: [(&str, Format); 7] = [
     ("public.png", Format::Png),
     ("public.jpeg", Format::Jpeg),
     ("com.compuserve.gif", Format::Gif),
     ("org.webmproject.webp", Format::WebP),
     // sE pdf-formats (last: a screenshot also carries a TIFF beside its PNG)
+    ("public.avif", Format::Avif),
     ("public.heic", Format::Heic),
     ("public.tiff", Format::Tiff),
 ];

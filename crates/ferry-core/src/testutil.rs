@@ -122,6 +122,31 @@ pub fn gif(frames: usize) -> Vec<u8> {
     out
 }
 
+/// A 32 x 32 GIF of four frames, delay 10 (100 ms) each: red full screen
+/// (Keep); a 4 x 4 blue square at 0,0 (Background); a 1 x 1 green dot at
+/// 10,10 (Previous); a 1 x 1 white dot at 20,20 (Keep).
+pub fn gif_with_disposal() -> Vec<u8> {
+    use gif::{DisposalMethod, Encoder, Frame, Repeat};
+    let mut out = Vec::new();
+    {
+        let mut enc = Encoder::new(&mut out, 32, 32, &[]).unwrap();
+        enc.set_repeat(Repeat::Infinite).unwrap();
+        let parts: [(u16, u16, u16, u16, [u8; 3], DisposalMethod); 4] = [
+            (0, 0, 32, 32, [255, 0, 0], DisposalMethod::Keep),
+            (0, 0, 4, 4, [0, 0, 255], DisposalMethod::Background),
+            (10, 10, 1, 1, [0, 255, 0], DisposalMethod::Previous),
+            (20, 20, 1, 1, [255, 255, 255], DisposalMethod::Keep),
+        ];
+        for (left, top, width, height, rgb, dispose) in parts {
+            let pixels = usize::from(width) * usize::from(height);
+            let mut frame = Frame::from_rgb(width, height, &rgb.repeat(pixels));
+            (frame.left, frame.top, frame.dispose, frame.delay) = (left, top, dispose, 10);
+            enc.write_frame(&frame).unwrap();
+        }
+    }
+    out
+}
+
 /// GIF LZW with min code size 8 that never compresses: 9-bit codes, a clear
 /// code (256) before every 200 pixels, end code (257) last.
 fn lzw_stored(pixels: &[u8]) -> Vec<u8> {
@@ -172,6 +197,29 @@ pub fn animated_webp() -> Vec<u8> {
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(&body);
     out
+}
+
+/// A real animated WebP, one frame per duration in ms (each frame a shifted
+/// `screenshot_rgba`), written lossless. `animated_webp` is the header-only one.
+pub fn animated_webp_frames(durations: &[u32], w: u32, h: u32) -> Vec<u8> {
+    use crate::optimise::webp_anim::{Animation, Frame, encode_lossless};
+    let base = screenshot_rgba(w, h);
+    let frames = durations
+        .iter()
+        .enumerate()
+        .map(|(i, &duration_ms)| {
+            let mut rgba = base.clone();
+            rgba.rotate_left((i * 4 * 7) % base.len());
+            Frame { rgba, duration_ms }
+        })
+        .collect();
+    encode_lossless(&Animation {
+        width: w,
+        height: h,
+        frames,
+        loop_count: 0,
+        icc: None,
+    })
 }
 
 /// Extra segments for `jpeg`.
@@ -556,6 +604,42 @@ pub fn heic(w: u32, h: u32, orientation: u16) -> Option<Vec<u8>> {
         icc: None,
     };
     oscodec::macos::encode_oriented(&r, Format::Heic, 90, Some(orientation)).ok()
+}
+
+/// A 32 x 24 AVIF (a sidebar, a gradient header, flat content), with the top
+/// right quarter transparent when `alpha`. Encoded once with ravif 0.13 at
+/// quality 70 and kept as bytes, since Ferry has no AVIF encoder yet.
+pub fn avif(alpha: bool) -> Vec<u8> {
+    let hex = if alpha {
+        concat!(
+            "000000186674797061766966000000006d6966316d696166000001686d657461000000000000002168646c7200000000",
+            "0000000070696374000000000000000000000000000000000e7069746d0000000000010000002c696c6f630000000044",
+            "0000020002000000010000018800000033000100000001000001bb0000005c0000003869696e66000000000002000000",
+            "15696e66650200000000010000617630310000000015696e6665020000000002000061763031000000001a6972656600",
+            "0000000000000e6175786c000200010001000000af697072700000008a6970636f000000146973706500000000000000",
+            "20000000180000000c61763143813f4000000000107069786900000000030a0a0a0000000c61763143811f5c00000000",
+            "0e7069786900000000010a00000038617578430000000075726e3a6d7065673a6d706567423a636963703a7379737465",
+            "6d733a617578696c696172793a616c706861000000001d69706d61000000000000000200010301820300020401840605",
+            "000000976d64617412000a051fd13f7235322865ca39fec07f6021500000000000004000b7ad067eef13e42d706cfc79",
+            "e2037394e724663f07e12012000a083fd13f723010d06d324e65d23b432315f8ff203f90109000000000000120c08000",
+            "cf43318e7727c1f56f5613a6614bd93fb232bea18b5cb66a37cd44a88b233a292519c7ec03309707d78f7cc64fecfea4",
+            "fbd42af9f05e5c",
+        )
+    } else {
+        concat!(
+            "000000186674797061766966000000006d6966316d696166000000d26d657461000000000000002168646c7200000000",
+            "0000000070696374000000000000000000000000000000000e7069746d0000000000010000001e696c6f630000000044",
+            "000001000100000001000000f20000005c0000002369696e6600000000000100000015696e6665020000000001000061",
+            "763031000000005669707270000000386970636f00000014697370650000000000000020000000180000000c61763143",
+            "813f4000000000107069786900000000030a0a0a0000001669706d610000000000000001000103018203000000646d64",
+            "617412000a083fd13f723010d06d324e65d23b432315f8ff203f90109000000000000120c08000cf43318e7727c1f56f",
+            "5613a6614bd93fb232bea18b5cb66a37cd44a88b233a292519c7ec03309707d78f7cc64fecfea4fbd42af9f05e5c",
+        )
+    };
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 /// A one-page TIFF with `dpi` in its resolution tags, the unit being inches.

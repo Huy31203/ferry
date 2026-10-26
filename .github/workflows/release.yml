@@ -66,6 +66,8 @@ jobs:
         if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: bash scripts/build-ffmpeg.sh x86_64-pc-windows-msvc
+      # sE pdf-formats: rav1d (AVIF decode) builds assembly with NASM on x86_64
+      - uses: ilammy/setup-nasm@v1
       - name: Build gifsicle sidecar
         shell: bash
         run: scripts/build-gifsicle.sh ${{ matrix.target }}

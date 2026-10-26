@@ -7,7 +7,9 @@ use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer
 
 use super::geometry::Rect;
 use crate::i18n::tf;
-use crate::optimise::{OptimiseError, OptimiseOptions, jpeg, png, quality, tiff, webp};
+use crate::optimise::{
+    OptimiseError, OptimiseOptions, avif, jpeg, png, quality, tiff, webp, webp_anim,
+};
 use crate::oscodec;
 use crate::sniff::{self, Format};
 
@@ -34,12 +36,15 @@ pub fn decode(bytes: &[u8], format: Format) -> Result<Raster, OptimiseError> {
     let mut r = match format {
         Format::Png => png::decode_raster(bytes),
         Format::Jpeg => jpeg::decode_raster(bytes).map(|(r, o)| orient(r, o)),
+        // sE pdf-formats: an animated WebP shows its first frame
+        Format::WebP if sniff::is_animated(bytes, Format::WebP) => webp_anim::first_frame(bytes),
         Format::WebP => webp::decode_raster(bytes),
         Format::Gif => first_gif_frame(bytes),
         // sE pdf-formats
         Format::Tiff => tiff::decode_raster(bytes),
         Format::Heic => oscodec::decode(bytes, Format::Heic),
-        Format::Avif | Format::Pdf => Err(unsupported_read(format)),
+        Format::Avif => avif::decode_raster(bytes),
+        Format::Pdf => Err(unsupported_read(format)),
         // stream A: video
         Format::Mp4 | Format::Hevc | Format::Av1 | Format::WebM | Format::Mov | Format::Mkv => {
             Err(OptimiseError::Unsupported("video is not an image".into()))

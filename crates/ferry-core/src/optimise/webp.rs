@@ -7,10 +7,10 @@ use webp::{Decoder, Encoder, WebPConfig};
 use super::{OptimiseError, OptimiseOptions, quality};
 use crate::edit::raster::Raster;
 
-const ICC_FLAG: u8 = 0x20;
+pub(crate) const ICC_FLAG: u8 = 0x20;
 const ALPHA_FLAG: u8 = 0x10;
-const EXIF_FLAG: u8 = 0x08;
-const XMP_FLAG: u8 = 0x04;
+pub(crate) const EXIF_FLAG: u8 = 0x08;
+pub(crate) const XMP_FLAG: u8 = 0x04;
 
 pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseError> {
     let image = Decoder::new(input)
@@ -48,7 +48,7 @@ pub fn optimise(input: &[u8], o: &OptimiseOptions) -> Result<Vec<u8>, OptimiseEr
 }
 
 /// Lossy, method 4, alpha kept at full quality.
-fn config(o: &OptimiseOptions) -> Result<WebPConfig, OptimiseError> {
+pub(crate) fn config(o: &OptimiseOptions) -> Result<WebPConfig, OptimiseError> {
     let mut config =
         WebPConfig::new().map_err(|()| OptimiseError::Encode("libwebp config".into()))?;
     config.lossless = 0;
@@ -176,7 +176,7 @@ pub(crate) fn assemble(
     out
 }
 
-fn push_chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
+pub(crate) fn push_chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(name);
     out.extend_from_slice(&(data.len() as u32).to_le_bytes());
     out.extend_from_slice(data);

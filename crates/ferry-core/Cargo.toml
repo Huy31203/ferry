@@ -10,10 +10,12 @@ path = "tests/support/sidecar_fixture.rs"
 test = false
 
 [dependencies]
+avif-decode = { version = "3.0", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fast_image_resize = "6.1"
 gif = "0.14"
 imagequant = "4.4"
+libwebp-sys = "0.9"
 # No nasm_simd, so building Ferry never needs NASM. Revisit if JPEG latency matters.
 mozjpeg = { version = "0.10", default-features = false }
 # The same features mozjpeg already enables; named here for the decoder's error manager.
