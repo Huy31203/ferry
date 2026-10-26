@@ -401,7 +401,7 @@ impl Job {
     pub fn update(&self, state: JobState, after: Option<u64>) -> JobUpdate {
         let done = state == JobState::Done;
         let busy = matches!(state, JobState::Queued | JobState::Optimising { .. });
-        let editable = self.source_format == Format::Gif || !self.animated;
+        let editable = matches!(self.source_format, Format::Gif | Format::WebP) || !self.animated; // sE pdf-formats
         let backed_up = self.backup.as_ref().is_some_and(|b| b.exists());
         let edit_hint = if busy || (editable && backed_up) {
             None
@@ -1331,6 +1331,11 @@ mod tests {
         (finished, seen.into_inner())
     }
 
+    /// A PNG marked animated (acTL: two frames, plays forever).
+    fn apng() -> Vec<u8> {
+        testutil::with_png_chunk(&testutil::png(64, 64), b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0])
+    }
+
     fn clipboard_png(env: &Env, template: &str) -> (Job, Vec<u8>) {
         let input = testutil::png(300, 200);
         let job = Job::clipboard(
@@ -1872,16 +1877,24 @@ mod tests {
     }
 
     #[test]
-    fn an_animated_webp_offers_no_edits() {
+    fn an_animated_webp_card_offers_its_tools() {
         let env = Env::new();
-        let mut job = Job::clipboard(
-            Format::WebP,
-            testutil::animated_webp(),
-            false,
-            "%f",
-            &env.work(),
-            now(),
+        let path = env.file(
+            "loop.webp",
+            &testutil::animated_webp_frames(&[100, 100], 64, 48),
         );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert!(card.can_edit && card.edit_hint.is_none());
+    }
+
+    #[test]
+    fn an_apng_offers_no_edits() {
+        let env = Env::new();
+        let mut job = Job::clipboard(Format::Png, apng(), false, "%f", &env.work(), now());
         let update = run(&mut job, Level::Normal, &options(), &env)
             .0
             .unwrap()
@@ -2481,23 +2494,16 @@ mod tests {
     #[test]
     fn a_card_says_why_its_tools_are_off() {
         let env = Env::new();
-        let mut animated = Job::clipboard(
-            Format::WebP,
-            testutil::animated_webp(),
-            false,
-            "%f",
-            &env.work(),
-            now(),
-        );
+        let mut animated = Job::clipboard(Format::Png, apng(), false, "%f", &env.work(), now());
         let update = run(&mut animated, Level::Normal, &options(), &env)
             .0
             .unwrap()
             .update;
         assert_eq!(
             update.edit_hint.as_deref(),
-            Some("Animated WebP can't be edited yet")
+            Some("Animated PNG can't be edited yet")
         );
-        assert_eq!(update.source_format, Some(Format::WebP));
+        assert_eq!(update.source_format, Some(Format::Png));
 
         let (job, _) = done_file(&env, "shot.png");
         let done = job.update(JobState::Done, None);

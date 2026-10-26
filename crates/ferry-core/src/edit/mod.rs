@@ -10,7 +10,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::audio::{CoverPolicy, Loudness};
 use crate::i18n::tf;
-use crate::optimise::{self, Encoder, Level, OptimiseError, OptimiseOptions, gif, tiff};
+use crate::optimise::{
+    self, Encoder, Level, OptimiseError, OptimiseOptions, gif, gif_frames, tiff, webp, webp_anim,
+};
 use crate::sniff::{self, Format};
 use geometry::Rect;
 use raster::Raster;
@@ -323,7 +325,7 @@ pub fn apply(
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
     }
-    if source != Format::Gif && sniff::is_animated(original, source) {
+    if !matches!(source, Format::Gif | Format::WebP) && sniff::is_animated(original, source) {
         return Err(OptimiseError::Unsupported(tf(
             "error.animated_edit",
             &[("format", source.label())],
@@ -385,6 +387,11 @@ enum Work<'a> {
     },
     // sE pdf-formats: a multi-page TIFF, every page cut on its own.
     TiffPages(Vec<Raster>),
+    // sE pdf-formats: an animated WebP, every frame cut the same way.
+    Animation {
+        anim: webp_anim::Animation,
+        extras: webp::Extras,
+    },
 }
 
 impl Work<'_> {
@@ -394,6 +401,13 @@ impl Work<'_> {
             Work::Encoder { input, format } => optimise::encode(input, *format, o),
             Work::Pixels { raster, format } => raster::encode(raster, *format, o),
             Work::TiffPages(pages) => tiff::encode_rasters(pages),
+            Work::Animation { anim, extras } => {
+                let out = webp_anim::encode(anim, o, extras)?;
+                if webp_anim::frame_count(&out) != anim.frames.len() {
+                    return Err(OptimiseError::Encode(crate::i18n::t("pdf.anim.flattened")));
+                }
+                Ok(out)
+            }
         }
     }
 }
@@ -420,6 +434,14 @@ fn prepare<'a>(
             size: (out != window).then_some(out),
         };
         return Ok((work, out));
+    }
+    // sE pdf-formats
+    if target == Format::WebP
+        && (source == Format::Gif || edits.reshapes())
+        && matches!(source, Format::Gif | Format::WebP)
+        && sniff::is_animated(original, source)
+    {
+        return animation(original, source, edits);
     }
     if !edits.reshapes() && target == source {
         let dims = raster::display_dims(original, source).unwrap_or_default();
@@ -465,6 +487,43 @@ fn prepare<'a>(
         },
         out,
     ))
+}
+
+/// An animation cut and resized frame by frame, kept as an animated WebP.
+fn animation<'a>(
+    original: &[u8],
+    source: Format,
+    edits: &Edits,
+) -> Result<(Work<'a>, (u32, u32)), OptimiseError> {
+    let mut anim = match source {
+        Format::Gif => gif_frames::decode(original)?,
+        _ => webp_anim::decode(original)?,
+    };
+    let full = (anim.width, anim.height);
+    let window = geometry::crop_size(full, edits);
+    let first = Raster {
+        width: anim.width,
+        height: anim.height,
+        rgba: anim.frames[0].rgba.clone(),
+        icc: None,
+    };
+    let crop = place(full, window, edits.framing, Some(&first));
+    let out = geometry::output_size(window, edits);
+    for frame in &mut anim.frames {
+        let whole = Raster {
+            width: full.0,
+            height: full.1,
+            rgba: std::mem::take(&mut frame.rgba),
+            icc: None,
+        };
+        frame.rgba = raster::cut(&whole, crop, out)?.rgba;
+    }
+    (anim.width, anim.height) = out;
+    let extras = webp::Extras {
+        icc: anim.icc.clone(),
+        ..webp::Extras::default()
+    };
+    Ok((Work::Animation { anim, extras }, out))
 }
 
 /// Where the window sits: the busiest spot for Smart (when pixels are at
@@ -800,20 +859,48 @@ mod tests {
     }
 
     #[test]
-    fn an_animated_webp_cannot_be_edited() {
+    fn an_apng_cannot_be_edited() {
         let edits = Edits {
             scale: Some(50),
             ..Edits::default()
         };
-        let result = apply(
-            &testutil::animated_webp(),
-            Format::WebP,
-            &edits,
-            &OptimiseOptions::default(),
-        );
+        let apng =
+            testutil::with_png_chunk(&testutil::png(64, 64), b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]);
+        let result = apply(&apng, Format::Png, &edits, &OptimiseOptions::default());
         assert!(
-            matches!(result, Err(OptimiseError::Unsupported(m)) if m == "Animated WebP can't be edited yet")
+            matches!(result, Err(OptimiseError::Unsupported(m)) if m == "Animated PNG can't be edited yet")
         );
+    }
+
+    #[test]
+    fn an_animated_webp_downscales_every_frame() {
+        let a = applied(
+            &testutil::animated_webp_frames(&[100, 100, 100], 200, 100),
+            Format::WebP,
+            |e| e.scale = Some(50),
+        );
+        assert_eq!((a.format, a.dims), (Format::WebP, (100, 50)));
+        let back = webp_anim::decode(&a.bytes).unwrap();
+        assert_eq!((back.width, back.frames.len()), (100, 3));
+    }
+
+    #[test]
+    fn a_gif_converts_to_an_animated_webp_with_every_frame() {
+        let a = applied(&testutil::gif(3), Format::Gif, |e| {
+            e.format = Some(Format::WebP)
+        });
+        assert_eq!(a.format, Format::WebP);
+        assert_eq!(webp_anim::frame_count(&a.bytes), 3);
+    }
+
+    #[test]
+    fn an_animated_webp_converts_to_a_still_png_from_its_first_frame() {
+        let a = applied(
+            &testutil::animated_webp_frames(&[100, 100], 64, 48),
+            Format::WebP,
+            |e| e.format = Some(Format::Png),
+        );
+        assert_eq!((a.format, a.dims), (Format::Png, (64, 48)));
     }
 
     #[test]

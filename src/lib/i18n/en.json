@@ -253,6 +253,8 @@
   "pdf.tiff.unsupported": "This TIFF's colour format isn't supported",
   "pdf.step.tiff": "Compressing TIFF",
   "pdf.step.heic": "Encoding HEIC",
+  "pdf.anim.too_large": "This animation is too large to process",
+  "pdf.anim.flattened": "The animation could not be kept intact",
   "format.tip.mac": "Convert to {format} · ⌥-click keeps both",
   "format.tip.windows": "Convert to {format} · Alt-click keeps both",
   "card.downscale": "Downscale — click for −10 %, drag for a slider",
