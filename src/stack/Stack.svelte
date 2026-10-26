@@ -18,6 +18,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
   import FitPopover from './FitPopover.svelte';
   import PagesPopover from './PagesPopover.svelte'; // sE pdf-formats
   import PdfCropPopover from './PdfCropPopover.svelte';
+  import { loadPdfConfig } from '../lib/pdfConfig.svelte'; // sE pdf-formats
   import SpeedPopover from './SpeedPopover.svelte'; // stream A: video
   import DragAllBar from './DragAllBar.svelte';
   import UpdatePill from './UpdatePill.svelte';
@@ -206,6 +207,7 @@ import { shareAnchor } from '../lib/share'; // Stream H
   }
 
   onMount(() => {
+    loadPdfConfig().catch((e) => console.warn('pdf_config', e)); // sE pdf-formats: the DPI button starts from it
     // Listen first, then tell Rust we are ready, so no card falls in between.
     const unlisten = Promise.all([
       listen<JobUpdate>('job:update', (event) => {

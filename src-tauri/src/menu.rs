@@ -37,6 +37,8 @@ pub enum Action {
     Crop,
     // sE pdf-formats
     Pages,
+    /// Resample a PDF's images to this DPI.
+    Dpi(u16),
     Convert(Format),
     KeepBoth(Format),
     Restore,
@@ -131,6 +133,7 @@ impl Action {
     fn key(self) -> String {
         match self {
             Action::Scale(percent) => format!("scale-{percent}"),
+            Action::Dpi(n) => format!("dpi-{n}"), // sE pdf-formats
             Action::Convert(format) => format!("convert-{}", format_key(format)),
             Action::KeepBoth(format) => format!("keep_both-{}", format_key(format)),
             // stream B: audio
@@ -151,6 +154,7 @@ impl Action {
         let format = |key: &str| FORMATS.into_iter().find(|f| format_key(*f) == key);
         match key.split_once('-') {
             Some(("scale", value)) => value.parse().ok().map(Action::Scale),
+            Some(("dpi", value)) => value.parse().ok().map(Action::Dpi), // sE pdf-formats
             Some(("convert", value)) => format(value).map(Action::Convert),
             Some(("keep_both", value)) => format(value).map(Action::KeepBoth),
             // stream B: audio
@@ -259,6 +263,9 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         Action::Speed | Action::Mute => card.can_edit && card.video.is_some(),
         // sE pdf-formats
         Action::Pages => card.can_edit && card.source_format == Some(Format::Pdf),
+        Action::Dpi(n) => {
+            card.can_edit && card.source_format == Some(Format::Pdf) && card.edits.dpi != Some(n)
+        }
     }
 }
 
@@ -343,6 +350,23 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             item(Action::Scale(percent), label, None)
         })
         .collect::<tauri::Result<Vec<_>>>()?;
+    // sE pdf-formats: a PDF has DPI stops where an image has scales
+    let pdf = card.source_format == Some(Format::Pdf);
+    let dpis = ferry_core::pdf::DPI_STOPS
+        .iter()
+        .map(|&n| {
+            item(
+                Action::Dpi(n),
+                tf("pdf.dpi.label", &[("n", &n.to_string())]),
+                None,
+            )
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let downscale = if pdf {
+        submenu(t("pdf.menu.dpi"), &dpis)?
+    } else {
+        submenu(t("menu.downscale"), &scales)?
+    };
     let formats = convert_formats(card);
     let converts = formats
         .iter()
@@ -380,7 +404,7 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &item(Action::Fit, t("menu.fit"), None)?,
             &pipe.encoder, // stream F: pipelines
             &PredefinedMenuItem::separator(app)?,
-            &submenu(t("menu.downscale"), &scales)?,
+            &downscale,
             &item(Action::Crop, t("card.crop"), None)?,
             &submenu(t("menu.convert"), &converts)?,
             &submenu(t("menu.keep_both"), &twins)?,
@@ -564,6 +588,14 @@ fn run(app: &AppHandle, id: JobId, action: Action) {
                     ..Default::default()
                 },
             ),
+            Action::Dpi(n) => jobs::edit(
+                &app,
+                &id,
+                ferry_core::edit::EditsPatch {
+                    dpi: Some(Some(n)),
+                    ..Default::default()
+                },
+            ), // sE pdf-formats
             Action::Convert(format) => jobs::convert(&app, &id, format, false),
             Action::KeepBoth(format) => jobs::convert(&app, &id, format, true),
             Action::Restore => jobs::restore(&app, &id),
@@ -629,7 +661,7 @@ mod tests {
         card
     }
 
-    const ALL: [Action; 19] = [
+    const ALL: [Action; 20] = [
         Action::Open,
         Action::Reveal,
         Action::Copy,
@@ -649,6 +681,7 @@ mod tests {
         Action::Speed,
         Action::Mute,
         Action::Pages,
+        Action::Dpi(150),
     ];
 
     #[test]
@@ -670,7 +703,10 @@ mod tests {
         let card = done();
         for action in ALL {
             // Speed and Mute are for video cards only, Pages for PDFs.
-            let video_only = matches!(action, Action::Speed | Action::Mute | Action::Pages);
+            let video_only = matches!(
+                action,
+                Action::Speed | Action::Mute | Action::Pages | Action::Dpi(_)
+            );
             assert_eq!(enabled(&card, action), !video_only, "{action:?}");
         }
         assert!(!enabled(&card, Action::Convert(Format::Png)));
@@ -695,6 +731,20 @@ mod tests {
                 Action::Preview,
                 Action::Close
             ]
+        );
+    }
+
+    #[test]
+    fn a_pdf_card_changes_dpi_but_not_to_its_current_one() {
+        let mut card = done();
+        card.source_format = Some(Format::Pdf);
+        card.edits.dpi = Some(150);
+        assert!(enabled(&card, Action::Dpi(72)));
+        assert!(!enabled(&card, Action::Dpi(150)));
+        assert!(!enabled(&done(), Action::Dpi(72)));
+        assert_eq!(
+            parse_id(&item_id(&card.id, Action::Dpi(72))),
+            Some((card.id.clone(), Action::Dpi(72)))
         );
     }
 

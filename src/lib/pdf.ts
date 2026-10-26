@@ -60,6 +60,22 @@ export function dpiLabel(n: number): string {
   return t('pdf.dpi.label', { n });
 }
 
+/** The resolution a PDF card's images are at: its recipe, else extraction's, else the level's (mirrors ferry_core::pdf::target_dpi). */
+export function currentDpi(card: JobUpdate, cfg: PdfConfig): number {
+  if (card.edits.dpi !== null) return card.edits.dpi;
+  if (card.format !== 'pdf') return cfg.extract_dpi;
+  return card.edits.level === 'aggressive' ? cfg.dpi_aggressive : cfg.dpi;
+}
+
+/** One click on DPI: the next lower stop; null at the lowest. */
+export function nextDpi(dpi: number): number | null {
+  return DPI_STOPS.find((stop) => stop < dpi) ?? null;
+}
+
+export function dpiPatch(dpi: number): EditsPatch {
+  return { dpi };
+}
+
 export interface PagesForm {
   format: 'png' | 'jpeg';
   all: boolean;
@@ -91,4 +107,30 @@ export function checkPages(form: PagesForm, count: number | null): { patch: Edit
     return { patch: null, error: t('pdf.pages.invalid', { n: count ?? '?' }) };
   }
   return { patch: patch({ first, last }), error: null };
+}
+
+/** The longest side a device may have (mirrors ferry_core::edit::MAX_SIDE). */
+const MAX_SIDE = 30_000;
+
+/** The devices Settings restores (mirrors ferry_core::settings::Pdf::default). */
+export const DEFAULT_DEVICES: Device[] = [
+  { name: 'iPhone', width: 1179, height: 2556 },
+  { name: 'iPhone Pro Max', width: 1320, height: 2868 },
+  { name: 'iPad', width: 1640, height: 2360 },
+  { name: 'iPad Pro 13-inch', width: 2064, height: 2752 },
+  { name: 'Kindle', width: 1236, height: 1648 },
+  { name: 'reMarkable', width: 1404, height: 1872 },
+];
+
+/** "iPad 1640×2360" as a device; null without a name or with a side outside 1..=30000. */
+export function parseDevice(text: string): Device | null {
+  const match = /^\s*(.+?)\s+(\d+)\s*[x×X]\s*(\d+)\s*$/.exec(text);
+  if (!match) return null;
+  const [width, height] = [Number(match[2]), Number(match[3])];
+  const ok = (side: number) => side >= 1 && side <= MAX_SIDE;
+  return ok(width) && ok(height) ? { name: match[1], width, height } : null;
+}
+
+export function deviceLabel(d: Device): string {
+  return `${d.name} ${d.width}×${d.height}`;
 }

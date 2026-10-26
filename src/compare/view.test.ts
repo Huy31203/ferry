@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampPan, closesCompare, cssScale, dividerAt, nowBox, shotLabel, versioned, type Shot } from './view';
+import { clampPan, closesCompare, cssScale, dividerAt, nowBox, pageCount, shotLabel, stepPage, versioned, type Shot } from './view';
 
 const original: Shot = {
   path: '/b/shot.png',
@@ -10,6 +10,8 @@ const original: Shot = {
   kind: 'image',
   duration_ms: null,
   fps: null,
+  src: '/b/shot.png',
+  pages: null,
 };
 const now: Shot = {
   path: '/w/shot.webp',
@@ -20,6 +22,8 @@ const now: Shot = {
   kind: 'image',
   duration_ms: null,
   fps: null,
+  src: '/w/shot.webp',
+  pages: null,
 };
 
 describe('shotLabel', () => {
@@ -126,5 +130,21 @@ describe('closesCompare', () => {
     expect(closesCompare(key('d', { ctrlKey: true }), true)).toBe(false);
     expect(closesCompare(key('d', { metaKey: true }), false)).toBe(false);
     expect(closesCompare(key('d'), true)).toBe(false);
+  });
+});
+
+describe('pages', () => {
+  it('counts pages from either side', () => {
+    expect(pageCount({ original, now })).toBeNull();
+    expect(pageCount({ original: { ...original, pages: 12 }, now })).toBe(12);
+    expect(pageCount({ original: { ...original, pages: 12 }, now: { ...now, pages: 3 } })).toBe(3);
+    expect(pageCount({ original: null, now: { ...now, pages: 2 } })).toBe(2);
+  });
+  it('steps within the pages and says when there is nowhere to go', () => {
+    expect(stepPage(2, 12, 1)).toBe(3);
+    expect(stepPage(2, 12, -1)).toBe(1);
+    expect(stepPage(1, 12, -1)).toBeNull();
+    expect(stepPage(12, 12, 1)).toBeNull();
+    expect(stepPage(1, null, 1)).toBeNull();
   });
 });
