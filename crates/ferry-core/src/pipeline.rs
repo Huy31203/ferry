@@ -80,6 +80,9 @@ pub struct RunOptions {
     pub hardware: Option<Hardware>,
     // stream B: audio
     pub audio: AudioRunOptions,
+    // stream F: pipelines
+    /// Adaptive compression for plain runs (`images.adaptive`).
+    pub adaptive: bool,
 }
 
 impl RunOptions {
@@ -105,6 +108,7 @@ impl RunOptions {
             hardware: None,
             // stream B: audio
             audio: AudioRunOptions::new(settings),
+            adaptive: settings.images.adaptive, // stream F: pipelines
         }
     }
 }
@@ -2575,5 +2579,13 @@ mod tests {
         let out = fs::read(&path).unwrap();
         // Orientation 1 needs no minimal EXIF (C1§5.8), so no APP1 Exif header is left at all.
         assert!(!out.windows(6).any(|w| w == b"Exif\0\0"));
+    }
+
+    // stream F: pipelines
+    #[test]
+    fn run_options_carry_the_adaptive_setting() {
+        let mut s = Settings::default();
+        s.images.adaptive = true;
+        assert!(options_with(&s).adaptive);
     }
 }
