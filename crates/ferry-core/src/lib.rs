@@ -32,6 +32,9 @@ pub mod trigger;
 pub mod watch; // stream C
 pub mod workdir;
 
+// stream F: pipelines
+pub mod metric;
+
 // stream A: video
 pub mod error;
 pub mod ffmpeg;
