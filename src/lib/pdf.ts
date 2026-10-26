@@ -108,3 +108,29 @@ export function checkPages(form: PagesForm, count: number | null): { patch: Edit
   }
   return { patch: patch({ first, last }), error: null };
 }
+
+/** The longest side a device may have (mirrors ferry_core::edit::MAX_SIDE). */
+const MAX_SIDE = 30_000;
+
+/** The devices Settings restores (mirrors ferry_core::settings::Pdf::default). */
+export const DEFAULT_DEVICES: Device[] = [
+  { name: 'iPhone', width: 1179, height: 2556 },
+  { name: 'iPhone Pro Max', width: 1320, height: 2868 },
+  { name: 'iPad', width: 1640, height: 2360 },
+  { name: 'iPad Pro 13-inch', width: 2064, height: 2752 },
+  { name: 'Kindle', width: 1236, height: 1648 },
+  { name: 'reMarkable', width: 1404, height: 1872 },
+];
+
+/** "iPad 1640×2360" as a device; null without a name or with a side outside 1..=30000. */
+export function parseDevice(text: string): Device | null {
+  const match = /^\s*(.+?)\s+(\d+)\s*[x×X]\s*(\d+)\s*$/.exec(text);
+  if (!match) return null;
+  const [width, height] = [Number(match[2]), Number(match[3])];
+  const ok = (side: number) => side >= 1 && side <= MAX_SIDE;
+  return ok(width) && ok(height) ? { name: match[1], width, height } : null;
+}
+
+export function deviceLabel(d: Device): string {
+  return `${d.name} ${d.width}×${d.height}`;
+}
