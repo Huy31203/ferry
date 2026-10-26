@@ -32,10 +32,9 @@ impl Stamp {
     }
 }
 
-/// One identity for a path however it was spelled: FSEvents reports
-/// `/private/var/…` for `/var/…`, and Windows paths ignore case.
-#[cfg(not(windows))]
-pub fn key(path: &Path) -> PathBuf {
+/// The real path: symlinks, `/private/var`, and Windows 8.3 short names
+/// (`RUNNER~1`) resolved. A file that does not exist yet resolves through its folder.
+fn resolve(path: &Path) -> PathBuf {
     if let Ok(real) = fs::canonicalize(path) {
         return real;
     }
@@ -45,10 +44,17 @@ pub fn key(path: &Path) -> PathBuf {
     }
 }
 
+/// One identity for a path however it was spelled: FSEvents reports
+/// `/private/var/…` for `/var/…`, and Windows paths ignore case.
+#[cfg(not(windows))]
+pub fn key(path: &Path) -> PathBuf {
+    resolve(path)
+}
+
 #[cfg(windows)]
 pub fn key(path: &Path) -> PathBuf {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-    let text = absolute.to_string_lossy().to_lowercase();
+    let real = resolve(&std::path::absolute(path).unwrap_or_else(|_| path.to_owned()));
+    let text = real.to_string_lossy().to_lowercase();
     PathBuf::from(text.strip_prefix("\\\\?\\").unwrap_or(&text))
 }
 

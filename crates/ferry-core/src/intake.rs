@@ -157,7 +157,7 @@ impl Walk {
     /// A file inside a folder that Ferry wrote: a known job output, or a write
     /// the self-write ledger still remembers (and the user has not edited).
     fn own_result(&self, canonical: &Path) -> bool {
-        self.own.contains(canonical)
+        self.own.contains(&selfwrite::key(canonical))
             || Stamp::of(canonical).is_some_and(|stamp| selfwrite::is_own(canonical, &stamp))
     }
 
