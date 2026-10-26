@@ -4,6 +4,7 @@
 pub(crate) mod gif;
 pub(crate) mod jpeg;
 pub(crate) mod png;
+pub(crate) mod tiff; // sE pdf-formats
 pub(crate) mod webp;
 
 use std::{fmt, path::PathBuf};
