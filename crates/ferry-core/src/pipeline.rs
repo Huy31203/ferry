@@ -34,6 +34,7 @@ use video_job::VideoState;
 mod video_job;
 
 // sE pdf-formats
+mod formats_run;
 mod pdf_job;
 
 // ---- stream B: audio ----
@@ -430,7 +431,7 @@ impl Job {
     pub fn update(&self, state: JobState, after: Option<u64>) -> JobUpdate {
         let done = state == JobState::Done;
         let busy = matches!(state, JobState::Queued | JobState::Optimising { .. });
-        let editable = self.source_format == Format::Gif || !self.animated;
+        let editable = matches!(self.source_format, Format::Gif | Format::WebP) || !self.animated; // sE pdf-formats
         let backed_up = self.backup.as_ref().is_some_and(|b| b.exists());
         let edit_hint = if busy || (editable && backed_up) {
             None
@@ -718,6 +719,7 @@ impl Job {
         if let Err(reason) = self.capture_facts(&original) {
             return Some(self.fail(reason.clone(), reason));
         }
+        self.capture_poster(&original, backups); // sE pdf-formats
         // A twin is a copy the user asked for: it always writes, never "no gain".
         let plain = self.edits.is_plain() && !self.twin;
         let step = t(match (plain, self.source_format) {
@@ -727,7 +729,9 @@ impl Job {
             (true, Format::WebP) => "card.step.webp",
             (true, Format::Gif) => "card.step.gif",
             // sE pdf-formats (later tasks give each its own step)
-            (true, Format::Tiff | Format::Heic | Format::Avif) => "card.step.edit",
+            (true, Format::Tiff) => "pdf.step.tiff",
+            (true, Format::Heic) => "pdf.step.heic",
+            (true, Format::Avif) => "card.step.edit",
             (true, Format::Pdf) => "pdf.step.pdf",
             // stream A: video (never reached once videos are dispatched earlier)
             (
@@ -1427,6 +1431,11 @@ mod tests {
         (finished, seen.into_inner())
     }
 
+    /// A PNG marked animated (acTL: two frames, plays forever).
+    fn apng() -> Vec<u8> {
+        testutil::with_png_chunk(&testutil::png(64, 64), b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0])
+    }
+
     fn clipboard_png(env: &Env, template: &str) -> (Job, Vec<u8>) {
         let input = testutil::png(300, 200);
         let job = Job::clipboard(
@@ -1968,16 +1977,24 @@ mod tests {
     }
 
     #[test]
-    fn an_animated_webp_offers_no_edits() {
+    fn an_animated_webp_card_offers_its_tools() {
         let env = Env::new();
-        let mut job = Job::clipboard(
-            Format::WebP,
-            testutil::animated_webp(),
-            false,
-            "%f",
-            &env.work(),
-            now(),
+        let path = env.file(
+            "loop.webp",
+            &testutil::animated_webp_frames(&[100, 100], 64, 48),
         );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let card = run(&mut job, Level::Normal, &options(), &env)
+            .0
+            .unwrap()
+            .update;
+        assert!(card.can_edit && card.edit_hint.is_none());
+    }
+
+    #[test]
+    fn an_apng_offers_no_edits() {
+        let env = Env::new();
+        let mut job = Job::clipboard(Format::Png, apng(), false, "%f", &env.work(), now());
         let update = run(&mut job, Level::Normal, &options(), &env)
             .0
             .unwrap()
@@ -2577,23 +2594,16 @@ mod tests {
     #[test]
     fn a_card_says_why_its_tools_are_off() {
         let env = Env::new();
-        let mut animated = Job::clipboard(
-            Format::WebP,
-            testutil::animated_webp(),
-            false,
-            "%f",
-            &env.work(),
-            now(),
-        );
+        let mut animated = Job::clipboard(Format::Png, apng(), false, "%f", &env.work(), now());
         let update = run(&mut animated, Level::Normal, &options(), &env)
             .0
             .unwrap()
             .update;
         assert_eq!(
             update.edit_hint.as_deref(),
-            Some("Animated WebP can't be edited yet")
+            Some("Animated PNG can't be edited yet")
         );
-        assert_eq!(update.source_format, Some(Format::WebP));
+        assert_eq!(update.source_format, Some(Format::Png));
 
         let (job, _) = done_file(&env, "shot.png");
         let done = job.update(JobState::Done, None);
@@ -2796,6 +2806,50 @@ mod tests {
         let card = job.update(JobState::Queued, None);
         assert_eq!(card.choices[0].format, Format::Heic);
         assert_eq!(card.dims_before, Some((64, 48)));
+    }
+
+    #[test]
+    fn a_tiff_file_becomes_a_jpeg_beside_it_and_gets_a_poster() {
+        let env = Env::new();
+        let path = env.file(
+            "scan.tiff",
+            &testutil::tiff(&[testutil::TiffPage {
+                size: (300, 200),
+                ..testutil::TiffPage::default()
+            }]),
+        );
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+        let card = finished.unwrap().update;
+        assert_eq!(
+            (card.state, card.format, card.converted),
+            (JobState::Done, Some(Format::Jpeg), true)
+        );
+        assert!(path.with_extension("jpg").exists());
+        let poster = card.poster.expect("a TIFF card has a poster");
+        assert_eq!(
+            crate::sniff::dimensions(&fs::read(poster).unwrap(), Format::Png),
+            Some((300, 200))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_heic_photo_becomes_a_jpeg_and_gets_a_poster() {
+        let Some(bytes) = testutil::heic(200, 120, 1) else {
+            return;
+        };
+        let env = Env::new();
+        let path = env.file("photo.heic", &bytes);
+        let mut job = Job::file(&path, &Settings::default(), true).unwrap();
+        let (finished, _) = run(&mut job, Level::Normal, &options(), &env);
+        let card = finished.unwrap().update;
+        assert_eq!(
+            (card.state, card.format, card.converted),
+            (JobState::Done, Some(Format::Jpeg), true)
+        );
+        assert!(path.with_extension("jpg").exists());
+        assert!(card.poster.is_some());
     }
 
     #[test]

@@ -2,11 +2,16 @@
 //! the caller keeps the original unless the result is `Smaller`.
 
 pub mod adaptive; // stream F: pipelines
+pub(crate) mod avif; // sE pdf-formats
 pub(crate) mod gif;
+pub(crate) mod gif_frames; // sE pdf-formats
+pub(crate) mod heic; // sE pdf-formats
 pub(crate) mod jpeg;
 pub(crate) mod png;
 pub mod switch; // stream F: pipelines
+pub(crate) mod tiff; // sE pdf-formats
 pub(crate) mod webp;
+pub(crate) mod webp_anim; // sE pdf-formats
 
 use std::{fmt, path::PathBuf};
 
@@ -128,7 +133,12 @@ pub fn optimise(
     if o.cancel.is_cancelled() {
         return Err(OptimiseError::Cancelled);
     }
-    if crate::sniff::is_animated(input, format) && format != Format::Gif {
+    // sE pdf-formats (an animated WebP is re-encoded, with its frames counted)
+    if crate::sniff::is_animated(input, format) && !matches!(format, Format::Gif | Format::WebP) {
+        return Ok(Outcome::AlreadyOptimal);
+    }
+    // sE pdf-formats: AVIF is read but cannot be written yet, so it is left as it is.
+    if format == Format::Avif {
         return Ok(Outcome::AlreadyOptimal);
     }
     // stream F: pipelines (a decode error here falls back to the plain encode)
@@ -151,10 +161,22 @@ pub fn encode(input: &[u8], format: Format, o: &OptimiseOptions) -> Result<Vec<u
     let output = match format {
         Format::Png => png::optimise(input, o)?,
         Format::Jpeg => jpeg::optimise(input, o)?,
+        Format::WebP if crate::sniff::is_animated(input, format) => {
+            webp_anim::optimise(input, o)? // sE pdf-formats
+        }
         Format::WebP => webp::optimise(input, o)?,
         Format::Gif => gif::optimise(input, o)?,
         // sE pdf-formats
-        Format::Tiff | Format::Heic | Format::Avif | Format::Pdf => {
+        Format::Tiff => tiff::optimise(input, o)?,
+        Format::Heic => heic::optimise(input, o)?,
+        // AVIF is a source only until it can be written
+        Format::Avif => {
+            return Err(OptimiseError::Unsupported(tf(
+                "pdf.write_unsupported",
+                &[("format", format.label())],
+            )));
+        }
+        Format::Pdf => {
             return Err(OptimiseError::Unsupported(tf(
                 "pdf.read_unsupported",
                 &[("format", format.label())],
@@ -258,12 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn animated_webp_and_apng_are_left_alone() {
+    fn apng_is_left_alone() {
         let o = OptimiseOptions::default();
-        assert_eq!(
-            optimise(&testutil::animated_webp(), Format::WebP, &o).unwrap(),
-            Outcome::AlreadyOptimal
-        );
         // acTL (frames = 2, plays = 0) marks a PNG as animated.
         let apng =
             testutil::with_png_chunk(&testutil::png(64, 64), b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]);
@@ -271,6 +289,16 @@ mod tests {
             optimise(&apng, Format::Png, &o).unwrap(),
             Outcome::AlreadyOptimal
         );
+    }
+
+    #[test]
+    fn an_animated_webp_is_re_encoded_and_stays_animated() {
+        let o = OptimiseOptions::default();
+        let input = testutil::animated_webp_frames(&[100, 100, 100], 128, 96);
+        match optimise(&input, Format::WebP, &o).unwrap() {
+            Outcome::Smaller { bytes } => assert_eq!(webp_anim::frame_count(&bytes), 3),
+            other => panic!("expected a smaller animation, got {other:?}"),
+        }
     }
 
     #[test]
