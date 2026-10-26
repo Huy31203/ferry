@@ -38,6 +38,7 @@ pub mod metric;
 pub mod pipeline_def;
 pub mod pipeline_plan;
 pub mod pipeline_steps;
+pub mod pipeline_text;
 
 // stream A: video
 pub mod error;

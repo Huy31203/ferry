@@ -829,6 +829,7 @@
   "pipe.error.unknown_param": "“{name}” isn't a setting of {step}",
   "pipe.error.syntax": "Line {line}: {why}",
   "pipe.error.quote": "missing closing quote",
+  "pipe.error.expected_pair": "“{token}” should look like setting=value",
   "pipe.error.cannot_run": "Can't run “{name}”: {why}",
   "pipe.error.missing": "That pipeline no longer exists",
   "pipe.card.step": "Step {n} of {total} · {step}",
