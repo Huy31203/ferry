@@ -9,7 +9,9 @@ mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
+mod pipe_commands; // stream F
 mod pipe_jobs; // stream F
+mod pipe_windows; // stream F
 mod platform;
 mod prefs;
 mod preview;
@@ -131,6 +133,18 @@ pub fn run() {
             drop_batch::list::list_save_to,
             // stream B: audio
             audio::card_extract_cover,
+            // stream F: pipelines
+            pipe_commands::pipe_registry,
+            pipe_commands::pipe_meta,
+            pipe_commands::pipe_check,
+            pipe_commands::pipe_parse,
+            pipe_commands::pipe_print,
+            pipe_commands::pipe_starters,
+            pipe_commands::pipe_test,
+            pipe_commands::pipe_reveal_test,
+            pipe_commands::pipe_pick_file,
+            pipe_commands::pipe_run,
+            pipe_commands::pipe_open_editor,
             svc_commands::svc_hotkeys_status,
             svc_commands::svc_hotkey_check,
             svc_commands::svc_hotkey_set,

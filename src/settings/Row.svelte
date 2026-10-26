@@ -4,6 +4,7 @@
   import { t, type StringKey } from '../lib/i18n';
   import type { AppRef } from '../lib/settings'; // stream H
   import type { Setting } from '../lib/schema';
+  import type { Pipelines } from '../lib/pipelines'; // stream F
   import type { OutputRule as Rule, WatchedFolder } from '../lib/settings';
   import CaptureDirs from './controls/CaptureDirs.svelte'; // stream C
   import AppList from './controls/AppList.svelte'; // stream H
@@ -14,6 +15,7 @@
   import ListEditor from './controls/ListEditor.svelte';
   import NumberField from './controls/NumberField.svelte';
   import OutputRule from './controls/OutputRule.svelte';
+  import PipelineLibrary from './controls/PipelineLibrary.svelte'; // stream F
   import RailEditor from './controls/RailEditor.svelte';
   import SizeList from './controls/SizeList.svelte';
   import Slider from './controls/Slider.svelte';
@@ -176,6 +178,8 @@
       <AppPicker value={value as AppRef | null} {disabled} labelledby={labelId} {onchange} onerror={(why) => (outcome = why)} />
     {:else if control.kind === 'app_list'}
       <AppList items={value as AppRef[]} {disabled} labelledby={labelId} {onchange} onerror={(why) => (outcome = why)} />
+    {:else if control.kind === 'pipelines'}
+      <PipelineLibrary pipelines={value as Pipelines} {disabled} labelledby={labelId} {onchange} />
     {:else if control.kind === 'action'}
       <button
         type="button"
