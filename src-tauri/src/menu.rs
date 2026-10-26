@@ -50,6 +50,7 @@ pub enum Action {
     ExtractCover,
     /// Stream H: integrations (share, open with, edit with, upload, shelf).
     Integration(crate::integrations::menu::Item),
+    Pipe(crate::pipe_menu::PipeAction), // stream F: pipelines
 }
 
 const FORMATS: [Format; 14] = [
@@ -128,6 +129,7 @@ impl Action {
             Action::Cover(c) => format!("cover-{}", serde_key(&c)),
             Action::CoverSquare(n) => format!("cover_square-{n}"),
             Action::Integration(item) => format!("h-{}", item.key()),
+            Action::Pipe(p) => format!("pipe-{}", p.key()), // stream F: pipelines
             named => NAMED
                 .iter()
                 .find(|(_, a)| *a == named)
@@ -155,6 +157,7 @@ impl Action {
             Some(("h", value)) => {
                 crate::integrations::menu::Item::parse(value).map(Action::Integration)
             }
+            Some(("pipe", value)) => crate::pipe_menu::PipeAction::parse(value).map(Action::Pipe), // stream F: pipelines
             Some(_) => None,
             None => NAMED.iter().find(|(k, _)| *k == key).map(|(_, a)| *a),
         }
@@ -220,6 +223,7 @@ pub fn enabled(card: &JobUpdate, action: Action) -> bool {
         | Action::Rename
         | Action::Preview => file,
         Action::Integration(_) => file,
+        Action::Pipe(p) => crate::pipe_menu::enabled(card, p), // stream F: pipelines
         Action::Restore => idle && card.can_restore,
         Action::Convert(format) => card.can_edit && card.format != Some(format),
         Action::Scale(percent) => card.can_edit && card.edits.scale.unwrap_or(100) != percent,
@@ -332,6 +336,7 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
         .map(|&f| item(Action::KeepBoth(f), f.label().into(), None))
         .collect::<tauri::Result<Vec<_>>>()?;
 
+    let pipe = crate::pipe_menu::Items::build(app, card)?; // stream F: pipelines
     let menu = Menu::with_items(
         app,
         &[
@@ -356,11 +361,16 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &item(Action::Rerun, t("card.reoptimise"), None)?,
             &item(Action::Aggressive, t("card.aggressive"), None)?,
             &item(Action::Fit, t("menu.fit"), None)?,
+            &pipe.encoder, // stream F: pipelines
             &PredefinedMenuItem::separator(app)?,
             &submenu(t("menu.downscale"), &scales)?,
             &item(Action::Crop, t("card.crop"), None)?,
             &submenu(t("menu.convert"), &converts)?,
             &submenu(t("menu.keep_both"), &twins)?,
+            &pipe.strip, // stream F: pipelines
+            &PredefinedMenuItem::separator(app)?,
+            &pipe.run,      // stream F: pipelines
+            &pipe.producer, // stream F: pipelines
             &PredefinedMenuItem::separator(app)?,
             &item(Action::Restore, t("card.restore"), None)?,
             &PredefinedMenuItem::separator(app)?,
@@ -376,7 +386,7 @@ fn build(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
         };
         let speed = item(Action::Speed, t("video.menu.speed"), None)?;
         let mute = item(Action::Mute, t(mute), None)?;
-        menu.insert_items(&[&speed, &mute], 16)?;
+        menu.insert_items(&[&speed, &mute], 17)?; // stream F: pipelines (the encoder item above shifts Crop by one)
     }
     Ok(menu)
 }
@@ -388,6 +398,7 @@ fn refs(items: &[MenuItem<Wry>]) -> Vec<&dyn IsMenuItem<Wry>> {
 
 /// An audio card's menu: no Compare, Downscale or Crop; loudness and cover art instead.
 fn build_audio(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
+    let pipe = crate::pipe_menu::Items::build(app, card)?; // stream F: pipelines
     let item = |action: Action, label: String| {
         MenuItem::with_id(
             app,
@@ -466,6 +477,9 @@ fn build_audio(app: &AppHandle, card: &JobUpdate) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &sub(t("audio.menu.loudness"), &refs(&loudness))?,
             &cover,
+            &PredefinedMenuItem::separator(app)?,
+            &pipe.run,      // stream F: pipelines
+            &pipe.producer, // stream F: pipelines
             &PredefinedMenuItem::separator(app)?,
             &item(Action::Restore, t("card.restore"))?,
             &PredefinedMenuItem::separator(app)?,
@@ -562,6 +576,7 @@ fn run(app: &AppHandle, id: JobId, action: Action) {
             Action::ExtractCover => crate::audio::extract_cover(&app, &id).map(drop),
             // Stream H: integrations
             Action::Integration(item) => crate::integrations::menu::run(&app, &id, item),
+            Action::Pipe(p) => crate::pipe_menu::run(&app, &id, p), // stream F: pipelines
             _ => Ok(()),
         };
         if let Err(e) = done {
