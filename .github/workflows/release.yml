@@ -76,10 +76,13 @@ jobs:
         shell: bash
         run: scripts/fetch-pdfium.sh ${{ matrix.target }}
       # The licence notices of the linked crates ship in the bundle (resource: binaries/licenses/).
+      # pwsh, not bash: under bash on Windows, Git's usr/bin/link.exe shadows MSVC's link.exe and cargo cannot link.
+      - name: Install cargo-about
+        shell: pwsh
+        run: cargo install cargo-about --locked --version 0.9.2 --features cli
       - name: Generate Rust crate licence notices
         shell: bash
         run: |
-          cargo install cargo-about --locked --version 0.9.2 --features cli
           mkdir -p src-tauri/binaries/licenses
           cargo about generate --locked -c about.toml about.hbs -o src-tauri/binaries/licenses/rust-crates-NOTICES.html
       - name: Check updater signing
