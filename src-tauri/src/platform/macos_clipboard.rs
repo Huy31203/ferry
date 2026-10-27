@@ -112,17 +112,22 @@ fn read_from(pb: &NSPasteboard) -> Snapshot {
     }
 }
 
-/// Whether the clipboard holds web content without its image yet. A browser
-/// copying a big image adds the PNG after the rest, and that does not move the
-/// change count.
+/// Whether the clipboard is empty or holds web content without its image yet.
+/// Chrome copying a big image clears the clipboard, then writes everything once
+/// the PNG is encoded, and that write does not move the change count.
 pub fn may_gain_image() -> bool {
     pending_image(&NSPasteboard::generalPasteboard())
 }
 
 fn pending_image(pb: &NSPasteboard) -> bool {
-    pb.types().is_some_and(|types| {
+    pb.types().is_none_or(|types| {
         let has = |name: &str| types.iter().any(|t| t.to_string() == name);
-        has("public.html") && !IMAGE_TYPES.iter().any(|(t, _)| has(t))
+        let from_browser = types.is_empty()
+            || has("public.html")
+            || types
+                .iter()
+                .any(|t| t.to_string().starts_with("org.chromium."));
+        from_browser && !IMAGE_TYPES.iter().any(|(t, _)| has(t))
     })
 }
 
@@ -337,6 +342,20 @@ mod tests {
         assert_eq!(pb.0.changeCount() as u64, seq, "the late image is silent");
         assert!(!pending_image(&pb.0));
         assert_eq!(read_from(&pb.0).image, Some((Format::Png, PNG.to_vec())));
+    }
+
+    #[test]
+    fn chromes_markers_alone_mean_an_image_may_follow() {
+        let pb = Private::new();
+        pb.0.clearContents();
+        assert!(pending_image(&pb.0), "Chrome clears the clipboard first");
+        pb.0.setData_forType(
+            Some(&NSData::with_bytes(b"https://example.com/a.jpg")),
+            &NSString::from_str("org.chromium.source-url"),
+        );
+        assert!(pending_image(&pb.0));
+        write_text_to(&pb.0, "plain text").unwrap();
+        assert!(!pending_image(&pb.0));
     }
 
     #[test]
