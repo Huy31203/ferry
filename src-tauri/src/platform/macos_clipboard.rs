@@ -112,6 +112,20 @@ fn read_from(pb: &NSPasteboard) -> Snapshot {
     }
 }
 
+/// Whether the clipboard holds web content without its image yet. A browser
+/// copying a big image adds the PNG after the rest, and that does not move the
+/// change count.
+pub fn may_gain_image() -> bool {
+    pending_image(&NSPasteboard::generalPasteboard())
+}
+
+fn pending_image(pb: &NSPasteboard) -> bool {
+    pb.types().is_some_and(|types| {
+        let has = |name: &str| types.iter().any(|t| t.to_string() == name);
+        has("public.html") && !IMAGE_TYPES.iter().any(|(t, _)| has(t))
+    })
+}
+
 /// Put an image on the clipboard. Returns the new change count, so the watcher
 /// can skip our own write.
 pub fn write_image(format: Format, bytes: &[u8]) -> Result<u64, String> {
@@ -305,6 +319,24 @@ mod tests {
             pb.0.setData_forType(Some(&NSData::with_bytes(&bytes)), &NSString::from_str(uti));
         }
         assert_eq!(read_from(&pb.0).image.map(|(f, _)| f), Some(Format::Heic));
+    }
+
+    #[test]
+    fn a_browser_image_added_after_the_html_is_read_without_a_new_change_count() {
+        let pb = Private::new();
+        let html = NSString::from_str("public.html");
+        pb.0.clearContents();
+        pb.0.setData_forType(Some(&NSData::with_bytes(b"<img src=x>")), &html);
+        let seq = read_from(&pb.0).seq;
+        assert!(pending_image(&pb.0));
+        assert_eq!(read_from(&pb.0).image, None);
+        pb.0.setData_forType(
+            Some(&NSData::with_bytes(PNG)),
+            &NSString::from_str("public.png"),
+        );
+        assert_eq!(pb.0.changeCount() as u64, seq, "the late image is silent");
+        assert!(!pending_image(&pb.0));
+        assert_eq!(read_from(&pb.0).image, Some((Format::Png, PNG.to_vec())));
     }
 
     #[test]

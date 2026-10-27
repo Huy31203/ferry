@@ -103,7 +103,7 @@ pub struct Clipboard {
     pub ignored_apps: Vec<String>,
     pub accumulate: bool,
     pub copy_paths: bool,
-    /// FR-T3: also optimise copied video and PDF files, not only images.
+    /// FR-T3: also optimise copied image, video and PDF files, not only image data.
     pub optimise_files: bool,
     pub file_template: String,
     #[serde(flatten)]

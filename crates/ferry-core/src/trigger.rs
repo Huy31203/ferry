@@ -159,7 +159,7 @@ pub fn automatic(
 }
 
 /// An automatic trigger for copied files (FR-T3), only with "Optimise copied
-/// video and PDF files" on. `wanted` says whether a file is a video or a PDF;
+/// files" on. `wanted` says whether a file is an image, a video or a PDF;
 /// the others are left alone. As for images, the run state is asked last, so a
 /// Paused skip is spent on files Ferry would really have optimised.
 pub fn automatic_files(

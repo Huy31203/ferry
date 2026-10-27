@@ -22,6 +22,8 @@ use crate::state::{self, AppState};
 use crate::{jobs, platform, tray};
 
 const RETRY_AFTER: Duration = Duration::from_millis(100);
+/// How long a browser copy may take to add its image (a 4K JPEG re-encodes to PNG).
+const IMAGE_WAIT: Duration = Duration::from_secs(5);
 
 /// Watch the clipboard and optimise copied images while Running.
 pub fn start(app: &AppHandle) {
@@ -48,7 +50,7 @@ fn on_change(app: &AppHandle, seq: u64) {
     if !trigger::wants_read(&settings, run_state) {
         return;
     }
-    let Some(snap) = read() else {
+    let Some(snap) = read_settled() else {
         return; // automatic triggers never show a card for a failed read (§6)
     };
     let was_paused = *state.run_state.lock().unwrap() == ferry_core::run_state::RunState::Paused;
@@ -73,16 +75,16 @@ fn on_change(app: &AppHandle, seq: u64) {
     }
 }
 
-/// A video or PDF that is not one of Ferry's own results.
+/// An image, video or PDF that is not one of Ferry's own results.
 fn wanted_file(path: &Path, own: &[PathBuf]) -> bool {
     !own.iter().any(|o| o == path)
         && matches!(
             intake::classify_file(path),
-            Ok(Some(c)) if matches!(c.kind, MediaKind::Video | MediaKind::Pdf)
+            Ok(Some(c)) if matches!(c.kind, MediaKind::Image | MediaKind::Video | MediaKind::Pdf)
         )
 }
 
-/// FR-T3: copied video and PDF files, when "Optimise copied video and PDF files"
+/// FR-T3: copied image, video and PDF files, when "Optimise copied files"
 /// is on. They start as the hotkey starts copied files, under the clipboard's
 /// pipeline for their media.
 fn optimise_copied_files(app: &AppHandle, snap: &Snapshot, settings: &Settings) {
@@ -198,6 +200,24 @@ fn start_clipboard_job(app: &AppHandle, snap: Snapshot, level: Level) {
     ); // stream F: pipelines
 }
 
+/// Like `read`, but a browser copy still missing its image is read again until the
+/// image arrives, the user copies something else, or `IMAGE_WAIT` is up.
+fn read_settled() -> Option<Snapshot> {
+    let mut snap = read()?;
+    let start = std::time::Instant::now();
+    while snap.image.is_none()
+        && snap.files.is_empty()
+        && !snap.concealed
+        && platform::clipboard::may_gain_image()
+        && platform::clipboard::seq() == snap.seq
+        && start.elapsed() < IMAGE_WAIT
+    {
+        thread::sleep(RETRY_AFTER);
+        snap = read()?;
+    }
+    Some(snap)
+}
+
 /// Read the clipboard, retrying once after 100 ms (§6).
 fn read() -> Option<Snapshot> {
     platform::clipboard::read()
@@ -224,6 +244,15 @@ mod tests {
         assert!(!wanted_file(&mine, &own));
         assert!(wanted_file(&theirs, &own));
         assert!(!wanted_file(&dir.path().join("gone.pdf"), &[]));
+    }
+
+    #[test]
+    fn a_copied_image_file_is_wanted_like_a_video() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("shot.png");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+        assert!(wanted_file(&png, &[]));
+        assert!(!wanted_file(&png, std::slice::from_ref(&png)));
     }
 
     #[test]

@@ -153,6 +153,11 @@ fn owner_exe() -> Option<String> {
     }
 }
 
+/// Windows browsers render the image when the clipboard is read.
+pub fn may_gain_image() -> bool {
+    false
+}
+
 /// The sequence number now, to tell whether the user has copied since a snapshot.
 pub fn seq() -> u64 {
     raw::seq_num().map_or(0, |n| n.get().into())
