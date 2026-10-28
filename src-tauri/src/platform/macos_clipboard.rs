@@ -1,7 +1,7 @@
 //! macOS clipboard: NSPasteboard read, write and change polling (spec §4.4).
 //! NSPasteboard and NSWorkspace are thread-safe, so this runs off the main thread.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
@@ -133,11 +133,34 @@ fn pending_image(pb: &NSPasteboard) -> bool {
 
 /// Put an image on the clipboard. Returns the new change count, so the watcher
 /// can skip our own write.
-pub fn write_image(format: Format, bytes: &[u8]) -> Result<u64, String> {
-    write_image_to(&NSPasteboard::generalPasteboard(), format, bytes)
+///
+/// Formats most apps and clipboard managers do not take as image data (WebP,
+/// AVIF, HEIC) also carry the result file's URL on the same item, so a history
+/// tool records the item and an app that wants a file gets one.
+pub fn write_image(format: Format, bytes: &[u8], file: &Path) -> Result<u64, String> {
+    write_image_to(&NSPasteboard::generalPasteboard(), format, bytes, file)
 }
 
-fn write_image_to(pb: &NSPasteboard, format: Format, bytes: &[u8]) -> Result<u64, String> {
+fn write_image_to(
+    pb: &NSPasteboard,
+    format: Format,
+    bytes: &[u8],
+    file: &Path,
+) -> Result<u64, String> {
+    if matches!(format, Format::WebP | Format::Avif | Format::Heic) {
+        let url = NSURL::from_file_path(file)
+            .and_then(|url| url.absoluteString())
+            .ok_or("not an absolute path")?;
+        let item = NSPasteboardItem::new();
+        item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(uti(format)));
+        item.setString_forType(&url, &NSString::from_str(FILE_URL));
+        let seq = pb.clearContents();
+        let items = [ProtocolObject::from_retained(item)];
+        if !pb.writeObjects(&NSArray::from_retained_slice(&items)) {
+            return Err("the clipboard refused the image".into());
+        }
+        return Ok(seq as u64);
+    }
     let seq = pb.clearContents();
     if !pb.setData_forType(
         Some(&NSData::with_bytes(bytes)),
@@ -249,10 +272,29 @@ mod tests {
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
 
     #[test]
+    fn a_webp_goes_on_as_one_item_with_its_file_url() {
+        let pb = Private::new();
+        let webp = b"RIFF\x04\0\0\0WEBPVP8 ";
+        write_image_to(&pb.0, Format::WebP, webp, Path::new("/tmp/a.webp")).unwrap();
+        assert_eq!(pb.0.pasteboardItems().unwrap().len(), 1);
+        let types: Vec<String> = pb.0.types().unwrap().iter().map(|t| t.to_string()).collect();
+        assert!(types.contains(&"org.webmproject.webp".to_string()));
+        assert!(types.contains(&FILE_URL.to_string()));
+        assert_eq!(read_from(&pb.0).files, [PathBuf::from("/tmp/a.webp")]);
+    }
+
+    #[test]
+    fn a_png_goes_on_without_a_file_url() {
+        let pb = Private::new();
+        write_image_to(&pb.0, Format::Png, PNG, Path::new("/tmp/a.png")).unwrap();
+        assert!(read_from(&pb.0).files.is_empty());
+    }
+
+    #[test]
     fn an_image_round_trips_and_the_change_count_moves() {
         let pb = Private::new();
         let before = pb.0.changeCount() as u64;
-        let seq = write_image_to(&pb.0, Format::Png, PNG).unwrap();
+        let seq = write_image_to(&pb.0, Format::Png, PNG, Path::new("/tmp/a.png")).unwrap();
         assert!(seq > before);
         assert_eq!(pb.0.changeCount() as u64, seq);
         let snap = read_from(&pb.0);
@@ -372,7 +414,7 @@ mod tests {
     #[test]
     fn concealed_content_is_flagged_and_not_read() {
         let pb = Private::new();
-        write_image_to(&pb.0, Format::Png, PNG).unwrap();
+        write_image_to(&pb.0, Format::Png, PNG, Path::new("/tmp/a.png")).unwrap();
         pb.0.setData_forType(
             Some(&NSData::with_bytes(b"")),
             &NSString::from_str("org.nspasteboard.ConcealedType"),

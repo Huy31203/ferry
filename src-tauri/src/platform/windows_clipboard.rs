@@ -3,7 +3,7 @@
 //! from a clipboard listener on its own thread. Only CI has run this so far;
 //! no real Windows desktop has (spec §1).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
 
@@ -165,7 +165,7 @@ pub fn seq() -> u64 {
 
 /// Put an image on the clipboard in its own format, plus a `CF_DIBV5` for apps
 /// that paste only bitmaps (not for GIF). Returns the new sequence number.
-pub fn write_image(format: Format, bytes: &[u8]) -> Result<u64, String> {
+pub fn write_image(format: Format, bytes: &[u8], _file: &Path) -> Result<u64, String> {
     // Decode before opening the clipboard, so it is held as briefly as possible.
     let dib = bitmap::decode_rgba(bytes, format)
         .ok()
@@ -259,7 +259,7 @@ mod tests {
     fn an_image_round_trips_and_the_sequence_moves() {
         let _one = CLIPBOARD.lock().unwrap();
         let before = seq();
-        let written = write_image(Format::Png, PNG).unwrap();
+        let written = write_image(Format::Png, PNG, Path::new("a.png")).unwrap();
         assert!(written > before);
         let snap = read().unwrap();
         assert_eq!(snap.seq, written);

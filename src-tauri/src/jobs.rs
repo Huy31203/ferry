@@ -212,7 +212,7 @@ pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
         None
     };
     let mut log = state.clipboard.lock().unwrap();
-    let seq = write_clipboard(&write, bytes.as_deref().map(|b| (job.format, b)))?;
+    let seq = write_clipboard(&write, bytes.as_deref().map(|b| (job.format, b)), &job.output)?;
     log.wrote(seq, None, write);
     Ok(())
 }
@@ -591,16 +591,20 @@ fn put_result(
         file,
         settings.accumulate.then_some(&log.collected),
     );
-    let seq = write_clipboard(&write, image)?;
+    let seq = write_clipboard(&write, image, file)?;
     log.wrote(seq, source, write);
     Ok(())
 }
 
-fn write_clipboard(write: &ClipWrite, image: Option<(Format, &[u8])>) -> Result<u64, String> {
+fn write_clipboard(
+    write: &ClipWrite,
+    image: Option<(Format, &[u8])>,
+    file: &Path,
+) -> Result<u64, String> {
     match write {
         ClipWrite::Image => {
             let (format, bytes) = image.ok_or("no image to write")?;
-            platform::clipboard::write_image(format, bytes)
+            platform::clipboard::write_image(format, bytes, file)
         }
         ClipWrite::Files(paths) => platform::clipboard::write_files(paths),
         ClipWrite::Paths(paths) => platform::clipboard::write_paths(paths),
@@ -622,7 +626,7 @@ fn follow_rename(app: &AppHandle, id: &JobId, old: &Path, new: &Path) {
     let Some(next) = write.renamed(old, new) else {
         return;
     };
-    match write_clipboard(&next, None) {
+    match write_clipboard(&next, None, new) {
         Ok(seq) => log.rewrote(seq, next),
         Err(e) => warn!("could not update the clipboard after a rename: {e}"),
     }
