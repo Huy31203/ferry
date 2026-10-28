@@ -222,7 +222,14 @@ fn ensure_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .content_protected(!show_in_screenshots)
         .visible(false)
         .build()?;
-    platform::make_non_activating(&window)?;
+    // AppKit panels can only be changed on the main thread; this runs on a worker.
+    let (done, wait) = std::sync::mpsc::channel();
+    let panel = window.clone();
+    app.run_on_main_thread(move || {
+        let _ = done.send(platform::make_non_activating(&panel));
+    })?;
+    wait.recv()
+        .map_err(|_| tauri::Error::FailedToReceiveMessage)??;
     Ok(window)
 }
 
