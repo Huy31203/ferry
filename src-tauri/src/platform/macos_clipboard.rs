@@ -277,7 +277,12 @@ mod tests {
         let webp = b"RIFF\x04\0\0\0WEBPVP8 ";
         write_image_to(&pb.0, Format::WebP, webp, Path::new("/tmp/a.webp")).unwrap();
         assert_eq!(pb.0.pasteboardItems().unwrap().len(), 1);
-        let types: Vec<String> = pb.0.types().unwrap().iter().map(|t| t.to_string()).collect();
+        let types: Vec<String> =
+            pb.0.types()
+                .unwrap()
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
         assert!(types.contains(&"org.webmproject.webp".to_string()));
         assert!(types.contains(&FILE_URL.to_string()));
         assert_eq!(read_from(&pb.0).files, [PathBuf::from("/tmp/a.webp")]);

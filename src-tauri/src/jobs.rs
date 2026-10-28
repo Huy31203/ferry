@@ -212,7 +212,11 @@ pub fn copy(app: &AppHandle, id: &JobId) -> Result<(), String> {
         None
     };
     let mut log = state.clipboard.lock().unwrap();
-    let seq = write_clipboard(&write, bytes.as_deref().map(|b| (job.format, b)), &job.output)?;
+    let seq = write_clipboard(
+        &write,
+        bytes.as_deref().map(|b| (job.format, b)),
+        &job.output,
+    )?;
     log.wrote(seq, None, write);
     Ok(())
 }
