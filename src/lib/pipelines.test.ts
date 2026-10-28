@@ -119,6 +119,10 @@ describe('steps', () => {
     expect(moveStep(s, 0, 1).map((x) => x.kind)).toEqual(['convert', 'copy']);
     expect(removeStep(s, 0).map((x) => x.kind)).toEqual(['convert']);
   });
+  it('adds a step from a proxied kind, as the editor holds them', () => {
+    const proxied = new Proxy({ ...kinds[1], defaults: new Proxy({ to: 'webp' }, {}) }, {});
+    expect(addStep([], proxied)[0].params).toEqual({ to: 'webp' });
+  });
   it('deletes a param set to undefined', () => {
     expect(setParam([{ kind: 'convert', params: { to: 'png' } }], 0, 'to', undefined)[0].params).toEqual({});
     expect(setParam([{ kind: 'convert', params: {} }], 0, 'to', 'png')[0].params).toEqual({ to: 'png' });

@@ -119,11 +119,14 @@ export function newPipeline(
   return { lib: { ...lib, library: [...lib.library, pipeline] }, id };
 }
 
+/** A deep copy that also takes a Svelte `$state` proxy, which `structuredClone` rejects. */
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
 /** A copy of pipeline `id` under a new id and `name`, at the end of the library. */
 export function duplicate(lib: Pipelines, id: number, name: string): { lib: Pipelines; id: number } {
   const source = lib.library.find((p) => p.id === id);
   if (!source) return { lib, id };
-  const copy = { ...structuredClone(source), name };
+  const copy = { ...clone(source), name };
   const next = newPipeline(lib, source.media, name, copy.steps);
   next.lib.library[next.lib.library.length - 1] = { ...copy, id: next.id };
   return next;
@@ -183,7 +186,7 @@ export function moveStep(steps: Step[], from: number, to: number): Step[] {
 
 /** A new step of `kind` with its default params, at `at` or at the end. */
 export function addStep(steps: Step[], kind: StepKindView, at?: number): Step[] {
-  const step: Step = { kind: kind.id, params: structuredClone(kind.defaults) };
+  const step: Step = { kind: kind.id, params: clone(kind.defaults) };
   const next = [...steps];
   next.splice(at ?? next.length, 0, step);
   return next;
