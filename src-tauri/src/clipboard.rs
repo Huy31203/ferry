@@ -2,10 +2,11 @@
 //! optimise hotkeys. The rules are `ferry_core::trigger`; this file reads the
 //! clipboard and starts jobs.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use ferry_core::i18n::{t, tf};
@@ -24,6 +25,9 @@ use crate::{jobs, platform, tray};
 const RETRY_AFTER: Duration = Duration::from_millis(100);
 /// How long a browser copy may take to add its image (a 4K JPEG re-encodes to PNG).
 const IMAGE_WAIT: Duration = Duration::from_secs(5);
+/// A screenshot moves the change count more than once; the same image seen again
+/// inside this window is that copy's echo, not a new copy.
+const ECHO_WINDOW: Duration = Duration::from_secs(2);
 
 /// Watch the clipboard and optimise copied images while Running.
 pub fn start(app: &AppHandle) {
@@ -33,14 +37,15 @@ pub fn start(app: &AppHandle) {
     thread::Builder::new()
         .name("ferry-trigger".into())
         .spawn(move || {
+            let mut last_image = None;
             for seq in rx {
-                on_change(&app, seq);
+                on_change(&app, seq, &mut last_image);
             }
         })
         .expect("spawn the trigger thread");
 }
 
-fn on_change(app: &AppHandle, seq: u64) {
+fn on_change(app: &AppHandle, seq: u64, last_image: &mut Option<(Instant, u64)>) {
     let state = app.state::<AppState>();
     if state.clipboard.lock().unwrap().is_own(seq) {
         return;
@@ -53,6 +58,12 @@ fn on_change(app: &AppHandle, seq: u64) {
     let Some(snap) = read_settled() else {
         return; // automatic triggers never show a card for a failed read (§6)
     };
+    if let Some((_, bytes)) = &snap.image
+        && is_echo(last_image, bytes)
+    {
+        debug!(seq, "same image again: one copy, not two");
+        return;
+    }
     let was_paused = *state.run_state.lock().unwrap() == ferry_core::run_state::RunState::Paused;
     let decision = trigger::automatic(
         &snap,
@@ -73,6 +84,17 @@ fn on_change(app: &AppHandle, seq: u64) {
         }
         Err(skip) => debug!(?skip, "clipboard change left alone"),
     }
+}
+
+/// Whether `bytes` is the image seen last, moments ago; remembers it either way.
+fn is_echo(last: &mut Option<(Instant, u64)>, bytes: &[u8]) -> bool {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let hash = hasher.finish();
+    let now = Instant::now();
+    let echo = matches!(last, Some((at, h)) if *h == hash && now.duration_since(*at) < ECHO_WINDOW);
+    *last = Some((now, hash));
+    echo
 }
 
 /// An image, video or PDF that is not one of Ferry's own results.
@@ -233,6 +255,17 @@ fn read() -> Option<Snapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_same_image_twice_in_a_moment_is_one_copy() {
+        let mut last = None;
+        assert!(!is_echo(&mut last, b"shot"));
+        assert!(is_echo(&mut last, b"shot"));
+        assert!(!is_echo(&mut last, b"other"));
+        assert!(!is_echo(&mut last, b"shot"));
+        last = Some((Instant::now() - ECHO_WINDOW, 0));
+        assert!(!is_echo(&mut last, b"shot"));
+    }
 
     #[test]
     fn copied_files_skip_ferrys_own_results() {
