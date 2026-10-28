@@ -66,6 +66,14 @@ pub fn set_content_protected(app: &AppHandle, protected: bool) {
     platform::preview::set_protected(app, protected);
 }
 
+/// The pointer in the stack window (x, y up from the bottom), `None` outside it.
+/// A sync command runs on the main thread, as AppKit needs.
+#[tauri::command]
+pub fn stack_pointer(app: AppHandle) -> Result<Option<(f64, f64)>, String> {
+    let stack = app.get_webview_window(STACK).ok_or("no stack window")?;
+    platform::pointer_in(&stack)
+}
+
 /// Fit the stack window to its content and pin it to the chosen corner of the
 /// work area under the cursor (or of the main screen). A zero size hides it.
 #[tauri::command]

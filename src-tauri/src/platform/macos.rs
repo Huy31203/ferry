@@ -83,6 +83,22 @@ fn send_pointer(app: &tauri::AppHandle, event: &NSEvent) {
     );
 }
 
+/// Where the pointer is in the stack panel now: x, and y up from the panel's
+/// bottom edge. `None` when it is outside. The tracking area only reports
+/// movement, so a card that moves under a still pointer needs this.
+/// Call on the main thread.
+pub fn pointer_in(window: &WebviewWindow) -> Result<Option<(f64, f64)>, String> {
+    let panel = window
+        .app_handle()
+        .get_webview_panel(window.label())
+        .map_err(|e| format!("{e:?}"))?;
+    let frame = panel.as_panel().frame();
+    let at = NSEvent::mouseLocation();
+    let (x, y) = (at.x - frame.origin.x, at.y - frame.origin.y);
+    let inside = x >= 0.0 && y >= 0.0 && x < frame.size.width && y < frame.size.height;
+    Ok(inside.then_some((x, y)))
+}
+
 pub fn show_without_focus(window: &WebviewWindow) -> tauri::Result<()> {
     match window.app_handle().get_webview_panel(window.label()) {
         Ok(panel) => {

@@ -46,6 +46,12 @@ pub fn make_non_activating(window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Not needed here: the webview gets real pointer events, and Chromium repeats
+/// the last one after a layout change.
+pub fn pointer_in(_window: &WebviewWindow) -> Result<Option<(f64, f64)>, String> {
+    Err("the webview tracks the pointer itself".into())
+}
+
 pub fn show_without_focus(window: &WebviewWindow) -> tauri::Result<()> {
     let hwnd = window.hwnd()?.0;
     apply_tool_window_style(hwnd);

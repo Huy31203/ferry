@@ -18,7 +18,9 @@ pub use macos::app_is_active;
 #[cfg(target_os = "macos")]
 pub use macos::set_stack_key;
 #[cfg(target_os = "macos")]
-pub use macos::{accent_rgb, app_identifier, hide, make_non_activating, show_without_focus};
+pub use macos::{
+    accent_rgb, app_identifier, hide, make_non_activating, pointer_in, show_without_focus,
+};
 
 #[cfg(windows)]
 #[path = "windows_clipboard.rs"]
@@ -37,7 +39,7 @@ pub use self::windows::app_is_active;
 pub use self::windows::set_stack_key;
 #[cfg(windows)]
 pub use self::windows::{
-    accent_rgb, app_identifier, hide, make_non_activating, show_without_focus,
+    accent_rgb, app_identifier, hide, make_non_activating, pointer_in, show_without_focus,
 };
 
 // ---- Stream C: capture folders ----

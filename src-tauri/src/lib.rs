@@ -77,6 +77,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
+            windows::stack_pointer,
             compare::open_compare,
             compare::compare_ready,
             compare::compare_close,

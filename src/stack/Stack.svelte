@@ -196,6 +196,22 @@ import { shareAnchor } from '../lib/share'; // Stream H
     track(document.elementFromPoint(x, window.innerHeight - fromBottom));
   }
 
+  // A card that appears or moves under a still pointer sends no event, so ask Rust
+  // where the pointer is. Windows has its own pointer events and answers with an error.
+  function resample() {
+    invoke<[number, number] | null>('stack_pointer')
+      .then((at) => (at ? pointAt(at[0], at[1]) : leave()))
+      .catch(() => {});
+  }
+
+  // Cards come and go while the pointer rests, so keep checking while any are shown.
+  $effect(() => {
+    if (cards.length === 0) return;
+    resample();
+    const timer = setInterval(resample, 300);
+    return () => clearInterval(timer);
+  });
+
   function leave() {
     hovered = null;
     overBar = false;
