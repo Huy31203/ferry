@@ -66,14 +66,17 @@ describe('railActions', () => {
     expect(railActions(card({ kind: 'done' }, { format: 'jpeg' }))).toContain('compression');
   });
 
-  it('leaves Compression and Compare off a compact card', () => {
+  it('shows the first four tools of the list on a compact card, Compression and Compare included', () => {
     expect(railActions(card({ kind: 'done' }, { can_restore: true }), true)).toEqual([
       'downscale',
+      'compression',
       'crop',
       'restore',
-      'copy',
       'more',
     ]);
+    expect(
+      railActions(card({ kind: 'done' }, { can_restore: true }), true, ['compression', 'restore', 'fit', 'compare', 'crop']),
+    ).toEqual(['compression', 'restore', 'fit', 'compare', 'more']);
   });
 
   it('keeps the tools on a restored card, which offers re-optimise instead of restore', () => {
@@ -170,7 +173,7 @@ describe('audio cards', () => {
     });
     expect(railActions(a)).toEqual(['downscale', 'compression', 'restore', 'copy', 'more']);
     expect(railActions({ ...a, audio: { ...a.audio!, has_cover: false, lossless: true } })).toEqual(['restore', 'copy', 'more']);
-    expect(railActions(a, true)).toEqual(['downscale', 'restore', 'copy', 'more']);
+    expect(railActions(a, true)).toEqual(['downscale', 'compression', 'restore', 'copy', 'more']);
   });
 });
 

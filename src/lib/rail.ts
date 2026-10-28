@@ -8,8 +8,6 @@ export interface RailTool {
   label: StringKey;
   labelWindows?: StringKey;
   needsOriginal: boolean;
-  /** Whether a compact card may show it. */
-  compact: boolean;
   /** Whether the tool applies to this finished card. Default: always. */
   applies?: (card: JobUpdate) => boolean;
 }
@@ -28,38 +26,34 @@ export const RAIL_TOOLS: RailTool[] = [
     id: 'downscale',
     label: 'svc.rail.tool.downscale',
     needsOriginal: true,
-    compact: true,
     applies: (card) => !card.audio || (card.audio.has_cover && card.dims_before !== null),
   },
   {
     id: 'compression',
     label: 'svc.rail.tool.compression',
     needsOriginal: true,
-    compact: false,
     // sE pdf-formats (TIFF output is lossless, so there is no quality to set)
     applies: (card) => (!card.audio || !card.audio.lossless) && card.format !== 'tiff',
   },
-  { id: 'crop', label: 'svc.rail.tool.crop', needsOriginal: true, compact: true, applies: (card) => !card.audio },
+  { id: 'crop', label: 'svc.rail.tool.crop', needsOriginal: true, applies: (card) => !card.audio },
   {
     id: 'restore',
     label: 'svc.rail.tool.restore',
     needsOriginal: false,
-    compact: true,
     applies: (card) => card.state.kind === 'done' && card.can_restore,
   },
-  { id: 'compare', label: 'svc.rail.tool.compare', needsOriginal: true, compact: false, applies: (card) => !card.audio },
-  { id: 'copy', label: 'svc.rail.tool.copy', needsOriginal: false, compact: true },
+  { id: 'compare', label: 'svc.rail.tool.compare', needsOriginal: true, applies: (card) => !card.audio },
+  { id: 'copy', label: 'svc.rail.tool.copy', needsOriginal: false },
   {
     id: 'reveal',
     label: 'svc.rail.tool.reveal.mac',
     labelWindows: 'svc.rail.tool.reveal.windows',
     needsOriginal: false,
-    compact: true,
   },
-  { id: 'aggressive', label: 'svc.rail.tool.aggressive', needsOriginal: true, compact: true },
-  { id: 'rename', label: 'svc.rail.tool.rename', needsOriginal: false, compact: true },
-  { id: 'preview', label: 'svc.rail.tool.preview', needsOriginal: false, compact: true },
-  { id: 'fit', label: 'svc.rail.tool.fit', needsOriginal: true, compact: true },
+  { id: 'aggressive', label: 'svc.rail.tool.aggressive', needsOriginal: true },
+  { id: 'rename', label: 'svc.rail.tool.rename', needsOriginal: false },
+  { id: 'preview', label: 'svc.rail.tool.preview', needsOriginal: false },
+  { id: 'fit', label: 'svc.rail.tool.fit', needsOriginal: true },
 ];
 
 /** The Rust `DEFAULT_RAIL`. */

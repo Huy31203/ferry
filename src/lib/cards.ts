@@ -41,7 +41,7 @@ export function cardMedia(card: JobUpdate): Media {
   return card.source_format === 'pdf' ? 'pdf' : 'image';
 }
 
-/** The rail's buttons for a finished card, in the user's order, then the ⋯ menu. Unknown ids are skipped; a compact card shows fewer. A pipeline shows only on cards of its media. */
+/** The rail's buttons for a finished card, in the user's order, then the ⋯ menu. Unknown ids are skipped; a compact card shows the first few. A pipeline shows only on cards of its media. */
 export function railActions(
   card: JobUpdate,
   compact = false,
@@ -57,7 +57,7 @@ export function railActions(
       if (pipeline.media !== cardMedia(card)) continue;
     } else {
       const tool = RAIL_TOOLS.find((candidate) => candidate.id === id);
-      if (!tool || (compact && !tool.compact) || (tool.applies && !tool.applies(card))) continue;
+      if (!tool || (tool.applies && !tool.applies(card))) continue;
     }
     if (actions.length === limit) break;
     actions.push(id === 'downscale' && card.source_format === 'pdf' ? 'dpi' : id); // sE pdf-formats: a PDF has DPI, not a scale

@@ -34,11 +34,11 @@ describe('the rail catalog', () => {
     expect(knownCount(['trim', 'copy'])).toBe(1);
   });
 
-  it('shows at most six tools, compact at most four compact tools', () => {
+  it('shows at most six tools, compact at most four', () => {
     const every = RAIL_TOOLS.map((tool) => tool.id);
     expect(every).toHaveLength(11);
     expect(railActions(done, false, every)).toHaveLength(7);
-    expect(railActions(done, true, every)).toEqual(['downscale', 'crop', 'restore', 'copy', 'more']);
+    expect(railActions(done, true, every)).toEqual(['downscale', 'compression', 'crop', 'restore', 'more']);
   });
 
   it('shows restore only on a restorable done card even when chosen', () => {
