@@ -145,6 +145,14 @@ export function sliderIndex(stops: Quality[], start: number, dy: number, track: 
   return best;
 }
 
+/** How far past the panel's side the pointer goes before a release cancels, px. */
+export const SLIDER_CANCEL_MARGIN = 24;
+
+/** Whether a pointer at `x` is far enough beside the panel (`left`..`right`) that releasing cancels the slide. */
+export function cancelArmed(x: number, left: number, right: number): boolean {
+  return x < left - SLIDER_CANCEL_MARGIN || x > right + SLIDER_CANCEL_MARGIN;
+}
+
 /** The slider panel's top in the card, px; the rail above it ends at 42. */
 export const SLIDER_TOP = 46;
 

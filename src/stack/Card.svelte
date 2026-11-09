@@ -18,6 +18,7 @@
     scaleLabel,
     scalePatch,
     sliderIndex,
+    cancelArmed,
     stopYs,
     sliderTrack,
     labelledStops,
@@ -174,7 +175,18 @@
     index: number;
     moved: boolean;
     left: number;
+    /** The pointer is far enough beside the panel that releasing cancels. */
+    armed: boolean;
   } | null>(null);
+  type Slide = NonNullable<typeof slide>;
+  /** A cancelled slide's panel while it fades out. */
+  let fading = $state<Slide | null>(null);
+  /** The panel on screen: the live slide, or a cancelled one fading out. */
+  const panel = $derived(slide?.moved ? slide : fading);
+  let sliderEl = $state<HTMLElement | null>(null);
+  /** The panel's sides when last disarmed: its width changes with the cancel label, so arming is measured against these. */
+  let sliderSides: [number, number] | null = null;
+  const FADE_MS = 150;
   const quality = $derived(compressionStart(card, compression)); // stream B: audio
   const qualityStops = $derived(compressionStops(card));
   const dpi = $derived(currentDpi(card, pdfConfig)); // sE pdf-formats
@@ -182,32 +194,32 @@
   const stopsOf = (kind: SliderKind): Quality[] =>
     kind === 'downscale' ? SCALE_STOPS : kind === 'dpi' ? DPI_STOPS : qualityStops;
   const slideLabel = $derived.by(() => {
-    if (!slide) return '';
-    if (slide.kind === 'dpi') return dpiLabel(DPI_STOPS[slide.index]);
-    return slide.kind === 'downscale'
-      ? scaleLabel(SCALE_STOPS[slide.index], card.dims_before, card.edits)
-      : compressionLabel(card, qualityStops[slide.index]);
+    if (!panel) return '';
+    if (panel.kind === 'dpi') return dpiLabel(DPI_STOPS[panel.index]);
+    return panel.kind === 'downscale'
+      ? scaleLabel(SCALE_STOPS[panel.index], card.dims_before, card.edits)
+      : compressionLabel(card, qualityStops[panel.index]);
   });
 
   /** Every stop's short value, such as "50 %" or "q 60", for the slider's labels. */
   const slideStops = $derived(
-    slide?.kind === 'dpi'
+    panel?.kind === 'dpi'
       ? DPI_STOPS.map(dpiLabel)
-      : slide?.kind === 'downscale'
+      : panel?.kind === 'downscale'
         ? SCALE_STOPS.map((scale) => scaleLabel(scale, null, card.edits))
         : qualityStops.map((stop) => compressionLabel(card, stop)),
   );
 
   /** Every stop's distance from the track's top, px: the track is the value axis. */
   const slideYs = $derived.by(() => {
-    return stopYs(stopsOf(slide?.kind ?? 'compression'), TRACK);
+    return stopYs(stopsOf(panel?.kind ?? 'compression'), TRACK);
   });
 
   /** The stops that get a value label (round ones, spaced for the track). */
   const slideLabelled = $derived(
-    slide?.kind === 'dpi'
+    panel?.kind === 'dpi'
       ? labelledStops(DPI_STOPS, TRACK, () => true)
-      : slide?.kind === 'downscale'
+      : panel?.kind === 'downscale'
         ? labelledStops(SCALE_STOPS, TRACK)
         : labelledStops(qualityStops, TRACK, compressionRound(card)),
   );
@@ -228,6 +240,7 @@
   // Press and hold: a drag of a few px turns the press into a slider; a plain click is one step.
   function press(kind: SliderKind, event: PointerEvent) {
     if (!PRESS_AND_DRAG || event.button !== 0 || !card.can_edit) return;
+    fading = null;
     const button = event.currentTarget as HTMLElement;
     button.setPointerCapture(event.pointerId);
     const box = cardEl?.getBoundingClientRect();
@@ -245,7 +258,9 @@
       index: start,
       moved: false,
       left: rect.left + rect.width / 2 - (box?.left ?? 0),
+      armed: false,
     };
+    sliderSides = null;
   }
 
   function slideMove(event: PointerEvent) {
@@ -254,7 +269,22 @@
     if (!slide.moved && Math.abs(dy) < 4) return;
     if (!slide.moved) ontool('slider');
     const stops = stopsOf(slide.kind);
-    slide = { ...slide, moved: true, index: sliderIndex(stops, slide.start, dy, TRACK) };
+    if (sliderEl && !slide.armed) {
+      const box = sliderEl.getBoundingClientRect();
+      sliderSides = [box.left, box.right];
+    }
+    const armed = sliderSides !== null && cancelArmed(event.clientX, ...sliderSides);
+    slide = { ...slide, moved: true, armed, index: sliderIndex(stops, slide.start, dy, TRACK) };
+  }
+
+  /** Close a moved slide without applying it: the panel dims and fades out (at once with reduced motion). */
+  function fadeOut(done: Slide) {
+    ontool(null);
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    fading = { ...done, armed: true };
+    setTimeout(() => {
+      if (fading?.startY === done.startY) fading = null;
+    }, FADE_MS);
   }
 
   // Release applies; releasing back at the start value changes nothing.
@@ -264,6 +294,10 @@
     if (!done) return;
     if (!done.moved) {
       step(done.kind);
+      return;
+    }
+    if (done.armed) {
+      fadeOut(done);
       return;
     }
     ontool(null);
@@ -278,8 +312,9 @@
   }
 
   function cancelSlide() {
-    if (slide?.moved) ontool(null);
+    const done = slide;
     slide = null;
+    if (done?.moved) fadeOut(done);
   }
 
   // Enter or Space on a focused button: one step (a pointer press is handled by `release`).
@@ -616,14 +651,17 @@
       {/if}
     </div>
   {/if}
-  {#if slide?.moved}
+  {#if panel}
     <Slider
-      index={slide.index}
+      bind:el={sliderEl}
+      index={panel.armed ? panel.start : panel.index}
+      armed={panel.armed}
+      leaving={!slide?.moved}
       ys={slideYs}
       label={slideLabel}
       stops={slideStops}
       labelled={slideLabelled}
-      left={slide.left}
+      left={panel.left}
       track={TRACK}
       width={compact ? 220 : 300}
     />

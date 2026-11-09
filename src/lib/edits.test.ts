@@ -37,6 +37,8 @@ import {
   scaleLabel,
   scalePatch,
   sliderIndex,
+  cancelArmed,
+  SLIDER_CANCEL_MARGIN,
   stopY,
   stopYs,
   stopIndex,
@@ -449,5 +451,18 @@ describe('adaptive detent', () => {
     const clip = { ...card({ kind: 'done' }), video: { duration_ms: 1, codec: 'H.264', fps: 30, audio: true, original: null, original_duration_ms: 1, hevc_encoder: false } };
     expect(compressionStops(clip)[0]).toBe(100);
     expect(compressionStops(card({ kind: 'done' }))[0]).toBe('adaptive');
+  });
+});
+
+describe('cancelArmed', () => {
+  const [left, right] = [100, 200];
+  it('stays off over the panel and within the margin', () => {
+    expect(cancelArmed(150, left, right)).toBe(false);
+    expect(cancelArmed(left - SLIDER_CANCEL_MARGIN, left, right)).toBe(false);
+    expect(cancelArmed(right + SLIDER_CANCEL_MARGIN, left, right)).toBe(false);
+  });
+  it('arms past the margin on either side', () => {
+    expect(cancelArmed(left - SLIDER_CANCEL_MARGIN - 1, left, right)).toBe(true);
+    expect(cancelArmed(right + SLIDER_CANCEL_MARGIN + 1, left, right)).toBe(true);
   });
 });

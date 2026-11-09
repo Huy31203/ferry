@@ -325,6 +325,7 @@
   "slider.scale_only": "{n} %",
   "slider.quality": "q {q}",
   "slider.extreme": "Extreme",
+  "slider.release_cancel": "✕ Cancel",
   "error.write": "Can't write to {dir}",
   "error.read": "Can't read {name}: {why}",
   "error.folder": "{name} is a folder. Drop it on Ferry's drop zone to optimise what is inside.",
