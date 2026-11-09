@@ -104,6 +104,7 @@ export const sample: Settings = {
     keep_original_modifier: 'shift',
     batch_threshold: 20,
     ignored_apps: ['com.figma.Desktop'],
+    save_folder: '~/Downloads/Ferry',
   },
   results_list: { after_cards: 5 },
   audio: {

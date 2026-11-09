@@ -102,6 +102,7 @@ export interface Settings {
     keep_original_modifier: 'alt' | 'shift';
     batch_threshold: number;
     ignored_apps: string[];
+    save_folder: string;
   };
   results_list: { after_cards: number };
   audio: AudioSettings; // stream B: audio

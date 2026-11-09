@@ -690,6 +690,8 @@ pub struct DropZone {
     pub keep_original_modifier: DragKey,
     pub batch_threshold: u32,
     pub ignored_apps: Vec<String>,
+    /// Where images dragged from other apps (no file behind them) are saved. Stored with `~`.
+    pub save_folder: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -736,6 +738,7 @@ impl Default for DropZone {
             keep_original_modifier: DragKey::Shift,
             batch_threshold: 20,
             ignored_apps: apps.iter().map(|a| a.to_string()).collect(),
+            save_folder: "~/Downloads/Ferry".into(),
             extra: Map::new(),
         }
     }
@@ -1056,6 +1059,13 @@ pub fn contract_home(path: &Path, home: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn dragged_images_go_to_downloads_ferry_by_default() {
+        assert_eq!(DropZone::default().save_folder, "~/Downloads/Ferry");
+        let old: DropZone = serde_json::from_value(json!({ "enabled": true })).unwrap();
+        assert_eq!(old.save_folder, "~/Downloads/Ferry");
+    }
 
     fn read_json(path: &Path) -> Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()

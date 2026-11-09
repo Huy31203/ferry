@@ -9,6 +9,7 @@ pub mod cancel;
 pub mod clip;
 pub mod color;
 pub mod drag;
+pub mod dragged;
 pub mod edit;
 pub mod formats; // sE pdf-formats
 pub mod fsutil;
