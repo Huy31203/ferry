@@ -353,6 +353,14 @@ pub fn summarise(paths: &[PathBuf], head_limit: usize) -> Summary {
     s
 }
 
+/// `summarise` for a drag that also holds `images` items with no file (counted as image files).
+pub fn summarise_drag(paths: &[PathBuf], images: u32, head_limit: usize) -> Summary {
+    let mut s = summarise(paths, head_limit);
+    s.files += images;
+    s.images += images;
+    s
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Cards,
@@ -459,6 +467,14 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, bytes).unwrap();
         path
+    }
+
+    #[test]
+    fn an_image_only_drag_is_summarised_as_images() {
+        let s = summarise_drag(&[], 2, 10);
+        assert_eq!((s.files, s.images, s.unsupported), (2, 2, 0));
+        let view = zone_view(Some(&s), true, false, 20, ZoneMode::Zone);
+        assert_eq!(view.state, ZoneState::Hover);
     }
 
     fn names(scan: &Scan) -> Vec<String> {

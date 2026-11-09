@@ -1,5 +1,7 @@
 //! Seeing a drag and a modifier tap from polled samples, and where the drop zone goes.
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 
 use crate::geometry::{self, Corner, Rect};
@@ -179,6 +181,46 @@ pub fn is_ignored_app(ignored: &[String], app: &str) -> bool {
         .any(|a| !a.is_empty() && app.starts_with(&a))
 }
 
+/// Pasteboard types the drag watcher and the zone read (macOS UTIs).
+pub const FILE_URL: &str = "public.file-url";
+pub const PROMISED_URL: &str = "com.apple.pasteboard.promised-file-url";
+pub const PROMISED_TYPE: &str = "com.apple.pasteboard.promised-file-content-type";
+
+/// Image bytes a drag item may carry, best first, with the extension they are saved under.
+pub const IMAGE_TYPES: [(&str, &str); 6] = [
+    ("public.jpeg", "jpg"),
+    ("public.png", "png"),
+    ("org.webmproject.webp", "webp"),
+    ("public.heic", "heic"),
+    ("com.compuserve.gif", "gif"),
+    ("public.tiff", "tiff"),
+];
+
+/// What a drag holds: file paths, and items with only image bytes or an image promise.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DragContents {
+    pub files: Vec<PathBuf>,
+    pub images: u32,
+}
+
+/// The best image type among a drag item's `types`.
+pub fn pick_image_type(types: &[String]) -> Option<(&'static str, &'static str)> {
+    IMAGE_TYPES
+        .into_iter()
+        .find(|(uti, _)| types.iter().any(|t| t == uti))
+}
+
+/// Whether a drag item with `types` is an image to save: no file URL, and image bytes or a
+/// promise whose content type (`promised_type`) is an image.
+pub fn is_dragged_image(types: &[String], promised_type: Option<&str>) -> bool {
+    if types.iter().any(|t| t == FILE_URL) {
+        return false;
+    }
+    let promised_image = types.iter().any(|t| t == PROMISED_URL)
+        && promised_type.is_some_and(|p| IMAGE_TYPES.iter().any(|(uti, _)| *uti == p));
+    pick_image_type(types).is_some() || promised_image
+}
+
 /// Whether a drag shows the zone (macOS) or the edge tab (Windows) by itself.
 /// With `show_on == Modifier`, the Windows default, nothing shows without a tap.
 pub fn should_auto_show(
@@ -277,6 +319,50 @@ pub fn zone_from_tab(area: Rect, corner: Corner, zone: (u32, u32), cursor_y: i32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn types(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn slack_image_bytes_are_a_dragged_image() {
+        let slack = types(&[
+            "org.chromium.chromium-initiated-drag",
+            "public.url",
+            "public.png",
+            PROMISED_URL,
+            PROMISED_TYPE,
+        ]);
+        assert!(is_dragged_image(&slack, Some("public.png")));
+        assert_eq!(pick_image_type(&slack), Some(("public.png", "png")));
+    }
+
+    #[test]
+    fn jpeg_is_preferred_over_tiff() {
+        let both = types(&["public.tiff", "public.jpeg"]);
+        assert_eq!(pick_image_type(&both), Some(("public.jpeg", "jpg")));
+    }
+
+    #[test]
+    fn an_image_promise_without_bytes_is_a_dragged_image() {
+        let promise = types(&[PROMISED_URL, PROMISED_TYPE]);
+        assert!(is_dragged_image(&promise, Some("public.jpeg")));
+        assert!(!is_dragged_image(&promise, Some("com.adobe.pdf")));
+        assert!(!is_dragged_image(&promise, None));
+        assert_eq!(pick_image_type(&promise), None);
+    }
+
+    #[test]
+    fn text_and_links_are_not_images() {
+        let link = types(&["public.url", "public.url-name", "public.utf8-plain-text"]);
+        assert!(!is_dragged_image(&link, None));
+    }
+
+    #[test]
+    fn a_file_item_is_never_an_image_item() {
+        let finder = types(&[FILE_URL, "public.png", "public.tiff"]);
+        assert!(!is_dragged_image(&finder, None));
+    }
 
     const ALT: Mods = Mods {
         alt: true,
