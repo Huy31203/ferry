@@ -26,6 +26,8 @@ pub enum Item {
     ChooseEditor(u8),
     Upload,
     Shelf(u8),
+    /// Ferry's own shelf, first in Add to Shelf ▸.
+    FerryShelf,
 }
 
 impl Item {
@@ -39,6 +41,7 @@ impl Item {
             Item::ChooseEditor(n) => format!("choose_editor.{n}"),
             Item::Upload => "upload".into(),
             Item::Shelf(n) => format!("shelf.{n}"),
+            Item::FerryShelf => "ferry_shelf".into(),
         }
     }
 
@@ -48,6 +51,7 @@ impl Item {
             "airdrop" => return Some(Item::AirDrop),
             "edit_with" => return Some(Item::EditWith),
             "upload" => return Some(Item::Upload),
+            "ferry_shelf" => return Some(Item::FerryShelf),
             _ => {}
         }
         let (name, n) = key.split_once('.')?;
@@ -218,11 +222,20 @@ pub fn extend(app: &AppHandle, menu: &Menu<Wry>, card: &JobUpdate) -> tauri::Res
         Box::new(item(Item::Share, t("share.menu.share_windows"), None)?)
     };
     let shelf_items = app_items(&shelves, &Item::Shelf)?;
-    let shelf_refs: Vec<&dyn IsMenuItem<Wry>> = shelf_items
-        .iter()
-        .map(|i| i as &dyn IsMenuItem<Wry>)
-        .collect();
-    let shelf = (!shelves.is_empty())
+    // Ferry's own shelf comes first, then the shelf apps found on this Mac.
+    let own_shelf = cfg!(target_os = "macos")
+        .then(|| item(Item::FerryShelf, t("share.menu.ferry_shelf"), None))
+        .transpose()?;
+    let shelf_rule = PredefinedMenuItem::separator(app)?;
+    let mut shelf_refs: Vec<&dyn IsMenuItem<Wry>> = Vec::new();
+    if let Some(own) = &own_shelf {
+        shelf_refs.push(own);
+        if !shelf_items.is_empty() {
+            shelf_refs.push(&shelf_rule);
+        }
+    }
+    shelf_refs.extend(shelf_items.iter().map(|i| i as &dyn IsMenuItem<Wry>));
+    let shelf = (!shelf_refs.is_empty())
         .then(|| submenu(Item::Shelf(0), t("share.menu.shelf"), &shelf_refs))
         .transpose()?;
     let upload = actions::uploader(app)
@@ -278,6 +291,12 @@ pub fn run(app: &AppHandle, id: &JobId, item: Item) -> Result<(), String> {
             None => Ok(()),
         },
         Item::Upload => actions::upload(app, id),
+        Item::FerryShelf => {
+            if let Some(path) = jobs::output(app, id) {
+                crate::shelf::add(app, vec![path]);
+            }
+            Ok(())
+        }
         Item::Shelf(n) => match listed_app(id, n, true) {
             Some(with) => actions::open_with(app, id, &with),
             None => Ok(()),
@@ -316,7 +335,7 @@ mod tests {
         card
     }
 
-    const ITEMS: [Item; 8] = [
+    const ITEMS: [Item; 9] = [
         Item::Share,
         Item::AirDrop,
         Item::OpenWith(0),
@@ -325,6 +344,7 @@ mod tests {
         Item::ChooseEditor(3),
         Item::Upload,
         Item::Shelf(2),
+        Item::FerryShelf,
     ];
 
     #[test]
