@@ -13,11 +13,13 @@
   let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, opacity: 95 });
   let hover = $state(false);
   let summoned = $state(false);
+  let listing = $state(false);
+  let menuOpen = $state(false);
   let summonTimer: ReturnType<typeof setTimeout> | undefined;
   let drag = $state<DragView>(NO_DRAG);
   let leaveTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const mode = $derived(stripState({ count: view.items.length, canUndo: view.can_undo, hover, summoned, drag }));
+  const mode = $derived(stripState({ count: view.items.length, canUndo: view.can_undo, hover: hover || listing, summoned, drag }));
   const height = $derived(stripHeight(mode));
   const pile = $derived(view.items.slice(-3));
 
@@ -28,6 +30,7 @@
   $effect(() => {
     const offs = [
       listen<ShelfView>('shelf:changed', (e) => (view = e.payload)),
+      listen('shelf:show_items', () => (listing = true)),
       listen('shelf:summon', () => {
         summoned = true;
         clearTimeout(summonTimer);
@@ -46,7 +49,7 @@
     if (mode === 'hidden') return;
     const id = setInterval(async () => {
       if (await invoke<boolean>('shelf_pointer_inside')) enter();
-      else if (hover) leave();
+      else if (hover && !menuOpen) leave();
     }, 100);
     return () => clearInterval(id);
   });
@@ -79,6 +82,19 @@
     });
   }
 
+  async function openMenu(e: MouseEvent) {
+    menuOpen = true;
+    try {
+      await invoke('shelf_menu', { x: e.clientX, y: e.clientY });
+    } finally {
+      menuOpen = false;
+    }
+  }
+  function itemMenu(e: MouseEvent, path: string) {
+    e.preventDefault();
+    void invoke('shelf_item_menu', { path, x: e.clientX, y: e.clientY });
+  }
+
   function enter() {
     clearTimeout(leaveTimer);
     leaveTimer = undefined;
@@ -88,6 +104,7 @@
     if (leaveTimer) return;
     leaveTimer = setTimeout(() => {
       hover = false;
+      listing = false;
       leaveTimer = undefined;
     }, COLLAPSE_MS);
   }
@@ -109,9 +126,17 @@
   {/if}
   {#if mode === 'cleared'}
     <span class="note">{t('shelf.cleared')}</span>
+    <button class="undo" onclick={() => invoke('shelf_undo')}>{t('shelf.undo')}</button>
   {/if}
   {#if mode === 'target'}
     <span class="drop">{t('shelf.drop')}</span>
+  {:else if mode === 'open' && listing}
+    <ul class="list">
+      {#each view.items as item (item.path)}
+        <li role="presentation" onmousedown={(e) => dragPile(e, [item.path])} oncontextmenu={(e) => itemMenu(e, item.path)}>{item.name}</li>
+      {/each}
+    </ul>
+    <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   {:else if mode === 'open'}
     <div class="pile" role="presentation" onmousedown={(e) => dragPile(e)}>
       {#each pile as item, i (item.path)}
@@ -120,7 +145,7 @@
         </div>
       {/each}
     </div>
-    <span class="pill">{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
+    <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   {/if}
 </div>
 
@@ -143,5 +168,9 @@
   .drop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 600; }
   .pile { position: absolute; left: 50%; top: 26px; width: 62px; height: 78px; transform: translateX(-50%); }
   .doc { position: absolute; inset: 0; background: #fff; border-radius: 3px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; justify-content: center; color: #555; font-size: 10px; text-transform: uppercase; padding-bottom: 6px; box-sizing: border-box; }
-  .pill { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; background: rgba(0, 0, 0, 0.45); border-radius: 12px; padding: 3px 10px; white-space: nowrap; cursor: default; }
+  .undo { position: absolute; right: 10px; top: 3px; background: none; border: 0; color: var(--accent, #58a6ff); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+  .list { position: absolute; left: 10px; right: 10px; top: 22px; bottom: 44px; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+  .list li { padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: grab; }
+  .list li:hover { background: rgba(255, 255, 255, 0.12); }
+  .pill { border: 0; color: inherit; font: inherit; position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; background: rgba(0, 0, 0, 0.45); border-radius: 12px; padding: 3px 10px; white-space: nowrap; cursor: default; }
 </style>

@@ -2,6 +2,7 @@
 //! by reference. macOS only; `init` does nothing elsewhere.
 
 pub mod commands;
+pub mod menu;
 pub mod window;
 
 use std::path::PathBuf;
@@ -70,6 +71,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         jobs::notice(app, t("shelf.error.reset"));
     }
     window::create(app)?;
+    menu::init(app);
     Ok(())
 }
 
@@ -259,6 +261,30 @@ pub fn expanded_pt(app: &AppHandle) -> f64 {
     } else {
         0.0
     }
+}
+
+pub fn format_size(bytes: u64) -> String {
+    // Replace with the project's byte formatter if one exists (see Task 7 Step 3).
+    format!("{:.1} MB", bytes as f64 / 1e6)
+}
+
+static CLEARS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// "Clear shelf": empties the list, Undo for 5 s (spec §6). A later Clear restarts the 5 s.
+pub fn clear(app: &AppHandle) {
+    mutate(app, |list| list.clear());
+    let generation = CLEARS.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if CLEARS.load(Ordering::SeqCst) == generation {
+            mutate(&app, |list| list.forget_undo());
+        }
+    });
+}
+
+pub fn optimise_all(app: &AppHandle) {
+    jobs::notice(app, t("shelf.error.nothing_to_optimise"));
 }
 
 #[cfg(test)]

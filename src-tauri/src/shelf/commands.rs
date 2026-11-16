@@ -92,3 +92,19 @@ fn over_ferry(app: &AppHandle) -> bool {
         .collect();
     super::cursor_over_ferry(cursor, &windows)
 }
+
+#[tauri::command]
+pub fn shelf_menu(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
+    super::mutate(&app, |list| list.prune());
+    super::menu::popup(&app, x, y)
+}
+
+#[tauri::command]
+pub fn shelf_item_menu(app: AppHandle, path: String, x: f64, y: f64) -> Result<(), String> {
+    super::menu::popup_item(&app, &path, x, y)
+}
+
+#[tauri::command]
+pub fn shelf_undo(app: AppHandle) {
+    super::mutate(&app, |list| list.undo());
+}
