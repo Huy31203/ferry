@@ -223,11 +223,8 @@ fn split(tmp: &Path, out: &Path, size: u64) -> io::Result<Vec<PathBuf>> {
     match result {
         Ok(()) => {
             // An exact multiple leaves an empty last volume; drop it.
-            if made
-                .last()
-                .is_some_and(|p| fs::metadata(p).is_ok_and(|m| m.len() == 0))
-            {
-                let _ = fs::remove_file(made.pop().expect("checked"));
+            if let Some(empty) = made.pop_if(|p| fs::metadata(p).is_ok_and(|m| m.len() == 0)) {
+                let _ = fs::remove_file(empty);
             }
             Ok(made)
         }
