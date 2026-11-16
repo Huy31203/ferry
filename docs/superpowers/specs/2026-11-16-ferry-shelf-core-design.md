@@ -50,21 +50,34 @@ The drag watcher (`drop_batch/watch.rs`) already samples the cursor every 30 ms 
 | Files/folders from another app | as today | shown (even when empty) | pointer within 80 pt of the strip and not inside the zone rect |
 | Ferry's own result cards / Drag all (`all_own`) | hidden, as today | shown | same rule |
 | The shelf's own pile or a "Show items…" row | hidden | stays expanded, no drop target | never (no self-drop) |
-| Image-only drag (Slack etc., `images > 0`, no files) | as today | not shown | never (until spec 3) |
-| Ignored frontmost app (`should_auto_show` false for that reason) | hidden | hidden | never |
+| Image-only drag (Slack etc., `images > 0`, no files) | as today | no change | never (until spec 3) |
+| Ignored frontmost app (`should_auto_show` false for that reason) | hidden | no change | never |
 
-- **Shelf drag flag.** `all_own` matches only job outputs, so a pile drag would look like an outside drag. The app keeps `ShelfDragging: AtomicBool`. It is set by a command just before the page calls `startDrag` and cleared in the drag callback. While it is set, the watcher hides the zone and the shelf offers no drop target. A Tauri `DragDropEvent::Drop` on any Ferry window (zone, stack, shelf) is ignored: no intake, and the items stay on the shelf.
+"No change" means the shelf stays as it was before the drag: resting if it has items, hidden if empty.
+
+- **Shelf drag flag.** `all_own` matches only job outputs, so a pile drag would look like an outside drag. The app keeps `ShelfDragging: AtomicBool`, set by a command just before the page calls `startDrag`. While it is set, the watcher hides the zone, the shelf offers no drop target, and a Tauri `DragDropEvent::Drop` on any Ferry window (zone, stack, shelf) is ignored (no intake).
+- **Drop back onto Ferry keeps the items.** Tauri accepts every drop, so the callback reports `Dropped` even over Ferry. In the callback, the shelf checks the cursor against the visible Ferry windows' rects. Inside one, it treats the drop as `Cancelled` and the items stay. The flag is cleared 1 s after the callback, so the window's Drop event is ignored whichever order the two arrive in.
 - **Hover** (no drag): the pointer entering the strip expands it; leaving collapses it after 300 ms.
 - **Drag ends** without a drop on the shelf: it returns to resting, or to hidden if empty.
 
 ### 4. Placement
 
-- **Monitor and corner.** The monitor is the one `windows::stack_resize` picks: under the cursor when `follow_cursor` is on, otherwise the primary. The side (left/right) comes from `floating.corner`. Both are computed from settings, so they work with no cards.
+- **Monitor and corner.**
+  - The side (left/right) comes from `floating.corner`.
+  - With a visible stack, the shelf uses the stack's monitor, so the two never split.
+  - With no stack, it uses the monitor `windows::stack_resize` would pick: under the cursor when `follow_cursor` is on, otherwise the primary.
 - **When it re-places.** The shelf is placed on drag start, at app launch, and on each `stack_resize`. It is never placed continuously, so the strip doesn't hop screens as the cursor moves.
-- **Bottom corners.** The stack sits directly above the resting strip: `stack_resize` subtracts the strip height when the shelf is visible. The expanded shelf grows upward over the lowest cards (it floats above them) rather than pushing the stack.
+- **Bottom corners.**
+  - When the shelf has items, the stack sits directly above the resting strip: `stack_resize` subtracts the strip height.
+  - An empty shelf's strip, shown only during a drag, overlays without moving the stack, so cards don't hop at each drag start and end.
+  - The expanded shelf grows upward over the lowest cards (it floats above them) rather than pushing the stack.
 - **Top corners.** The stack stays at the top; the shelf stays at the bottom edge on the same side.
 - **Zone and shelf never overlap.**
-  - While a drag shows both, the zone is placed with a bottom inset equal to the expanded shelf height. This applies with no stack (the `geometry::place` fallback in `zone_near_results`) and when stacking above the cards.
+  - While a drag shows both, every zone placement in `zone.rs` is kept clear of the expanded shelf's rect: if the zone's rect would intersect it, the zone moves up until its bottom is at the shelf's top. That covers:
+    - `zone_near_results`, including its `geometry::place` fallback with no stack
+    - Tab mode (`tab_at_edge`)
+    - `zone_from_tab`
+    - under-cursor (`zone_under_cursor`)
   - The shelf doesn't expand while the pointer is inside the zone rect.
   - If both still can't fit, the zone wins and the shelf stays resting. The zone panel is above the shelf.
 - **Dock auto-hide.** The work area reaches the screen edge, so the strip sits at the very bottom and the Dock may cover it while summoned. This is accepted, and is a manual check.
@@ -92,7 +105,7 @@ Clicking "N Items ⌄" opens a native menu (like `menu.rs::popup`):
 - Header "N Items · total size" (disabled)
 - Show in Finder (reveals all items)
 - ─
-- Copy (file URLs to the clipboard)
+- Copy (file URLs to the clipboard). Recorded as Ferry's own write, as `drop_batch/list.rs` does (`write_files`, then `log.wrote`), so the clipboard watcher doesn't turn the copy into jobs.
 - Paste
 - ─
 - Optimise all
@@ -151,8 +164,9 @@ Clicking "N Items ⌄" opens a native menu (like `menu.rs::popup`):
 - **Rust TDD, `shelf_place`:**
   - bottom-right/left rects
   - top corners keep the shelf at the bottom
-  - stack offset by the strip
-  - zone and expanded shelf never intersect, with and without a stack
+  - stack offset by the strip only when the shelf has items
+  - shelf on the stack's monitor when a stack is visible
+  - zone and expanded shelf never intersect: near-results with and without a stack, tab, from-tab, under-cursor
   - zone wins when space is short
 - **Rust, `watch.rs` plan tests:** one per table row in §3, including the shelf drag flag hiding the zone.
 - **vitest, `strip.ts`:**
@@ -164,7 +178,8 @@ Clicking "N Items ⌄" opens a native menu (like `menu.rs::popup`):
   - Finder drop
   - card drop
   - Shelve all
-  - pile drag into Finder, then ⌥ drag
+  - pile drag into Finder, then ⌥ drag, then a drag back onto the stack (items stay)
+  - Copy doesn't create jobs
   - Esc-cancel drag
   - Optimise all
   - Clear and Undo
