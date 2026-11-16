@@ -103,12 +103,14 @@ pub fn layout(app: &AppHandle, height_pt: f64) {
     };
     let Some(monitor) = monitor(app) else { return };
     let scale = monitor.scale_factor();
+    let before = super::inset_px(app, scale);
     if height_pt < 1.0 {
         *state.layout.lock().unwrap() = super::Layout {
             height_pt: 0.0,
             rect: None,
         };
         let _ = platform::hide(&window);
+        restack_if(app, before, scale);
         return;
     }
     let size = (
@@ -128,4 +130,12 @@ pub fn layout(app: &AppHandle, height_pt: f64) {
         f64::from(rect.y) / scale,
     ));
     let _ = platform::show_without_focus(&window);
+    restack_if(app, before, scale);
+}
+
+/// The stack follows the shelf's height: move it when what the shelf takes changed.
+fn restack_if(app: &AppHandle, before: u32, scale: f64) {
+    if super::inset_px(app, scale) != before {
+        crate::windows::restack(app);
+    }
 }

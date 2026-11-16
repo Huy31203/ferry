@@ -21,12 +21,12 @@ use crate::state::AppState;
 pub const SHELF: &str = "shelf";
 
 #[derive(Debug, Default, Clone, Copy)]
-// Read by `stack_resize` from Task 5 on; remove this then.
-#[expect(dead_code)]
 pub struct Layout {
     /// The page's last reported height in points (0 = hidden).
     pub height_pt: f64,
     /// The window's physical rect while shown.
+    // Read by the drag tracking in Task 6; remove the expect then.
+    #[expect(dead_code)]
     pub rect: Option<Rect>,
 }
 
@@ -35,6 +35,8 @@ pub struct ShelfState {
     pub path: PathBuf,
     /// The pile is being dragged out (spec §3 "Shelf drag flag").
     pub dragging: AtomicBool,
+    /// A drag the shelf takes is in progress (set by the watcher).
+    pub offering: AtomicBool,
     pub layout: Mutex<Layout>,
     /// "Couldn't save the shelf" shows once per session.
     warned: AtomicBool,
@@ -68,6 +70,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         list: Mutex::new(list),
         path,
         dragging: AtomicBool::new(false),
+        offering: AtomicBool::new(false),
         layout: Mutex::new(Layout::default()),
         warned: AtomicBool::new(false),
     });
@@ -170,4 +173,18 @@ pub fn summon(app: &AppHandle) {
 pub fn tray_item(app: &AppHandle) -> Option<tauri::menu::MenuItem<tauri::Wry>> {
     state(app)?;
     tauri::menu::MenuItem::with_id(app, "shelf:show", t("tray.shelf"), true, None::<&str>).ok()
+}
+
+/// What the shelf takes from the bottom of the stack's area, in physical pixels.
+/// Only the expanded shelf pushes the stack: the resting strip is a drag-time
+/// overlay and must not make cards hop at every drag start.
+pub fn inset_px(app: &AppHandle, scale: f64) -> u32 {
+    let Some(state) = state(app) else { return 0 };
+    let height = state.layout.lock().unwrap().height_pt;
+    let px = |pt: f64| (pt * scale).round() as u32;
+    ferry_core::shelf_place::inset(false, px(height), px(ferry_core::shelf_place::STRIP))
+}
+
+pub fn offering(app: &AppHandle) -> bool {
+    state(app).is_some_and(|s| s.offering.load(Ordering::SeqCst))
 }

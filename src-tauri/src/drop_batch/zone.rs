@@ -301,9 +301,40 @@ fn place(
             .and_then(|w| w.outer_size().ok())
             .map(|s| (s.width, s.height));
         let margin = (MARGIN * scale).round() as u32;
-        zone_near_results(area, corner, size, stack, margin, 0)
+        let room = if crate::shelf::offering(app) {
+            let expanded = (ferry_core::shelf_place::EXPANDED * scale).round() as u32;
+            ferry_core::shelf_place::stack_area(area, corner, expanded)
+        } else {
+            area
+        };
+        zone_near_results(room, corner, size, stack, margin, 0)
     };
+    let (x, y) = clear_of_shelf(app, area, corner, scale, size, (x, y));
     apply_geometry(window, scale, size, (x, y));
+}
+
+/// While the shelf offers this drag, no zone placement may overlap its expanded rect (spec §4).
+fn clear_of_shelf(
+    app: &AppHandle,
+    area: Rect,
+    corner: Corner,
+    scale: f64,
+    size: (u32, u32),
+    at: (i32, i32),
+) -> (i32, i32) {
+    use ferry_core::shelf_place::{EXPANDED, WIDTH, clear_of, shelf_rect};
+    if !crate::shelf::offering(app) {
+        return at;
+    }
+    let px = |pt: f64| (pt * scale).round() as u32;
+    let shelf = shelf_rect(area, corner, (px(WIDTH), px(EXPANDED)), px(4.0));
+    let zone = Rect {
+        x: at.0,
+        y: at.1,
+        width: size.0,
+        height: size.1,
+    };
+    clear_of(zone, shelf, area)
 }
 
 /// The stack's per-OS way of sizing and moving a window (`windows::stack_resize`).

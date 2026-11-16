@@ -10,6 +10,9 @@ use ferry_core::i18n::t;
 use crate::state::AppState;
 use crate::{hover_keys, platform};
 
+/// The stack's last requested size, for `restack`.
+static LAST: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
+
 pub const STACK: &str = "stack";
 pub const SETTINGS: &str = "settings";
 
@@ -105,6 +108,15 @@ pub fn stack_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
+/// Place the stack again at its last size, after the shelf grew or shrank.
+/// Sets window geometry: call it on the main thread.
+pub fn restack(app: &AppHandle) {
+    let last = *LAST.lock().unwrap();
+    if let Some((width, height)) = last {
+        let _ = stack_resize(app.clone(), width, height);
+    }
+}
+
 /// Fit the stack window to its content and pin it to the chosen corner of the
 /// work area under the cursor (or of the main screen). A zero size hides it.
 #[tauri::command]
@@ -112,6 +124,7 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
     let Some(stack) = app.get_webview_window(STACK) else {
         return Ok(());
     };
+    *LAST.lock().unwrap() = (width >= 1.0 && height >= 1.0).then_some((width, height));
     if width < 1.0 || height < 1.0 {
         // No pointer-leave arrives from a hidden window: drop the hover keys here.
         hover_keys::set(&app, None);
@@ -139,6 +152,8 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         width: work.size.width,
         height: work.size.height,
     };
+    let inset = crate::shelf::inset_px(&app, scale);
+    let area = ferry_core::shelf_place::stack_area(area, corner, inset);
     let margin = (STACK_MARGIN * scale).round() as u32;
     // A stack taller than the work area keeps its newest cards (the page anchors
     // them to the bottom) instead of running under the taskbar.
