@@ -70,7 +70,9 @@ The drag watcher (`drop_batch/watch.rs`) already samples the cursor every 30 ms 
 - **Bottom corners.**
   - When the shelf has items, the stack sits directly above the resting strip: `stack_resize` subtracts the strip height.
   - An empty shelf's strip, shown only during a drag, overlays without moving the stack, so cards don't hop at each drag start and end.
-  - The expanded shelf grows upward over the lowest cards (it floats above them) rather than pushing the stack.
+  - When the shelf expands, the stack is pushed up so its bottom meets the expanded shelf's top, as in the mockups. It moves back on collapse.
+  - Collapse waits 300 ms after the pointer leaves, so a brief exit doesn't bounce the stack.
+  - While a drag shows the zone, the zone is placed as if the stack were already pushed, so a later push never runs the stack into it.
 - **Top corners.** The stack stays at the top; the shelf stays at the bottom edge on the same side.
 - **Zone and shelf never overlap.**
   - While a drag shows both, every zone placement in `zone.rs` is kept clear of the expanded shelf's rect: if the zone's rect would intersect it, the zone moves up until its bottom is at the shelf's top. That covers:
@@ -164,7 +166,8 @@ Clicking "N Items ⌄" opens a native menu (like `menu.rs::popup`):
 - **Rust TDD, `shelf_place`:**
   - bottom-right/left rects
   - top corners keep the shelf at the bottom
-  - stack offset by the strip only when the shelf has items
+  - stack offset by the strip only when the shelf has items, and by the expanded height when expanded
+  - the zone placed during a drag clears the pushed stack
   - shelf on the stack's monitor when a stack is visible
   - zone and expanded shelf never intersect: near-results with and without a stack, tab, from-tab, under-cursor
   - zone wins when space is short
@@ -188,7 +191,7 @@ Clicking "N Items ⌄" opens a native menu (like `menu.rs::popup`):
   - two monitors with `follow_cursor`
   - Dock auto-hide
 
-## Decisions to confirm
+## Decisions (confirmed by the user 2026-11-16)
 
-1. **The expanded shelf covers the lowest cards** instead of pushing the stack up as the mockups showed (v5/v6). Reason: hover expands and collapses often, and moving the whole stack each time makes the cards jump. Pushing remains possible as an alternative.
-2. **Top-corner stacks keep the shelf at the bottom edge** (same side). Reason: a shelf hanging from the top edge would fight the menu bar and notch, and dragging toward the bottom edge is the habit other shelf apps build. The alternative is the shelf following the stack to the top.
+1. **The expanded shelf pushes the stack up** (bottom corners), as the mockups show.
+2. **Top-corner stacks keep the shelf at the bottom edge**, same side.
