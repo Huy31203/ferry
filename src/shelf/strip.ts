@@ -31,6 +31,8 @@ export const GRIP = 16;
 export const WIDTH = 150;
 export const LIST_WIDTH = 240;
 export const COLLAPSE_MS = 300;
+/** The panel's slide; Rust keeps the window this long after a shrink (shelf/window.rs). */
+export const SLIDE_MS = 340;
 export const UNDO_MS = 5000;
 export const SUMMON_MS = 4000;
 

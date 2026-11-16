@@ -113,3 +113,14 @@ pub fn shelf_undo(app: AppHandle) {
 pub fn shelf_reveal(path: String) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
 }
+
+/// "Shelve" from a card bar or menu: the cards' files go on the shelf and the cards leave.
+#[tauri::command]
+pub async fn shelf_shelve_cards(app: AppHandle, ids: Vec<ferry_core::job::JobId>) {
+    let _ = tauri::async_runtime::spawn_blocking(move || super::shelve_cards(&app, ids)).await;
+}
+
+#[tauri::command]
+pub fn shelf_restore(app: AppHandle, path: String) {
+    super::restore_card(&app, std::path::Path::new(&path));
+}

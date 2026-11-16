@@ -208,6 +208,7 @@
   "shelf.undo": "Undo",
   "shelf.window_title": "Ferry shelf",
   "shelf.folder": "Folder",
+  "shelf.restore": "Bring the card back",
   "shelf.menu.header": "{count} Items · {size}",
   "shelf.menu.header_one": "1 Item · {size}",
   "shelf.menu.reveal": "Show in Finder",

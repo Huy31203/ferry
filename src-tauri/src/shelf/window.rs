@@ -54,7 +54,15 @@ fn on_drop(app: &AppHandle, paths: Vec<std::path::PathBuf>) {
         return; // an image-only drag: spec 3
     }
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || super::add(&app, paths));
+    tauri::async_runtime::spawn_blocking(move || {
+        // Result cards dragged here leave the stack; other files just go on the shelf.
+        let ids = super::card_ids(&super::job_outputs(&app), &paths);
+        if ids.is_empty() {
+            super::add(&app, paths);
+        } else {
+            super::shelve_cards(&app, ids);
+        }
+    });
 }
 
 pub fn corner(app: &AppHandle) -> Corner {
@@ -101,7 +109,7 @@ pub fn side(app: &AppHandle) -> &'static str {
 }
 
 /// How long the window outlives a shrinking panel, so the page can animate it out.
-const SHRINK_MS: u64 = 200;
+const SHRINK_MS: u64 = 360;
 
 /// The window's current size in points, and the newest layout request.
 static WINDOW: std::sync::Mutex<(f64, f64)> = std::sync::Mutex::new((0.0, 0.0));

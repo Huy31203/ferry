@@ -96,6 +96,7 @@ The drag watcher (`drop_batch/watch.rs`) already samples the cursor every 30 ms 
 - "Shelve all" button on `DragAllBar` / `SelectionBar`.
 - "Ferry Shelf" as the first row in the card menu's "Add to Shelf ▸" (`integrations/menu.rs`).
 - Paste in the shelf menu adds the clipboard's file URLs.
+- Result cards put on the shelf (Shelve all, Shelve, the card menu, or dragging a card onto it) leave the stack; "Show items…" offers "Bring the card back" on such rows, which takes the file off the shelf and shows the card again (this session only).
 - Duplicates are skipped silently.
 
 **Off:**

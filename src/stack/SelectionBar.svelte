@@ -113,7 +113,7 @@
   <button type="button" data-action="sel-convert" class:hot={hotAction === 'sel-convert'} aria-label={t('drop.list.convert')} title={editTip(t('drop.list.convert'))} disabled={!canEdit} onclick={(e) => menu('convert', e)}>{t('drop.list.convert')} ▸</button>
   <button type="button" data-action="sel-copy" class:hot={hotAction === 'sel-copy'} aria-label={t('drop.list.copy')} title={t('drop.list.copy')} disabled={targets.files.length === 0} onclick={copy}>⧉</button>
   {#if isMac}
-    <button type="button" data-action="sel-shelve" class:hot={hotAction === 'sel-shelve'} aria-label={t('drop.list.shelve')} title={t('drop.list.shelve')} disabled={targets.files.length === 0} onclick={() => invoke('shelf_add', { paths: targets.files })}>{t('drop.list.shelve')}</button>
+    <button type="button" data-action="sel-shelve" class:hot={hotAction === 'sel-shelve'} aria-label={t('drop.list.shelve')} title={t('drop.list.shelve')} disabled={targets.files.length === 0} onclick={() => invoke('shelf_shelve_cards', { ids: targets.fileIds })}>{t('drop.list.shelve')}</button>
   {/if}
   <button type="button" data-action="sel-remove" class:hot={hotAction === 'sel-remove'} aria-label={t('drop.list.remove')} title={t('drop.list.remove')} onclick={remove}>✕</button>
   <button type="button" data-action="sel-all" class:hot={hotAction === 'sel-all'} onclick={onall}>{t('drop.list.select_all')}</button>

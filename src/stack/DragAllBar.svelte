@@ -45,7 +45,7 @@
   });
 
   function shelveAll() {
-    void invoke('shelf_add', { paths: files });
+    void invoke('shelf_shelve_cards', { ids: cards.map((card) => card.id) });
   }
 
   function dragAll(event: MouseEvent) {

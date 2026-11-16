@@ -292,9 +292,7 @@ pub fn run(app: &AppHandle, id: &JobId, item: Item) -> Result<(), String> {
         },
         Item::Upload => actions::upload(app, id),
         Item::FerryShelf => {
-            if let Some(path) = jobs::output(app, id) {
-                crate::shelf::add(app, vec![path]);
-            }
+            crate::shelf::shelve_cards(app, vec![id.clone()]);
             Ok(())
         }
         Item::Shelf(n) => match listed_app(id, n, true) {

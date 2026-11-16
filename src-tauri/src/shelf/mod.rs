@@ -34,6 +34,8 @@ pub struct ShelfState {
     pub path: PathBuf,
     /// The pile is being dragged out (spec §3 "Shelf drag flag").
     pub dragging: AtomicBool,
+    /// Shelved result cards, so "Show items…" can bring one back: file → its job.
+    pub cards: Mutex<std::collections::HashMap<PathBuf, JobId>>,
     pub layout: Mutex<Layout>,
     /// "Couldn't save the shelf" shows once per session.
     warned: AtomicBool,
@@ -47,6 +49,8 @@ pub struct Entry {
     pub is_dir: bool,
     /// Bytes for a file, 0 for a folder.
     pub size: u64,
+    /// A card that was shelved with this file can be restored.
+    pub card: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +75,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         list: Mutex::new(list),
         path,
         dragging: AtomicBool::new(false),
+        cards: Mutex::new(std::collections::HashMap::new()),
         layout: Mutex::new(Layout::default()),
         warned: AtomicBool::new(false),
     });
@@ -103,6 +108,7 @@ pub fn view(app: &AppHandle) -> ShelfView {
         };
     };
     let list = state.list.lock().unwrap();
+    let cards = state.cards.lock().unwrap();
     let items = list
         .items
         .iter()
@@ -121,6 +127,7 @@ pub fn view(app: &AppHandle) -> ShelfView {
                 .ok()
                 .filter(|m| m.is_file())
                 .map_or(0, |m| m.len()),
+            card: cards.contains_key(&i.path),
         })
         .collect();
     let size = list
@@ -286,6 +293,63 @@ pub fn format_size(bytes: u64) -> String {
 
 static CLEARS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The jobs whose current file is one of `paths`.
+pub fn card_ids(jobs: &[(JobId, PathBuf)], paths: &[PathBuf]) -> Vec<JobId> {
+    let same = |a: &PathBuf, b: &PathBuf| {
+        a == b
+            || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+    };
+    jobs.iter()
+        .filter(|(_, out)| paths.iter().any(|p| same(p, out)))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Every job's id and current file.
+pub fn job_outputs(app: &AppHandle) -> Vec<(JobId, PathBuf)> {
+    let state = app.state::<crate::state::AppState>();
+    let jobs = state.jobs.lock().unwrap();
+    jobs.iter()
+        .map(|(id, e)| (id.clone(), e.output()))
+        .collect()
+}
+
+/// Put result cards on the shelf: their files go on it, and the cards leave the stack.
+pub fn shelve_cards(app: &AppHandle, ids: Vec<JobId>) {
+    let files: Vec<(JobId, PathBuf)> = ids
+        .into_iter()
+        .filter_map(|id| jobs::output(app, &id).map(|p| (id, p)))
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    add(app, files.iter().map(|(_, p)| p.clone()).collect());
+    if let Some(state) = state(app) {
+        let mut cards = state.cards.lock().unwrap();
+        for (id, path) in &files {
+            if let Ok(canonical) = std::fs::canonicalize(path) {
+                cards.insert(canonical, id.clone());
+            }
+        }
+    }
+    for (id, _) in &files {
+        jobs::hide_card(app, id);
+    }
+}
+
+/// Take a shelved card's file off the shelf and bring its card back.
+pub fn restore_card(app: &AppHandle, path: &std::path::Path) {
+    let Some(state) = state(app) else { return };
+    let Some(id) = state.cards.lock().unwrap().remove(path) else {
+        return;
+    };
+    let Some(update) = jobs::last_update(app, &id) else {
+        return;
+    };
+    mutate(app, |list| list.remove(&[path.to_path_buf()]));
+    jobs::show(app, update);
+}
+
 /// "Clear shelf": empties the list, Undo for 5 s (spec §6). A later Clear restarts the 5 s.
 pub fn clear(app: &AppHandle) {
     mutate(app, |list| list.clear());
@@ -373,5 +437,18 @@ mod tests {
         let folder = dir.path().join("photos");
         std::fs::create_dir(&folder).unwrap();
         assert_eq!(optimisable(&[png.clone(), txt, folder]), vec![png]);
+    }
+
+    #[test]
+    fn dropped_files_match_the_cards_they_came_from() {
+        let id = |s: &str| -> JobId {
+            serde_json::from_value(serde_json::Value::String(s.into())).unwrap()
+        };
+        let jobs = vec![
+            (id("a-1"), PathBuf::from("/out/a.png")),
+            (id("a-2"), PathBuf::from("/out/b.png")),
+        ];
+        let dropped = [PathBuf::from("/out/b.png"), PathBuf::from("/x/c.png")];
+        assert_eq!(card_ids(&jobs, &dropped), vec![id("a-2")]);
     }
 }

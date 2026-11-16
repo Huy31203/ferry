@@ -7,9 +7,9 @@
   import { formatBytes } from '../lib/format';
   import { t } from '../lib/i18n';
   import type { Settings } from '../lib/settings';
-  import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, stripHeight, stripState, stripWidth, WIDTH, type DragView } from './strip';
+  import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, SLIDE_MS, stripHeight, stripState, stripWidth, WIDTH, type DragView } from './strip';
 
-  interface Entry { path: string; name: string; ext: string; is_dir: boolean; size: number }
+  interface Entry { path: string; name: string; ext: string; is_dir: boolean; size: number; card: boolean }
   interface ShelfView { items: Entry[]; size: number; can_undo: boolean; opacity: number; side: 'left' | 'right' }
 
   let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, opacity: 95, side: 'right' });
@@ -26,24 +26,28 @@
   const pile = $derived(view.items.slice(-3));
 
   const width = $derived(stripWidth(mode, listing));
-  // The panel animates inside its window: the window grows first, and only shrinks
-  // after the page has animated (Rust waits), so a collapse plays out.
-  let panelH = $state(0);
+  // The panel is a fixed-size box that slides (a transform, so it stays smooth). The window
+  // grows first and shrinks only after the slide, so a collapse plays out.
+  let panelH = $state(0); // the visible height
+  let boxH = $state(0); // the window's height
   let panelW = $state(WIDTH);
+  let shrinkTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const [h, w] = [height, width];
-    const [ph, pw] = untrack(() => [panelH, panelW]);
-    if (h < ph || (h > 0 && w < pw)) {
+    const bh = untrack(() => boxH);
+    clearTimeout(shrinkTimer);
+    if (h <= bh) {
+      // Slide first; the window follows once the slide is over.
       panelH = h;
       panelW = w;
       void invoke('shelf_layout', { height: h, width: w });
+      if (h < bh) shrinkTimer = setTimeout(() => (boxH = h), SLIDE_MS + 20);
     } else {
-      void invoke('shelf_layout', { height: h, width: w }).then(() =>
-        requestAnimationFrame(() => {
-          panelH = h;
-          panelW = w;
-        }),
-      );
+      void invoke('shelf_layout', { height: h, width: w }).then(() => {
+        boxH = h;
+        panelW = w;
+        requestAnimationFrame(() => requestAnimationFrame(() => (panelH = h)));
+      });
     }
   });
 
@@ -157,7 +161,8 @@
   class:right={view.side === 'right'}
   style:--solid={view.opacity / 100}
   style:--w="{panelW}px"
-  style:--h="{panelH}px"
+  style:--box="{boxH}px"
+  style:--lift="{boxH - panelH}px"
   role="region"
   aria-label={t('shelf.window_title')}
   onmouseenter={enter}
@@ -187,6 +192,11 @@
             <span class="sub">{item.is_dir ? t('shelf.folder') : formatBytes(item.size)}</span>
           </span>
           <span class="acts">
+            {#if item.card}
+              <button type="button" title={t('shelf.restore')} aria-label={t('shelf.restore')} onmousedown={(e) => e.stopPropagation()} onclick={() => invoke('shelf_restore', { path: item.path })}>
+                <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 2 5l2.5 2.5M2 5h5a3 3 0 0 1 0 6H5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </button>
+            {/if}
             <button type="button" title={t('shelf.menu.reveal')} aria-label={t('shelf.menu.reveal')} onmousedown={(e) => e.stopPropagation()} onclick={() => invoke('shelf_reveal', { path: item.path })}>
               <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2h6v6M10 2 3 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
             </button>
@@ -213,8 +223,10 @@
 <style>
   :global(html), :global(body) { margin: 0; background: transparent; overflow: hidden; }
   .shelf {
-    position: fixed; bottom: 0; width: var(--w); height: var(--h);
-    transition: height 200ms cubic-bezier(0.2, 0.8, 0.3, 1), width 200ms cubic-bezier(0.2, 0.8, 0.3, 1);
+    position: fixed; bottom: 0; width: var(--w); height: var(--box);
+    transform: translateY(var(--lift));
+    transition: transform 340ms cubic-bezier(0.22, 0.8, 0.3, 1), width 340ms cubic-bezier(0.22, 0.8, 0.3, 1);
+    will-change: transform;
     background: rgb(58 61 68 / var(--solid, 0.5)); border: 1px solid rgb(85 89 99 / var(--solid, 0.5)); border-bottom: 0;
     border-radius: 14px 14px 0 0; box-sizing: border-box; color: #fff;
     font: 12px -apple-system, system-ui, sans-serif; user-select: none;
@@ -222,7 +234,7 @@
   .shelf.right { right: 0; }
   .shelf.left { left: 0; }
   @keyframes fade-up { from { opacity: 0; translate: 0 8px; } }
-  .count, .cleared, .drop, .pile, .list, .pill { animation: fade-up 220ms 70ms cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+  .count, .cleared, .drop, .pile, .list, .pill { animation: fade-up 300ms 90ms cubic-bezier(0.2, 0.8, 0.3, 1) both; }
   .shelf.target { outline: 2px solid var(--accent, #0a84ff); outline-offset: -3px; }
   .grip { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.75); }
   .count { position: absolute; right: 10px; top: 4px; font-size: 10px; font-weight: 700; }

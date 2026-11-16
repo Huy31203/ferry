@@ -89,6 +89,8 @@ pub fn run() {
             shelf::commands::shelf_item_menu,
             shelf::commands::shelf_undo,
             shelf::commands::shelf_reveal,
+            shelf::commands::shelf_shelve_cards,
+            shelf::commands::shelf_restore,
             shelf::commands::shelf_drag_start,
             shelf::commands::shelf_drag_finished,
             compare::open_compare,
