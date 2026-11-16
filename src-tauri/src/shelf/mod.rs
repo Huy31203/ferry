@@ -30,8 +30,6 @@ pub struct ShelfState {
     pub path: PathBuf,
     /// The pile is being dragged out (spec §3 "Shelf drag flag").
     pub dragging: AtomicBool,
-    /// A drag the shelf takes is in progress (set by the watcher).
-    pub offering: AtomicBool,
     pub layout: Mutex<Layout>,
     /// "Couldn't save the shelf" shows once per session.
     warned: AtomicBool,
@@ -65,7 +63,6 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         list: Mutex::new(list),
         path,
         dragging: AtomicBool::new(false),
-        offering: AtomicBool::new(false),
         layout: Mutex::new(Layout::default()),
         warned: AtomicBool::new(false),
     });
@@ -92,7 +89,7 @@ pub fn view(app: &AppHandle) -> ShelfView {
             items: vec![],
             size: 0,
             can_undo: false,
-            transparency: 80,
+            transparency: 95,
         };
     };
     let list = state.list.lock().unwrap();
@@ -180,10 +177,6 @@ pub fn inset_px(app: &AppHandle, scale: f64) -> u32 {
     ferry_core::shelf_place::inset(false, px(height), px(ferry_core::shelf_place::STRIP))
 }
 
-pub fn offering(app: &AppHandle) -> bool {
-    state(app).is_some_and(|s| s.offering.load(Ordering::SeqCst))
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
 pub struct DragView {
     pub offer: bool,
@@ -210,8 +203,6 @@ fn emit_drag(app: &AppHandle, next: DragView) {
 }
 
 pub fn on_drag(app: &AppHandle, offer: bool, own: bool) {
-    let Some(state) = state(app) else { return };
-    state.offering.store(offer, Ordering::SeqCst);
     if offer {
         mutate(app, |list| list.prune());
     }
@@ -226,9 +217,6 @@ pub fn on_drag(app: &AppHandle, offer: bool, own: bool) {
 }
 
 pub fn drag_ended(app: &AppHandle) {
-    if let Some(state) = state(app) {
-        state.offering.store(false, Ordering::SeqCst);
-    }
     emit_drag(app, DragView::default());
 }
 
@@ -243,19 +231,16 @@ pub fn track(app: &AppHandle) {
 }
 
 fn near_strip(app: &AppHandle) -> Option<bool> {
-    use ferry_core::shelf_place::{
-        EXPANDED, REACH, STRIP, WIDTH, drag_near, may_expand, shelf_rect,
-    };
+    use ferry_core::shelf_place::{REACH, STRIP, WIDTH, drag_near, shelf_rect};
     let monitor = window::monitor(app)?;
     let scale = monitor.scale_factor();
     let px = |pt: f64| (pt * scale).round() as u32;
     let area = window::area_of(&monitor);
     let corner = window::corner(app);
     let strip = shelf_rect(area, corner, (px(WIDTH), px(STRIP)), px(4.0));
-    let expanded = shelf_rect(area, corner, (px(WIDTH), px(EXPANDED)), px(4.0));
-    let zone = crate::drop_batch::zone::visible_rect(app);
+    let zone = crate::drop_batch::zone::base_rect(app);
     let cursor = crate::drop_batch::zone::cursor_px(app)?;
-    Some(may_expand(zone, expanded) && drag_near(cursor, strip, px(REACH), zone))
+    Some(drag_near(cursor, strip, px(REACH), zone))
 }
 
 /// Pure: is the point (points) inside any of the windows `(x, y, w, h)` (points)?
@@ -263,6 +248,17 @@ pub fn cursor_over_ferry(cursor: (f64, f64), windows: &[(f64, f64, f64, f64)]) -
     windows
         .iter()
         .any(|&(x, y, w, h)| cursor.0 >= x && cursor.0 < x + w && cursor.1 >= y && cursor.1 < y + h)
+}
+
+/// The shelf's height in points while it is expanded (open or a drop target), else 0.
+pub fn expanded_pt(app: &AppHandle) -> f64 {
+    let Some(state) = state(app) else { return 0.0 };
+    let height = state.layout.lock().unwrap().height_pt;
+    if height > ferry_core::shelf_place::STRIP {
+        height
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]

@@ -770,7 +770,7 @@ const all: Setting[] = [
     label: 'floating.shelf_transparency',
     help: 'floating.shelf_transparency.help',
     path: 'floating.shelf_transparency',
-    control: { kind: 'slider', min: 0, max: 90 },
+    control: { kind: 'slider', min: 0, max: 98 },
   },
   {
     id: 'hover_hotkeys',

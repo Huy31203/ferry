@@ -242,24 +242,43 @@ pub fn cursor_monitor(app: &AppHandle) -> Option<Monitor> {
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
+/// The zone's base rect (without the shelf), its work area, corner and scale, from the last `place`.
+static BASE: std::sync::Mutex<Option<(Rect, Rect, Corner, f64)>> = std::sync::Mutex::new(None);
+
+/// Where the zone belongs while it shows, whether or not the shelf has pushed it up.
+pub fn base_rect(app: &AppHandle) -> Option<Rect> {
+    visible(app).then_some(())?;
+    BASE.lock().unwrap().map(|b| b.0)
+}
+
+/// The shelf grew or shrank: slide the zone up out of its way, or back down.
+/// Call on the main thread.
+pub fn follow_shelf(app: &AppHandle) {
+    let Some(window) = app
+        .get_webview_window(ZONE)
+        .filter(|w| w.is_visible().unwrap_or(false))
+    else {
+        return;
+    };
+    let Some((base, area, corner, scale)) = *BASE.lock().unwrap() else {
+        return;
+    };
+    let size = (base.width, base.height);
+    let at = clear_of_height(
+        area,
+        corner,
+        scale,
+        size,
+        (base.x, base.y),
+        crate::shelf::expanded_pt(app),
+    );
+    crate::glide::to(&window, scale, at);
+}
+
 /// The cursor in physical pixels, as the work areas are measured.
 pub fn cursor_px(app: &AppHandle) -> Option<(i32, i32)> {
     let p = app.cursor_position().ok()?;
     Some((p.x as i32, p.y as i32))
-}
-
-/// The zone window's physical rect while it shows.
-pub fn visible_rect(app: &AppHandle) -> Option<Rect> {
-    let window = app
-        .get_webview_window(ZONE)
-        .filter(|w| w.is_visible().unwrap_or(false))?;
-    let (p, s) = (window.outer_position().ok()?, window.outer_size().ok()?);
-    Some(Rect {
-        x: p.x,
-        y: p.y,
-        width: s.width,
-        height: s.height,
-    })
 }
 
 /// Size and move the window; `from_tab` puts the full zone where the tab was.
@@ -321,33 +340,53 @@ fn place(
             .and_then(|w| w.outer_size().ok())
             .map(|s| (s.width, s.height));
         let margin = (MARGIN * scale).round() as u32;
-        let room = if crate::shelf::offering(app) {
-            let expanded = (ferry_core::shelf_place::EXPANDED * scale).round() as u32;
-            ferry_core::shelf_place::stack_area(area, corner, expanded)
-        } else {
-            area
-        };
-        zone_near_results(room, corner, size, stack, margin, 0)
+        zone_near_results(area, corner, size, stack, margin, 0)
     };
-    let (x, y) = clear_of_shelf(app, area, corner, scale, size, (x, y));
+    // The zone's resting spot clears the shelf's strip; it slides further up only
+    // when the shelf expands.
+    let strip = if crate::shelf::state(app).is_some() {
+        ferry_core::shelf_place::STRIP
+    } else {
+        0.0
+    };
+    let (x, y) = clear_of_height(area, corner, scale, size, (x, y), strip);
+    *BASE.lock().unwrap() = Some((
+        Rect {
+            x,
+            y,
+            width: size.0,
+            height: size.1,
+        },
+        area,
+        corner,
+        scale,
+    ));
+    let (x, y) = clear_of_height(
+        area,
+        corner,
+        scale,
+        size,
+        (x, y),
+        crate::shelf::expanded_pt(app),
+    );
     apply_geometry(window, scale, size, (x, y));
 }
 
-/// While the shelf offers this drag, no zone placement may overlap its expanded rect (spec §4).
-fn clear_of_shelf(
-    app: &AppHandle,
+/// Move the zone up so it clears a shelf `height_pt` points tall on the bottom edge (spec §4).
+fn clear_of_height(
     area: Rect,
     corner: Corner,
     scale: f64,
     size: (u32, u32),
     at: (i32, i32),
+    height_pt: f64,
 ) -> (i32, i32) {
-    use ferry_core::shelf_place::{EXPANDED, WIDTH, clear_of, shelf_rect};
-    if !crate::shelf::offering(app) {
+    use ferry_core::shelf_place::{WIDTH, clear_of, shelf_rect};
+    if height_pt <= 0.0 {
         return at;
     }
     let px = |pt: f64| (pt * scale).round() as u32;
-    let shelf = shelf_rect(area, corner, (px(WIDTH), px(EXPANDED)), px(4.0));
+    let shelf = shelf_rect(area, corner, (px(WIDTH), px(height_pt)), px(4.0));
     let zone = Rect {
         x: at.0,
         y: at.1,

@@ -10,7 +10,7 @@
   interface Entry { path: string; name: string; ext: string; is_dir: boolean }
   interface ShelfView { items: Entry[]; size: number; can_undo: boolean; transparency: number }
 
-  let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, transparency: 80 });
+  let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, transparency: 95 });
   let hover = $state(false);
   let summoned = $state(false);
   let summonTimer: ReturnType<typeof setTimeout> | undefined;
@@ -132,6 +132,10 @@
     border-radius: 14px 14px 0 0; box-sizing: border-box; color: #fff;
     font: 12px -apple-system, system-ui, sans-serif; user-select: none;
   }
+  @keyframes rise-open { from { transform: translateY(143px); } }
+  @keyframes rise-strip { from { transform: translateY(27px); } }
+  .shelf { animation: rise-strip 160ms ease-out; }
+  .shelf.open { animation: rise-open 160ms cubic-bezier(0.2, 0.8, 0.3, 1); }
   .shelf.target { outline: 2px solid var(--accent, #0a84ff); outline-offset: -3px; }
   .grip { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.75); }
   .count { position: absolute; right: 10px; top: 4px; font-size: 10px; font-weight: 700; }

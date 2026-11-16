@@ -132,4 +132,5 @@ fn restack_if(app: &AppHandle, before: u32, scale: f64) {
     if super::inset_px(app, scale) != before {
         crate::windows::restack(app);
     }
+    crate::drop_batch::zone::follow_shelf(app);
 }

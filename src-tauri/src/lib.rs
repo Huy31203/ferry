@@ -3,6 +3,7 @@ mod clipboard;
 mod commands;
 mod compare;
 mod drop_batch;
+mod glide;
 mod hotkeys;
 mod hover_keys;
 mod integrations; // Stream H

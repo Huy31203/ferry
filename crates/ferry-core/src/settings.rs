@@ -197,7 +197,7 @@ pub struct Floating {
     pub follow_cursor: bool,
     /// Space, Cmd/Ctrl+D, - and 1–9 act on the hovered card.
     pub hover_hotkeys: bool,
-    /// How see-through the shelf's panel is, in percent (0–90).
+    /// How see-through the shelf's panel is, in percent (0–98).
     pub shelf_transparency: u32,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -447,7 +447,7 @@ impl Default for Floating {
             auto_hide_secs: 6,
             follow_cursor: true,
             hover_hotkeys: true,
-            shelf_transparency: 80,
+            shelf_transparency: 95,
             extra: Map::new(),
         }
     }
@@ -948,7 +948,7 @@ impl Settings {
         self.images.max_size_mb = self.images.max_size_mb.max(1);
         self.clipboard.max_size_mb = self.clipboard.max_size_mb.max(1);
         self.floating.auto_hide_secs = self.floating.auto_hide_secs.min(3600);
-        self.floating.shelf_transparency = self.floating.shelf_transparency.min(90);
+        self.floating.shelf_transparency = self.floating.shelf_transparency.min(98);
         self.backups.retention_days = self.backups.retention_days.clamp(1, 3650);
         for list in [
             &mut self.images.ignored_extensions,
@@ -1280,7 +1280,7 @@ mod tests {
         assert_eq!(s.images.compression, 5);
         assert_eq!((s.images.max_size_mb, s.clipboard.max_size_mb), (1, 1));
         assert_eq!(s.floating.auto_hide_secs, 3600);
-        assert_eq!(s.floating.shelf_transparency, 90);
+        assert_eq!(s.floating.shelf_transparency, 98);
         assert_eq!(s.backups.retention_days, 1);
         assert_eq!(s.images.ignored_extensions, vec!["png".to_string()]);
         assert_eq!(

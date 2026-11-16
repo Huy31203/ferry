@@ -11,6 +11,9 @@ use crate::state::AppState;
 use crate::{hover_keys, platform};
 
 /// The stack's last requested size, for `restack`.
+/// Set by `restack`: the next `stack_resize` slides instead of jumping.
+static SLIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 static LAST: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
 
 pub const STACK: &str = "stack";
@@ -113,6 +116,7 @@ pub fn stack_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
 pub fn restack(app: &AppHandle) {
     let last = *LAST.lock().unwrap();
     if let Some((width, height)) = last {
+        SLIDE.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = stack_resize(app.clone(), width, height);
     }
 }
@@ -178,12 +182,16 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
                 f64::from(size.1) / scale,
             ))
             .map_err(|e| e.to_string())?;
-        stack
-            .set_position(LogicalPosition::new(
-                f64::from(x) / scale,
-                f64::from(y) / scale,
-            ))
-            .map_err(|e| e.to_string())?;
+        if SLIDE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            crate::glide::to(&stack, scale, (x, y));
+        } else {
+            stack
+                .set_position(LogicalPosition::new(
+                    f64::from(x) / scale,
+                    f64::from(y) / scale,
+                ))
+                .map_err(|e| e.to_string())?;
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
