@@ -7,7 +7,7 @@
   import { formatBytes } from '../lib/format';
   import { t } from '../lib/i18n';
   import type { Settings } from '../lib/settings';
-  import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, SLIDE_MS, stripHeight, stripState, stripWidth, WIDTH, type DragView } from './strip';
+  import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, SLIDE_MS, stripHeight, stripState, stripWidth, WIDTH, type DragView, type StripState } from './strip';
 
   interface Entry { path: string; name: string; ext: string; is_dir: boolean; size: number; card: boolean }
   interface ShelfView { items: Entry[]; size: number; can_undo: boolean; opacity: number; side: 'left' | 'right' }
@@ -28,6 +28,14 @@
   const width = $derived(stripWidth(mode, listing));
   // The panel is a fixed-size box that slides (a transform, so it stays smooth). The window
   // grows first and shrinks only after the slide, so a collapse plays out.
+  // What the markup shows lags `mode`: content switches only once the box can hold it
+  // (growing) or the slide is over (shrinking), so it never overflows a small box.
+  let shownMode = $state<StripState>('hidden');
+  let shownListing = $state(false);
+  const showNow = () => {
+    shownMode = untrack(() => mode);
+    shownListing = untrack(() => listing);
+  };
   let panelH = $state(0); // the visible height
   let boxH = $state(0); // the window's height
   let panelW = $state(WIDTH);
@@ -38,6 +46,8 @@
     requestAnimationFrame(() => (n <= 1 ? fn() : frames(n - 1, fn)));
   $effect(() => {
     const [h, w] = [height, width];
+    void mode; // a change of state at the same size must still reach the markup
+    void listing;
     const bh = untrack(() => boxH);
     clearTimeout(shrinkTimer);
     if (h <= bh) {
@@ -45,8 +55,10 @@
       panelH = h;
       panelW = w;
       void invoke('shelf_layout', { height: h, width: w });
+      if (h === bh) showNow();
       if (h < bh) {
         shrinkTimer = setTimeout(() => {
+          showNow();
           animate = false;
           boxH = h;
           frames(2, () => (animate = true));
@@ -57,6 +69,7 @@
         animate = false;
         boxH = h;
         panelW = w;
+        showNow();
         frames(2, () => {
           animate = true;
           frames(1, () => (panelH = h));
@@ -169,8 +182,8 @@
 
 <div
   class="shelf"
-  class:open={mode === 'open' || mode === 'target'}
-  class:target={mode === 'target'}
+  class:open={shownMode === 'open' || shownMode === 'target'}
+  class:target={shownMode === 'target'}
   class:left={view.side === 'left'}
   class:right={view.side === 'right'}
   class:still={!animate}
@@ -183,21 +196,21 @@
   onmouseenter={enter}
   onmouseleave={leave}
 >
-  {#if mode !== 'cleared'}
+  {#if shownMode !== 'cleared'}
     <div class="grip"></div>
   {/if}
-  {#if mode === 'resting' && view.items.length > 0}
+  {#if shownMode === 'resting' && view.items.length > 0}
     <span class="count">{view.items.length}</span>
   {/if}
-  {#if mode === 'cleared'}
+  {#if shownMode === 'cleared'}
     <div class="cleared">
       <span class="note">{t('shelf.cleared')}</span>
       <button class="undo" onclick={() => invoke('shelf_undo')}>{t('shelf.undo')}</button>
     </div>
   {/if}
-  {#if mode === 'target'}
+  {#if shownMode === 'target'}
     <span class="drop">{t('shelf.drop')}</span>
-  {:else if mode === 'open' && listing}
+  {:else if shownMode === 'open' && shownListing}
     <ul class="list">
       {#each view.items as item (item.path)}
         <li role="presentation" onmousedown={(e) => armDrag(e, [item.path])} oncontextmenu={(e) => itemMenu(e, item.path)}>
@@ -223,7 +236,7 @@
       {/each}
     </ul>
     <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-  {:else if mode === 'open'}
+  {:else if shownMode === 'open'}
     <div class="pile" role="presentation" onmousedown={(e) => armDrag(e)}>
       {#each pile as item, i (item.path)}
         <div class="doc" style:transform={`rotate(${(i - (pile.length - 1) / 2) * 7}deg)`}>
