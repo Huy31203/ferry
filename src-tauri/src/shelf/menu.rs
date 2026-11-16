@@ -209,7 +209,7 @@ fn run(app: &AppHandle, id: &str) {
         "shelf:archive:balanced" => super::archive::quick(app, super::archive::Preset::Balanced),
         "shelf:archive:smallest" => super::archive::quick(app, super::archive::Preset::Smallest),
         "shelf:archive:stop" => super::archive::cancel(),
-        "shelf:archive:advanced" => {}
+        "shelf:archive:advanced" => super::archive_dialog::open(app),
         "shelf:show_items" => {
             let _ = app.emit_to(SHELF, "shelf:show_items", ());
         }

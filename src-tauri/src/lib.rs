@@ -80,6 +80,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
             windows::stack_pointer,
+            shelf::archive_dialog::archive_view,
+            shelf::archive_dialog::archive_estimate,
+            shelf::archive_dialog::archive_pick,
+            shelf::archive_dialog::archive_start,
+            shelf::archive_dialog::archive_close,
             shelf::commands::shelf_view,
             shelf::commands::shelf_add,
             shelf::commands::shelf_remove,

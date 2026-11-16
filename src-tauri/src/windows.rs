@@ -57,6 +57,7 @@ pub fn follows_screenshot_setting(label: &str) -> bool {
     match label {
         STACK | crate::compare::COMPARE => true,
         crate::drop_batch::ZONE | crate::shelf::SHELF => true, // floating UI
+        crate::shelf::archive_dialog::ARCHIVE => true,
         _ => false,
     }
 }
@@ -254,6 +255,9 @@ mod tests {
     fn the_stack_and_the_compare_window_follow_the_screenshot_setting() {
         assert!(follows_screenshot_setting(STACK));
         assert!(follows_screenshot_setting(crate::compare::COMPARE));
+        assert!(follows_screenshot_setting(
+            crate::shelf::archive_dialog::ARCHIVE
+        ));
         assert!(!follows_screenshot_setting(SETTINGS));
     }
 }

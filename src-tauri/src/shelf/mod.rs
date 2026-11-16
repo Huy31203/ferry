@@ -2,6 +2,7 @@
 //! by reference. macOS only; `init` does nothing elsewhere.
 
 pub mod archive;
+pub mod archive_dialog;
 pub mod commands;
 pub mod menu;
 pub mod window;

@@ -22,6 +22,7 @@ export default defineConfig({
         batch: page('batch.html'),
         drop: page('drop.html'),
         shelf: page('shelf.html'),
+        archive: page('archive.html'),
         pipelines: page('pipelines.html'), // stream F
         zones: page('zones.html'), // stream F
       },
