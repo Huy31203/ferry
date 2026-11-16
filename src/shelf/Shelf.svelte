@@ -3,11 +3,12 @@
   import { listen } from '@tauri-apps/api/event';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { fanIcon } from '../lib/dragicon';
+  import { formatBytes } from '../lib/format';
   import { t } from '../lib/i18n';
   import type { Settings } from '../lib/settings';
   import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, stripHeight, stripState, type DragView } from './strip';
 
-  interface Entry { path: string; name: string; ext: string; is_dir: boolean }
+  interface Entry { path: string; name: string; ext: string; is_dir: boolean; size: number }
   interface ShelfView { items: Entry[]; size: number; can_undo: boolean; opacity: number }
 
   let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, opacity: 95 });
@@ -20,7 +21,7 @@
   let leaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   const mode = $derived(stripState({ count: view.items.length, canUndo: view.can_undo, hover: hover || listing, summoned, drag }));
-  const height = $derived(stripHeight(mode));
+  const height = $derived(stripHeight(mode, listing));
   const pile = $derived(view.items.slice(-3));
 
   $effect(() => {
@@ -120,20 +121,38 @@
   onmouseenter={enter}
   onmouseleave={leave}
 >
-  <div class="grip"></div>
+  {#if mode !== 'cleared'}
+    <div class="grip"></div>
+  {/if}
   {#if mode === 'resting' && view.items.length > 0}
     <span class="count">{view.items.length}</span>
   {/if}
   {#if mode === 'cleared'}
-    <span class="note">{t('shelf.cleared')}</span>
-    <button class="undo" onclick={() => invoke('shelf_undo')}>{t('shelf.undo')}</button>
+    <div class="cleared">
+      <span class="note">{t('shelf.cleared')}</span>
+      <button class="undo" onclick={() => invoke('shelf_undo')}>{t('shelf.undo')}</button>
+    </div>
   {/if}
   {#if mode === 'target'}
     <span class="drop">{t('shelf.drop')}</span>
   {:else if mode === 'open' && listing}
     <ul class="list">
       {#each view.items as item (item.path)}
-        <li role="presentation" onmousedown={(e) => dragPile(e, [item.path])} oncontextmenu={(e) => itemMenu(e, item.path)}>{item.name}</li>
+        <li role="presentation" onmousedown={(e) => dragPile(e, [item.path])} oncontextmenu={(e) => itemMenu(e, item.path)}>
+          <span class="badge">{item.is_dir ? '📁' : item.ext || '·'}</span>
+          <span class="meta">
+            <span class="name">{item.name}</span>
+            <span class="sub">{item.is_dir ? t('shelf.folder') : formatBytes(item.size)}</span>
+          </span>
+          <span class="acts">
+            <button type="button" title={t('shelf.menu.reveal')} aria-label={t('shelf.menu.reveal')} onmousedown={(e) => e.stopPropagation()} onclick={() => invoke('shelf_reveal', { path: item.path })}>
+              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2h6v6M10 2 3 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button type="button" title={t('shelf.menu.remove')} aria-label={t('shelf.menu.remove')} onmousedown={(e) => e.stopPropagation()} onclick={() => invoke('shelf_remove', { paths: [item.path] })}>
+              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6h7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
+            </button>
+          </span>
+        </li>
       {/each}
     </ul>
     <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
@@ -157,20 +176,29 @@
     border-radius: 14px 14px 0 0; box-sizing: border-box; color: #fff;
     font: 12px -apple-system, system-ui, sans-serif; user-select: none;
   }
-  @keyframes rise-open { from { transform: translateY(143px); } }
+  @keyframes rise-open { from { transform: translateY(calc(100% - 27px)); } }
   @keyframes rise-strip { from { transform: translateY(27px); } }
   .shelf { animation: rise-strip 160ms ease-out; }
   .shelf.open { animation: rise-open 160ms cubic-bezier(0.2, 0.8, 0.3, 1); }
   .shelf.target { outline: 2px solid var(--accent, #0a84ff); outline-offset: -3px; }
   .grip { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.75); }
   .count { position: absolute; right: 10px; top: 4px; font-size: 10px; font-weight: 700; }
-  .note { position: absolute; left: 10px; top: 6px; font-size: 11px; }
+  .cleared { position: absolute; left: 0; right: 0; top: 0; height: 27px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; }
+  .note { font-size: 11px; }
   .drop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 600; }
   .pile { position: absolute; left: 50%; top: 26px; width: 62px; height: 78px; transform: translateX(-50%); }
   .doc { position: absolute; inset: 0; background: #fff; border-radius: 3px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; justify-content: center; color: #555; font-size: 10px; text-transform: uppercase; padding-bottom: 6px; box-sizing: border-box; }
-  .undo { position: absolute; right: 10px; top: 3px; background: none; border: 0; color: var(--accent, #58a6ff); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
-  .list { position: absolute; left: 10px; right: 10px; top: 22px; bottom: 44px; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
-  .list li { padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: grab; }
+  .undo { background: none; border: 0; color: var(--accent, #58a6ff); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+  .list { position: absolute; left: 8px; right: 8px; top: 12px; bottom: 44px; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+  .list li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: grab; }
   .list li:hover { background: rgba(255, 255, 255, 0.12); }
+  .badge { flex: none; width: 28px; height: 28px; border-radius: 5px; background: #fff; color: #555; font-size: 9px; text-transform: uppercase; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { font-size: 10px; opacity: 0.65; }
+  .acts { flex: none; display: none; gap: 2px; }
+  .list li:hover .acts { display: flex; }
+  .acts button { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: rgba(0, 0, 0, 0.35); color: inherit; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .acts button:hover { background: rgba(0, 0, 0, 0.6); }
   .pill { border: 0; color: inherit; font: inherit; position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 5px; background: rgba(0, 0, 0, 0.45); border-radius: 12px; padding: 3px 10px; white-space: nowrap; cursor: default; }
 </style>

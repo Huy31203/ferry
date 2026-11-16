@@ -7,6 +7,9 @@ pub const WIDTH: f64 = 150.0;
 pub const EXPANDED: f64 = 170.0;
 /// 16 % of the expanded height.
 pub const STRIP: f64 = 27.0;
+/// The side margin that centres the shelf under the 244 pt drop zone placed at the
+/// same corner: 4 + (244 − 150) / 2.
+pub const SIDE: f64 = 51.0;
 /// How near a drag must come to the strip to expand it.
 pub const REACH: f64 = 80.0;
 
@@ -264,5 +267,19 @@ mod tests {
             80,
             Some(zone)
         ));
+    }
+
+    #[test]
+    fn the_shelf_is_centred_under_a_zone_placed_at_the_corner() {
+        let zone = (244, 164);
+        for corner in [Corner::BottomRight, Corner::BottomLeft] {
+            let (zx, _) = zone_near_results(AREA, corner, zone, None, 4, 0);
+            let shelf = shelf_rect(AREA, corner, (150, 27), px(SIDE));
+            assert_eq!(zx + 122, shelf.x + 75, "{corner:?}");
+        }
+    }
+
+    fn px(pt: f64) -> u32 {
+        pt as u32
     }
 }

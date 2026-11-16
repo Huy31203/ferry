@@ -24,6 +24,8 @@ export interface StripInput {
 export const NO_DRAG: DragView = { offer: false, near: false, own: false };
 export const STRIP = 27;
 export const EXPANDED = 170;
+/** The panel while "Show items…" lists them. */
+export const LIST = 300;
 export const COLLAPSE_MS = 300;
 export const UNDO_MS = 5000;
 export const SUMMON_MS = 4000;
@@ -38,9 +40,10 @@ export function stripState({ count, canUndo, hover, summoned, drag }: StripInput
   return 'hidden';
 }
 
-export function stripHeight(state: StripState): number {
+export function stripHeight(state: StripState, listing = false): number {
   if (state === 'hidden') return 0;
-  if (state === 'open' || state === 'target') return EXPANDED;
+  if (state === 'open') return listing ? LIST : EXPANDED;
+  if (state === 'target') return EXPANDED;
   return STRIP;
 }
 

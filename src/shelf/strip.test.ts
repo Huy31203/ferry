@@ -35,6 +35,8 @@ describe('stripHeight', () => {
     expect(stripHeight('cleared')).toBe(27);
     expect(stripHeight('open')).toBe(170);
     expect(stripHeight('target')).toBe(170);
+    expect(stripHeight('open', true)).toBe(300);
+    expect(stripHeight('target', true)).toBe(170);
   });
 });
 

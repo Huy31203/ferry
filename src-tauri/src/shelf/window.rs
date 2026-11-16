@@ -13,9 +13,6 @@ use super::{SHELF, state};
 use crate::platform;
 use crate::state::AppState;
 
-/// Matches the stack's side margin (`windows.rs` STACK_MARGIN).
-const MARGIN: f64 = 4.0;
-
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let show_in_screenshots = app
         .state::<AppState>()
@@ -114,7 +111,7 @@ pub fn layout(app: &AppHandle, height_pt: f64) {
         (WIDTH * scale).round() as u32,
         (height_pt * scale).round() as u32,
     );
-    let margin = (MARGIN * scale).round() as u32;
+    let margin = (shelf_place::SIDE * scale).round() as u32;
     let rect = shelf_place::shelf_rect(area_of(&monitor), corner(app), size, margin);
     *state.layout.lock().unwrap() = super::Layout { height_pt };
     use tauri::{LogicalPosition, LogicalSize};

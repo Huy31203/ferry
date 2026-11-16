@@ -108,3 +108,8 @@ pub fn shelf_item_menu(app: AppHandle, path: String, x: f64, y: f64) -> Result<(
 pub fn shelf_undo(app: AppHandle) {
     super::mutate(&app, |list| list.undo());
 }
+
+#[tauri::command]
+pub fn shelf_reveal(path: String) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
+}

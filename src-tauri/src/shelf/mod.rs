@@ -44,6 +44,8 @@ pub struct Entry {
     pub name: String,
     pub ext: String,
     pub is_dir: bool,
+    /// Bytes for a file, 0 for a folder.
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,6 +113,10 @@ pub fn view(app: &AppHandle) -> ShelfView {
                 .extension()
                 .map_or_else(String::new, |e| e.to_string_lossy().to_lowercase()),
             is_dir: i.path.is_dir(),
+            size: std::fs::metadata(&i.path)
+                .ok()
+                .filter(|m| m.is_file())
+                .map_or(0, |m| m.len()),
         })
         .collect();
     let size = list
@@ -235,13 +241,13 @@ pub fn track(app: &AppHandle) {
 }
 
 fn near_strip(app: &AppHandle) -> Option<bool> {
-    use ferry_core::shelf_place::{REACH, STRIP, WIDTH, drag_near, shelf_rect};
+    use ferry_core::shelf_place::{REACH, SIDE, STRIP, WIDTH, drag_near, shelf_rect};
     let monitor = window::monitor(app)?;
     let scale = monitor.scale_factor();
     let px = |pt: f64| (pt * scale).round() as u32;
     let area = window::area_of(&monitor);
     let corner = window::corner(app);
-    let strip = shelf_rect(area, corner, (px(WIDTH), px(STRIP)), px(4.0));
+    let strip = shelf_rect(area, corner, (px(WIDTH), px(STRIP)), px(SIDE));
     let zone = crate::drop_batch::zone::base_rect(app);
     let cursor = crate::drop_batch::zone::cursor_px(app)?;
     Some(drag_near(cursor, strip, px(REACH), zone))

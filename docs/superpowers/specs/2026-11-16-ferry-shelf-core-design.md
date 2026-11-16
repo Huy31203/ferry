@@ -30,6 +30,8 @@ Success: drag three Finder files and a result card onto the strip, quit and rela
 - **Expanded** (hover, or a drag near the strip): file pile preview (up to three stacked thumbnails or file icons, slightly rotated) and a pill "N Items ⌄" at the bottom.
 - **Drop target**: expanded with an accent outline and the label "Drop to shelve".
 - **Opacity**: the panel's background is `floating.shelf_opacity` percent solid (default 95, 20–100, Settings → Floating). Content stays solid.
+- **Horizontal alignment**: the shelf is centred under the drop zone when the zone sits at the corner (`shelf_place::SIDE`).
+- **Show items…**: the panel grows to 300 pt and lists each item with a type badge, name, size, and on hover Show in Finder and Remove; rows drag out singly.
 - **Cleared**: the strip shows "Shelf cleared · Undo" for 5 s (§6).
 - No ✕ anywhere.
 

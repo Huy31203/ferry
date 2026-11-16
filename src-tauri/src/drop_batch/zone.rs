@@ -381,12 +381,12 @@ fn clear_of_height(
     at: (i32, i32),
     height_pt: f64,
 ) -> (i32, i32) {
-    use ferry_core::shelf_place::{WIDTH, clear_of, shelf_rect};
+    use ferry_core::shelf_place::{SIDE, WIDTH, clear_of, shelf_rect};
     if height_pt <= 0.0 {
         return at;
     }
     let px = |pt: f64| (pt * scale).round() as u32;
-    let shelf = shelf_rect(area, corner, (px(WIDTH), px(height_pt)), px(4.0));
+    let shelf = shelf_rect(area, corner, (px(WIDTH), px(height_pt)), px(SIDE));
     let zone = Rect {
         x: at.0,
         y: at.1,

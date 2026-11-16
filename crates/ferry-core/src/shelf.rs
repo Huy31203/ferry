@@ -193,7 +193,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = file(dir.path(), "a.png");
         let mut shelf = Shelf::default();
-        shelf.add(&[a.clone()], 1);
+        shelf.add(std::slice::from_ref(&a), 1);
         shelf.clear();
         assert!(shelf.items.is_empty() && shelf.can_undo());
         assert!(shelf.undo());
@@ -208,7 +208,7 @@ mod tests {
         let mut shelf = Shelf::default();
         shelf.add(&[a], 1);
         shelf.clear();
-        shelf.add(&[b.clone()], 2);
+        shelf.add(std::slice::from_ref(&b), 2);
         assert!(!shelf.undo());
         assert_eq!(shelf.paths(), vec![b]);
     }
@@ -236,10 +236,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (file(dir.path(), "a.png"), file(dir.path(), "a.webp"));
         let mut shelf = Shelf::default();
-        shelf.add(&[a.clone()], 1);
+        shelf.add(std::slice::from_ref(&a), 1);
         shelf.replace(&a, &b);
         assert_eq!(shelf.paths(), vec![b.clone()]);
-        shelf.add(&[a.clone()], 2);
+        shelf.add(std::slice::from_ref(&a), 2);
         shelf.replace(&a, &b); // b is already there: a just goes
         assert_eq!(shelf.paths(), vec![b]);
     }
