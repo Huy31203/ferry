@@ -81,6 +81,15 @@ pub enum CardSize {
     Compact,
 }
 
+/// What the shelf holds after "Add to archive" (shelf archive spec §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveResult {
+    #[default]
+    Replace,
+    Add,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct General {
@@ -199,6 +208,8 @@ pub struct Floating {
     pub hover_hotkeys: bool,
     /// How solid the shelf's panel is, in percent (20–100).
     pub shelf_opacity: u32,
+    /// Whether the archive replaces the shelf's items or joins them.
+    pub shelf_archive_result: ArchiveResult,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -448,6 +459,7 @@ impl Default for Floating {
             follow_cursor: true,
             hover_hotkeys: true,
             shelf_opacity: 95,
+            shelf_archive_result: ArchiveResult::Replace,
             extra: Map::new(),
         }
     }
@@ -1063,6 +1075,16 @@ pub fn contract_home(path: &Path, home: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn shelf_archive_result_defaults_to_replace_and_reads_add() {
+        assert_eq!(
+            Settings::default().floating.shelf_archive_result,
+            ArchiveResult::Replace
+        );
+        let s: Floating = serde_json::from_str(r#"{"shelf_archive_result":"add"}"#).unwrap();
+        assert_eq!(s.shelf_archive_result, ArchiveResult::Add);
+    }
 
     #[test]
     fn dragged_images_go_to_downloads_ferry_by_default() {

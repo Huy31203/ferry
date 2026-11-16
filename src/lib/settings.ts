@@ -71,6 +71,7 @@ export interface Settings {
     follow_cursor: boolean;
     hover_hotkeys: boolean;
     shelf_opacity: number;
+    shelf_archive_result: 'replace' | 'add';
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };

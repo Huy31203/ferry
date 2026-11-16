@@ -54,6 +54,7 @@ export const sample: Settings = {
     follow_cursor: true,
     hover_hotkeys: true,
     shelf_opacity: 95,
+    shelf_archive_result: 'replace',
   },
   backups: { retention_days: 7 },
   hotkeys: { optimise: 'Ctrl+Shift+C', aggressive: 'Ctrl+Shift+A', cycle_state: 'Ctrl+Shift+P' },
