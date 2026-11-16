@@ -108,8 +108,10 @@ pub fn side(app: &AppHandle) -> &'static str {
     }
 }
 
-/// How long the window outlives a shrinking panel, so the page can animate it out.
-const SHRINK_MS: u64 = 360;
+/// How long the window outlives a shrinking panel: the page's slide (`SLIDE_MS`, 340) plus
+/// its own box shrink (at 360) must both finish before the window does, or the old tall
+/// box shows clipped for a moment.
+const SHRINK_MS: u64 = 520;
 
 /// The window's current size in points, and the newest layout request.
 static WINDOW: std::sync::Mutex<(f64, f64)> = std::sync::Mutex::new((0.0, 0.0));
