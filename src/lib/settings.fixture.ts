@@ -53,7 +53,7 @@ export const sample: Settings = {
     auto_hide_secs: 6,
     follow_cursor: true,
     hover_hotkeys: true,
-    shelf_transparency: 95,
+    shelf_opacity: 95,
   },
   backups: { retention_days: 7 },
   hotkeys: { optimise: 'Ctrl+Shift+C', aggressive: 'Ctrl+Shift+A', cycle_state: 'Ctrl+Shift+P' },

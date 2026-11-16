@@ -48,8 +48,8 @@ pub struct ShelfView {
     pub items: Vec<Entry>,
     pub size: u64,
     pub can_undo: bool,
-    /// `floating.shelf_transparency`, percent.
-    pub transparency: u32,
+    /// `floating.shelf_opacity`, percent.
+    pub opacity: u32,
 }
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
@@ -89,7 +89,7 @@ pub fn view(app: &AppHandle) -> ShelfView {
             items: vec![],
             size: 0,
             can_undo: false,
-            transparency: 95,
+            opacity: 95,
         };
     };
     let list = state.list.lock().unwrap();
@@ -116,18 +116,18 @@ pub fn view(app: &AppHandle) -> ShelfView {
         .filter(|m| m.is_file())
         .map(|m| m.len())
         .sum();
-    let transparency = app
+    let opacity = app
         .state::<AppState>()
         .settings
         .read()
         .unwrap()
         .floating
-        .shelf_transparency;
+        .shelf_opacity;
     ShelfView {
         items,
         size,
         can_undo: list.can_undo(),
-        transparency,
+        opacity,
     }
 }
 

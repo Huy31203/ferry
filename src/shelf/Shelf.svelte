@@ -8,9 +8,9 @@
   import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, stripHeight, stripState, type DragView } from './strip';
 
   interface Entry { path: string; name: string; ext: string; is_dir: boolean }
-  interface ShelfView { items: Entry[]; size: number; can_undo: boolean; transparency: number }
+  interface ShelfView { items: Entry[]; size: number; can_undo: boolean; opacity: number }
 
-  let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, transparency: 95 });
+  let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, opacity: 95 });
   let hover = $state(false);
   let summoned = $state(false);
   let summonTimer: ReturnType<typeof setTimeout> | undefined;
@@ -34,7 +34,7 @@
         summonTimer = setTimeout(() => (summoned = false), SUMMON_MS);
       }),
       listen<DragView>('shelf:drag', (e) => (drag = e.payload)),
-      listen<Settings>('settings:changed', (e) => (view.transparency = e.payload.floating.shelf_transparency)),
+      listen<Settings>('settings:changed', (e) => (view.opacity = e.payload.floating.shelf_opacity)),
     ];
     void invoke<ShelfView>('shelf_view').then((v) => (view = v));
     return () => offs.forEach((off) => off.then((fn) => fn()));
@@ -97,7 +97,7 @@
   class="shelf"
   class:open={mode === 'open' || mode === 'target'}
   class:target={mode === 'target'}
-  style:--solid={1 - view.transparency / 100}
+  style:--solid={view.opacity / 100}
   role="region"
   aria-label={t('shelf.window_title')}
   onmouseenter={enter}

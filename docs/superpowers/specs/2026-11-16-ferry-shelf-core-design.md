@@ -29,7 +29,7 @@ Success: drag three Finder files and a result card onto the strip, quit and rela
 - **Resting** (during a drag only): a flat strip, 16 % of the expanded height, with a grip line "—" inside it (no raised tab) and the item count at the right.
 - **Expanded** (hover, or a drag near the strip): file pile preview (up to three stacked thumbnails or file icons, slightly rotated) and a pill "N Items ⌄" at the bottom.
 - **Drop target**: expanded with an accent outline and the label "Drop to shelve".
-- **Transparency**: the panel's background is `floating.shelf_transparency` percent see-through (default 95, 0–98, Settings → Floating). Content stays solid.
+- **Opacity**: the panel's background is `floating.shelf_opacity` percent solid (default 95, 20–100, Settings → Floating). Content stays solid.
 - **Cleared**: the strip shows "Shelf cleared · Undo" for 5 s (§6).
 - No ✕ anywhere.
 
