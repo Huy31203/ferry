@@ -31,6 +31,8 @@ struct Context<'a> {
     frontmost: Option<&'a str>,
     visible: bool,
     windows: bool,
+    /// The shelf's own pile is being dragged.
+    shelf_dragging: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -43,6 +45,9 @@ enum Plan {
 }
 
 fn plan(signal: Signal, ctx: &Context) -> Plan {
+    if ctx.shelf_dragging && signal == Signal::DragStarted {
+        return Plan::Nothing;
+    }
     match signal {
         Signal::DragStarted => {
             let has_drop = !ctx.files.is_empty() || ctx.images > 0;
@@ -85,6 +90,32 @@ fn plan(signal: Signal, ctx: &Context) -> Plan {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum ShelfPlan {
+    /// Show the strip; expand it as a drop target when the drag comes near.
+    Offer,
+    /// The shelf's own pile: stay open, no drop target.
+    Hold,
+    Nothing,
+}
+
+fn shelf_plan(signal: Signal, ctx: &Context) -> ShelfPlan {
+    if signal != Signal::DragStarted {
+        return ShelfPlan::Nothing;
+    }
+    if ctx.shelf_dragging {
+        return ShelfPlan::Hold;
+    }
+    let ignored = ctx
+        .frontmost
+        .is_some_and(|a| ferry_core::drag::is_ignored_app(&ctx.zone.ignored_apps, a));
+    if ctx.files.is_empty() || ignored {
+        ShelfPlan::Nothing
+    } else {
+        ShelfPlan::Offer
+    }
+}
+
 /// Start the watcher thread.
 pub fn start(app: &AppHandle) {
     let app = app.clone();
@@ -103,6 +134,9 @@ fn run(app: &AppHandle) {
         let sample = platform::drop::sample(t0.elapsed().as_millis() as u64);
         for signal in watch.feed(&sample) {
             handle(app, signal);
+        }
+        if watch.active() {
+            crate::shelf::track(app);
         }
         let ms = if watch.active() || sample.button {
             ACTIVE_MS
@@ -145,7 +179,10 @@ fn handle(app: &AppHandle, signal: Signal) {
         frontmost: frontmost.as_deref(),
         visible: zone::visible(app),
         windows: cfg!(windows),
+        shelf_dragging: crate::shelf::state(app)
+            .is_some_and(|s| s.dragging.load(std::sync::atomic::Ordering::SeqCst)),
     };
+    let shelf = shelf_plan(signal, &ctx);
     match plan(signal, &ctx) {
         Plan::Show { mode, under_cursor } => {
             zone::show(app, mode, under_cursor, None);
@@ -164,6 +201,14 @@ fn handle(app: &AppHandle, signal: Signal) {
             let _ = app.emit("drag:tap", json!({ "modifier": modifier }));
         }
         Plan::Nothing => {}
+    }
+    match shelf {
+        ShelfPlan::Offer => crate::shelf::on_drag(app, true, false),
+        ShelfPlan::Hold => crate::shelf::on_drag(app, false, true),
+        ShelfPlan::Nothing => {}
+    }
+    if signal == Signal::DragEnded {
+        crate::shelf::drag_ended(app);
     }
 }
 
@@ -197,6 +242,7 @@ mod tests {
             frontmost: Some("com.apple.finder"),
             visible: false,
             windows: false,
+            shelf_dragging: false,
         }
     }
 
@@ -315,5 +361,70 @@ mod tests {
             std::thread::spawn(|| (platform::drop::sample(0), platform::drop::drag_contents()))
                 .join();
         assert!(joined.is_ok());
+    }
+
+    #[test]
+    fn a_file_drag_from_another_app_offers_the_shelf() {
+        let (zone, files) = (any_drag(), [PathBuf::from("/a.png")]);
+        assert_eq!(
+            shelf_plan(Signal::DragStarted, &ctx(&zone, &files)),
+            ShelfPlan::Offer
+        );
+    }
+
+    #[test]
+    fn ferrys_own_cards_offer_the_shelf_though_the_zone_hides() {
+        let (zone, files) = (any_drag(), [PathBuf::from("/out/a.png")]);
+        let own = Context {
+            all_own: true,
+            ..ctx(&zone, &files)
+        };
+        assert_eq!(plan(Signal::DragStarted, &own), Plan::Nothing);
+        assert_eq!(shelf_plan(Signal::DragStarted, &own), ShelfPlan::Offer);
+    }
+
+    #[test]
+    fn the_shelfs_own_pile_hides_the_zone_and_offers_no_target() {
+        let (zone, files) = (any_drag(), [PathBuf::from("/a.png")]);
+        let pile = Context {
+            shelf_dragging: true,
+            ..ctx(&zone, &files)
+        };
+        assert_eq!(plan(Signal::DragStarted, &pile), Plan::Nothing);
+        assert_eq!(shelf_plan(Signal::DragStarted, &pile), ShelfPlan::Hold);
+    }
+
+    #[test]
+    fn an_image_only_drag_leaves_the_shelf_alone() {
+        let zone = any_drag();
+        let image = Context {
+            images: 1,
+            ..ctx(&zone, &[])
+        };
+        assert_eq!(plan(Signal::DragStarted, &image), SHOW_ZONE);
+        assert_eq!(shelf_plan(Signal::DragStarted, &image), ShelfPlan::Nothing);
+    }
+
+    #[test]
+    fn an_ignored_app_leaves_the_shelf_alone() {
+        let (zone, files) = (any_drag(), [PathBuf::from("/a.png")]);
+        let figma = Context {
+            frontmost: Some("com.figma.Desktop"),
+            ..ctx(&zone, &files)
+        };
+        assert_eq!(shelf_plan(Signal::DragStarted, &figma), ShelfPlan::Nothing);
+    }
+
+    #[test]
+    fn the_shelf_offers_even_when_the_zone_is_turned_off() {
+        let zone = DropZone {
+            enabled: false,
+            ..any_drag()
+        };
+        let files = [PathBuf::from("/a.png")];
+        assert_eq!(
+            shelf_plan(Signal::DragStarted, &ctx(&zone, &files)),
+            ShelfPlan::Offer
+        );
     }
 }

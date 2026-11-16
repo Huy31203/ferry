@@ -242,6 +242,26 @@ pub fn cursor_monitor(app: &AppHandle) -> Option<Monitor> {
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
+/// The cursor in physical pixels, as the work areas are measured.
+pub fn cursor_px(app: &AppHandle) -> Option<(i32, i32)> {
+    let p = app.cursor_position().ok()?;
+    Some((p.x as i32, p.y as i32))
+}
+
+/// The zone window's physical rect while it shows.
+pub fn visible_rect(app: &AppHandle) -> Option<Rect> {
+    let window = app
+        .get_webview_window(ZONE)
+        .filter(|w| w.is_visible().unwrap_or(false))?;
+    let (p, s) = (window.outer_position().ok()?, window.outer_size().ok()?);
+    Some(Rect {
+        x: p.x,
+        y: p.y,
+        width: s.width,
+        height: s.height,
+    })
+}
+
 /// Size and move the window; `from_tab` puts the full zone where the tab was.
 fn place(
     app: &AppHandle,
@@ -403,6 +423,11 @@ fn expand_tab(app: &AppHandle) {
 }
 
 fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
+    if crate::shelf::state(app)
+        .is_some_and(|s| s.dragging.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return; // the shelf's own pile: no intake (spec §3)
+    }
     match event {
         DragDropEvent::Enter { paths, .. } => {
             let (app, paths) = (app.clone(), paths.clone());

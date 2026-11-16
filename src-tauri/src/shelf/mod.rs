@@ -9,7 +9,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ferry_core::geometry::Rect;
 use ferry_core::i18n::{t, tf};
 use ferry_core::shelf::{LoadStatus, Shelf};
 use serde::Serialize;
@@ -24,10 +23,6 @@ pub const SHELF: &str = "shelf";
 pub struct Layout {
     /// The page's last reported height in points (0 = hidden).
     pub height_pt: f64,
-    /// The window's physical rect while shown.
-    // Read by the drag tracking in Task 6; remove the expect then.
-    #[expect(dead_code)]
-    pub rect: Option<Rect>,
 }
 
 pub struct ShelfState {
@@ -187,4 +182,98 @@ pub fn inset_px(app: &AppHandle, scale: f64) -> u32 {
 
 pub fn offering(app: &AppHandle) -> bool {
     state(app).is_some_and(|s| s.offering.load(Ordering::SeqCst))
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct DragView {
+    pub offer: bool,
+    pub near: bool,
+    pub own: bool,
+}
+
+static DRAG: Mutex<DragView> = Mutex::new(DragView {
+    offer: false,
+    near: false,
+    own: false,
+});
+
+fn emit_drag(app: &AppHandle, next: DragView) {
+    let changed = {
+        let mut cur = DRAG.lock().unwrap();
+        let changed = *cur != next;
+        *cur = next;
+        changed
+    };
+    if changed {
+        let _ = app.emit_to(SHELF, "shelf:drag", next);
+    }
+}
+
+pub fn on_drag(app: &AppHandle, offer: bool, own: bool) {
+    let Some(state) = state(app) else { return };
+    state.offering.store(offer, Ordering::SeqCst);
+    if offer {
+        mutate(app, |list| list.prune());
+    }
+    emit_drag(
+        app,
+        DragView {
+            offer,
+            near: false,
+            own,
+        },
+    );
+}
+
+pub fn drag_ended(app: &AppHandle) {
+    if let Some(state) = state(app) {
+        state.offering.store(false, Ordering::SeqCst);
+    }
+    emit_drag(app, DragView::default());
+}
+
+/// Each watcher tick during a drag: is the pointer near the strip?
+pub fn track(app: &AppHandle) {
+    let cur = *DRAG.lock().unwrap();
+    if !cur.offer {
+        return;
+    }
+    let near = near_strip(app).unwrap_or(false);
+    emit_drag(app, DragView { near, ..cur });
+}
+
+fn near_strip(app: &AppHandle) -> Option<bool> {
+    use ferry_core::shelf_place::{
+        EXPANDED, REACH, STRIP, WIDTH, drag_near, may_expand, shelf_rect,
+    };
+    let monitor = window::monitor(app)?;
+    let scale = monitor.scale_factor();
+    let px = |pt: f64| (pt * scale).round() as u32;
+    let area = window::area_of(&monitor);
+    let corner = window::corner(app);
+    let strip = shelf_rect(area, corner, (px(WIDTH), px(STRIP)), px(4.0));
+    let expanded = shelf_rect(area, corner, (px(WIDTH), px(EXPANDED)), px(4.0));
+    let zone = crate::drop_batch::zone::visible_rect(app);
+    let cursor = crate::drop_batch::zone::cursor_px(app)?;
+    Some(may_expand(zone, expanded) && drag_near(cursor, strip, px(REACH), zone))
+}
+
+/// Pure: is the point (points) inside any of the windows `(x, y, w, h)` (points)?
+pub fn cursor_over_ferry(cursor: (f64, f64), windows: &[(f64, f64, f64, f64)]) -> bool {
+    windows
+        .iter()
+        .any(|&(x, y, w, h)| cursor.0 >= x && cursor.0 < x + w && cursor.1 >= y && cursor.1 < y + h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_drop_over_any_ferry_window_counts_as_cancelled() {
+        let windows = [(100.0, 100.0, 300.0, 200.0), (1286.0, 873.0, 150.0, 27.0)];
+        assert!(cursor_over_ferry((150.0, 150.0), &windows));
+        assert!(cursor_over_ferry((1300.0, 880.0), &windows));
+        assert!(!cursor_over_ferry((700.0, 500.0), &windows));
+    }
 }

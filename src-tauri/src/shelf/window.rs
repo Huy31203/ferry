@@ -105,10 +105,7 @@ pub fn layout(app: &AppHandle, height_pt: f64) {
     let scale = monitor.scale_factor();
     let before = super::inset_px(app, scale);
     if height_pt < 1.0 {
-        *state.layout.lock().unwrap() = super::Layout {
-            height_pt: 0.0,
-            rect: None,
-        };
+        *state.layout.lock().unwrap() = super::Layout { height_pt: 0.0 };
         let _ = platform::hide(&window);
         restack_if(app, before, scale);
         return;
@@ -119,10 +116,7 @@ pub fn layout(app: &AppHandle, height_pt: f64) {
     );
     let margin = (MARGIN * scale).round() as u32;
     let rect = shelf_place::shelf_rect(area_of(&monitor), corner(app), size, margin);
-    *state.layout.lock().unwrap() = super::Layout {
-        height_pt,
-        rect: Some(rect),
-    };
+    *state.layout.lock().unwrap() = super::Layout { height_pt };
     use tauri::{LogicalPosition, LogicalSize};
     let _ = window.set_size(LogicalSize::new(WIDTH, height_pt));
     let _ = window.set_position(LogicalPosition::new(

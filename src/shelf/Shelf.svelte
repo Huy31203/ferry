@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
+  import { startDrag } from '@crabnebula/tauri-plugin-drag';
+  import { fanIcon } from '../lib/dragicon';
   import { t } from '../lib/i18n';
   import type { Settings } from '../lib/settings';
   import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, stripHeight, stripState, type DragView } from './strip';
@@ -49,6 +51,34 @@
     return () => clearInterval(id);
   });
 
+
+  const IMAGE = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'avif', 'tiff'];
+  let icon = $state('');
+  $effect(() => {
+    const paths = view.items.filter((i) => IMAGE.includes(i.ext)).slice(-3).map((i) => i.path);
+    let current = true;
+    fanIcon(paths).then((url) => {
+      if (current) icon = url;
+    });
+    return () => {
+      current = false;
+    };
+  });
+
+  async function dragPile(event: MouseEvent, paths = view.items.map((i) => i.path)) {
+    if (event.button !== 0 || paths.length === 0) return;
+    const keep = event.altKey;
+    await invoke('shelf_drag_start');
+    // A pile of folders or PDFs has no thumbnails: fall back to a 1×1 transparent PNG so the drag still starts.
+    const blank = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    startDrag({ item: paths, icon: icon || blank }, (result) => {
+      void invoke('shelf_drag_finished', { paths, dropped: result.result === 'Dropped', keep });
+    }).catch((e) => {
+      console.warn('shelf drag', e);
+      void invoke('shelf_drag_finished', { paths, dropped: false, keep: true });
+    });
+  }
+
   function enter() {
     clearTimeout(leaveTimer);
     leaveTimer = undefined;
@@ -83,7 +113,7 @@
   {#if mode === 'target'}
     <span class="drop">{t('shelf.drop')}</span>
   {:else if mode === 'open'}
-    <div class="pile">
+    <div class="pile" role="presentation" onmousedown={(e) => dragPile(e)}>
       {#each pile as item, i (item.path)}
         <div class="doc" style:transform={`rotate(${(i - (pile.length - 1) / 2) * 7}deg)`}>
           <span>{item.is_dir ? '📁' : item.ext}</span>

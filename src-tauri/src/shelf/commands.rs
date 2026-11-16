@@ -37,3 +37,58 @@ pub fn shelf_pointer_inside(app: AppHandle) -> bool {
     app.get_webview_window(super::SHELF)
         .is_some_and(|w| crate::platform::pointer_in(&w).ok().flatten().is_some())
 }
+
+#[tauri::command]
+pub fn shelf_drag_start(app: AppHandle) {
+    if let Some(state) = super::state(&app) {
+        state
+            .dragging
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    super::mutate(&app, |list| list.prune());
+}
+
+/// The pile's drag ended. `Dropped` removes the items unless ⌥ was held or the
+/// drop landed on a Ferry window. The flag stays up for 1 s so the window's own
+/// Drop event, whichever order it arrives in, is ignored.
+#[tauri::command]
+pub fn shelf_drag_finished(app: AppHandle, paths: Vec<String>, dropped: bool, keep: bool) {
+    if dropped && !keep && !over_ferry(&app) {
+        let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        super::mutate(&app, |list| list.remove(&paths));
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if let Some(state) = super::state(&handle) {
+            state
+                .dragging
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
+fn over_ferry(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    let Ok(cursor) = app.cursor_position() else {
+        return false;
+    };
+    let main_scale = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map_or(1.0, |m| m.scale_factor());
+    let cursor = (cursor.x / main_scale, cursor.y / main_scale);
+    let windows: Vec<(f64, f64, f64, f64)> = app
+        .webview_windows()
+        .values()
+        .filter(|w| w.is_visible().unwrap_or(false))
+        .filter_map(|w| {
+            let scale = w.scale_factor().ok()?;
+            let p = w.outer_position().ok()?.to_logical::<f64>(scale);
+            let s = w.outer_size().ok()?.to_logical::<f64>(scale);
+            Some((p.x, p.y, s.width, s.height))
+        })
+        .collect();
+    super::cursor_over_ferry(cursor, &windows)
+}
