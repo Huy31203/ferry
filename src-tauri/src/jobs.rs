@@ -328,6 +328,7 @@ fn work_folders(work_dir: &Path, ids: &[JobId]) -> Vec<std::path::PathBuf> {
 
 /// Send a card to the stack, or hold it until the stack page is listening.
 pub fn show(app: &AppHandle, update: JobUpdate) {
+    crate::shelf::on_job_update(app, &update);
     // Stream D: a batch row's update goes to the batch window, not the stack.
     if crate::drop_batch::batch::claim(app, &update) {
         return;

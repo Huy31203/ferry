@@ -15,6 +15,8 @@ use ferry_core::shelf::{LoadStatus, Shelf};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+use ferry_core::job::{JobId, JobState, JobUpdate};
+
 use crate::jobs;
 use crate::state::AppState;
 
@@ -283,8 +285,47 @@ pub fn clear(app: &AppHandle) {
     });
 }
 
+static PENDING: std::sync::LazyLock<Mutex<std::collections::HashMap<JobId, PathBuf>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Files the optimiser can take; folders and other types stay on the shelf.
+pub fn optimisable(paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|p| p.is_file() && matches!(ferry_core::intake::classify_file(p), Ok(Some(_))))
+        .cloned()
+        .collect()
+}
+
 pub fn optimise_all(app: &AppHandle) {
-    jobs::notice(app, t("shelf.error.nothing_to_optimise"));
+    let paths = state(app)
+        .map(|s| s.list.lock().unwrap().paths())
+        .unwrap_or_default();
+    let wanted = optimisable(&paths);
+    if wanted.is_empty() {
+        jobs::notice(app, t("shelf.error.nothing_to_optimise"));
+        return;
+    }
+    let started = crate::drop_batch::intake::accept_paths(app, wanted, false);
+    PENDING.lock().unwrap().extend(started);
+}
+
+/// A finished card from "Optimise all" puts its result where its source was.
+pub fn on_job_update(app: &AppHandle, update: &JobUpdate) {
+    let finished = matches!(
+        update.state,
+        JobState::Done | JobState::AlreadyOptimal | JobState::Larger | JobState::Error { .. }
+    );
+    if !finished {
+        return;
+    }
+    let Some(source) = PENDING.lock().unwrap().remove(&update.id) else {
+        return;
+    };
+    if let (JobState::Done, Some(output)) = (&update.state, &update.output) {
+        let output = output.clone();
+        mutate(app, |list| list.replace(&source, &output));
+    }
 }
 
 #[cfg(test)]
@@ -297,5 +338,26 @@ mod tests {
         assert!(cursor_over_ferry((150.0, 150.0), &windows));
         assert!(cursor_over_ferry((1300.0, 880.0), &windows));
         assert!(!cursor_over_ferry((700.0, 500.0), &windows));
+    }
+
+    /// A 1×1 PNG.
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0x60, 0xf8, 0x5f, 0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn only_supported_files_are_sent_to_optimise() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("a.png");
+        std::fs::write(&png, PNG).unwrap();
+        let txt = dir.path().join("notes.txt");
+        std::fs::write(&txt, b"hi").unwrap();
+        let folder = dir.path().join("photos");
+        std::fs::create_dir(&folder).unwrap();
+        assert_eq!(optimisable(&[png.clone(), txt, folder]), vec![png]);
     }
 }

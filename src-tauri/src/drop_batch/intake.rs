@@ -31,8 +31,8 @@ fn unsupported(path: &std::path::Path) -> String {
     }
 }
 
-/// Handle a drop. Reads files, so call it off the main thread.
-pub fn accept(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) {
+/// Drop own results (with a notice each); what is left is new work.
+fn without_own_results(app: &AppHandle, paths: &[PathBuf]) -> Vec<PathBuf> {
     let state = app.state::<AppState>();
     let outputs: Vec<PathBuf> = state
         .jobs
@@ -41,23 +41,43 @@ pub fn accept(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) {
         .values()
         .map(|entry| entry.output())
         .collect();
-    let rest = without_own(&paths, &outputs);
+    let rest = without_own(paths, &outputs);
     for path in paths.iter().filter(|p| !rest.contains(p)) {
         let reason = tf("drop.error.own_result", &[("name", &file_name(path))]);
         jobs::notice(app, reason);
     }
+    rest
+}
+
+/// Handle a drop. Reads files, so call it off the main thread.
+pub fn accept(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) {
+    let rest = without_own_results(app, &paths);
     if rest.is_empty() {
         return;
     }
+    let state = app.state::<AppState>();
     let threshold = state.settings.read().unwrap().drop_zone.batch_threshold;
     if route(&summarise(&rest, 0), threshold) == Route::Batch {
         batch::add(app, rest, keep);
         return;
     }
+    start_cards(app, rest, keep);
+}
+
+/// Start a card for each path, with no batch window (the shelf's "Optimise all").
+/// Returns the jobs started with their source.
+pub fn accept_paths(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) -> Vec<(JobId, PathBuf)> {
+    let rest = without_own_results(app, &paths);
+    start_cards(app, rest, keep)
+}
+
+fn start_cards(app: &AppHandle, rest: Vec<PathBuf>, keep: bool) -> Vec<(JobId, PathBuf)> {
+    let state = app.state::<AppState>();
     let (settings, has_gifsicle) = (
         state.settings.read().unwrap().clone(),
         state.gifsicle.is_some(),
     );
+    let mut started = Vec::new();
     for path in rest {
         if !matches!(classify_file(&path), Ok(Some(_))) {
             jobs::notice(app, unsupported(&path));
@@ -77,8 +97,11 @@ pub fn accept(app: &AppHandle, paths: Vec<PathBuf>, keep: bool) {
                 ) {
                     jobs::notice(app, tf("error.busy", &[("name", &file_name(&path))]));
                     forget(app, &[id]);
+                } else {
+                    started.push((id, path.clone()));
                 }
             }
         }
     }
+    started
 }
