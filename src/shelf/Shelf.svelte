@@ -31,7 +31,11 @@
   let panelH = $state(0); // the visible height
   let boxH = $state(0); // the window's height
   let panelW = $state(WIDTH);
+  // Resizing the window changes `lift` without moving the panel; that step must not animate.
+  let animate = $state(true);
   let shrinkTimer: ReturnType<typeof setTimeout> | undefined;
+  const frames = (n: number, fn: () => void) =>
+    requestAnimationFrame(() => (n <= 1 ? fn() : frames(n - 1, fn)));
   $effect(() => {
     const [h, w] = [height, width];
     const bh = untrack(() => boxH);
@@ -41,12 +45,22 @@
       panelH = h;
       panelW = w;
       void invoke('shelf_layout', { height: h, width: w });
-      if (h < bh) shrinkTimer = setTimeout(() => (boxH = h), SLIDE_MS + 20);
+      if (h < bh) {
+        shrinkTimer = setTimeout(() => {
+          animate = false;
+          boxH = h;
+          frames(2, () => (animate = true));
+        }, SLIDE_MS + 20);
+      }
     } else {
       void invoke('shelf_layout', { height: h, width: w }).then(() => {
+        animate = false;
         boxH = h;
         panelW = w;
-        requestAnimationFrame(() => requestAnimationFrame(() => (panelH = h)));
+        frames(2, () => {
+          animate = true;
+          frames(1, () => (panelH = h));
+        });
       });
     }
   });
@@ -159,6 +173,7 @@
   class:target={mode === 'target'}
   class:left={view.side === 'left'}
   class:right={view.side === 'right'}
+  class:still={!animate}
   style:--solid={view.opacity / 100}
   style:--w="{panelW}px"
   style:--box="{boxH}px"
@@ -233,8 +248,7 @@
   }
   .shelf.right { right: 0; }
   .shelf.left { left: 0; }
-  @keyframes fade-up { from { opacity: 0; translate: 0 8px; } }
-  .count, .cleared, .drop, .pile, .list, .pill { animation: fade-up 300ms 90ms cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+  .shelf.still { transition: none; }
   .shelf.target { outline: 2px solid var(--accent, #0a84ff); outline-offset: -3px; }
   .grip { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.75); }
   .count { position: absolute; right: 10px; top: 4px; font-size: 10px; font-weight: 700; }
