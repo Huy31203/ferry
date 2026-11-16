@@ -1028,7 +1028,7 @@ pub(crate) fn repair_output(out: &mut Output, defaults: &Output) {
     }
 }
 
-fn recover(path: &Path) -> LoadStatus {
+pub(crate) fn recover(path: &Path) -> LoadStatus {
     let mut name = path.file_name().unwrap_or_default().to_owned();
     name.push(".bak");
     let backup = path.with_file_name(name);

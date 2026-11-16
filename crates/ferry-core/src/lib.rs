@@ -30,6 +30,7 @@ pub mod run_state;
 pub mod selfwrite; // stream C
 pub mod settings;
 pub mod settings_sync;
+pub mod shelf;
 pub mod sidecar;
 pub mod sniff;
 pub mod svc_settings;
