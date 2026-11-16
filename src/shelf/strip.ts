@@ -16,6 +16,8 @@ export interface StripInput {
   count: number;
   canUndo: boolean;
   hover: boolean;
+  /** Opened from the tray's "Show shelf" for a few seconds. */
+  summoned: boolean;
   drag: DragView;
 }
 
@@ -24,13 +26,15 @@ export const STRIP = 27;
 export const EXPANDED = 170;
 export const COLLAPSE_MS = 300;
 export const UNDO_MS = 5000;
+export const SUMMON_MS = 4000;
 
-export function stripState({ count, canUndo, hover, drag }: StripInput): StripState {
+/** At rest the shelf is hidden: it shows for a drag, a summon, or the Undo note. */
+export function stripState({ count, canUndo, hover, summoned, drag }: StripInput): StripState {
   if (drag.own) return 'open';
   if (drag.offer && drag.near) return 'target';
   if (count === 0 && canUndo) return 'cleared';
-  if (count > 0 && hover) return 'open';
-  if (count > 0 || drag.offer) return 'resting';
+  if (hover || summoned) return 'open';
+  if (drag.offer) return 'resting';
   return 'hidden';
 }
 

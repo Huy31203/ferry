@@ -21,6 +21,7 @@ export default defineConfig({
         compare: page('compare.html'),
         batch: page('batch.html'),
         drop: page('drop.html'),
+        shelf: page('shelf.html'),
         pipelines: page('pipelines.html'), // stream F
         zones: page('zones.html'), // stream F
       },

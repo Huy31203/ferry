@@ -765,6 +765,14 @@ const all: Setting[] = [
     depends_on: 'floating.enabled',
   },
   {
+    id: 'shelf_transparency',
+    pane: 'floating',
+    label: 'floating.shelf_transparency',
+    help: 'floating.shelf_transparency.help',
+    path: 'floating.shelf_transparency',
+    control: { kind: 'slider', min: 0, max: 90 },
+  },
+  {
     id: 'hover_hotkeys',
     pane: 'floating',
     label: 'floating.hover_hotkeys',

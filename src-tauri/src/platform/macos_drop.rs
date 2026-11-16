@@ -108,3 +108,8 @@ mod sampling {
             .map(|id| id.to_string())
     }
 }
+
+/// The shelf is the same kind of panel as the zone.
+pub fn make_shelf_window(window: &WebviewWindow) -> tauri::Result<()> {
+    make_zone_window(window)
+}

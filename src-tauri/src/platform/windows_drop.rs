@@ -98,3 +98,7 @@ pub fn frontmost_app() -> Option<String> {
         Some(path.file_name()?.to_string_lossy().into_owned())
     }
 }
+
+pub fn make_shelf_window(_window: &WebviewWindow) -> tauri::Result<()> {
+    Ok(())
+}

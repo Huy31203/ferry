@@ -38,9 +38,7 @@ pub fn shelf_rect(area: Rect, corner: Corner, size: (u32, u32), margin: u32) -> 
 /// What the shelf takes from the stack: the expanded height when open (empty
 /// or not), the strip when it rests with items, nothing otherwise.
 pub fn inset(has_items: bool, height: u32, strip: u32) -> u32 {
-    if height > strip {
-        height
-    } else if has_items && height > 0 {
+    if height > strip || (has_items && height > 0) {
         height
     } else {
         0

@@ -18,6 +18,7 @@ mod platform;
 mod prefs;
 mod preset_zones; // stream F
 mod preview;
+mod shelf;
 mod state;
 mod tray;
 mod watch; // stream C
@@ -78,6 +79,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
             windows::stack_pointer,
+            shelf::commands::shelf_view,
+            shelf::commands::shelf_add,
+            shelf::commands::shelf_remove,
+            shelf::commands::shelf_layout,
+            shelf::commands::shelf_pointer_inside,
             compare::open_compare,
             compare::compare_ready,
             compare::compare_close,
@@ -229,6 +235,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     tray::build(app)?;
     menu::init(app);
     drop_batch::init(app)?;
+    shelf::init(app)?;
     preset_zones::init(app); // stream F: pipelines
     clipboard::start(app);
     watch::start(app); // stream C

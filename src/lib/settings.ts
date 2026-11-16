@@ -70,6 +70,7 @@ export interface Settings {
     auto_hide_secs: number;
     follow_cursor: boolean;
     hover_hotkeys: boolean;
+    shelf_transparency: number;
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };

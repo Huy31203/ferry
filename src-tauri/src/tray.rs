@@ -219,7 +219,7 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
     let update = crate::updater::tray_item(app)?; // svc
     let about = PredefinedMenuItem::about(app, Some(&t("tray.about")), None)?;
     let quit = MenuItem::with_id(app, "quit", t("tray.quit"), true, None::<&str>)?;
-    Menu::with_items(
+    let menu = Menu::with_items(
         app,
         &[
             &header,
@@ -244,7 +244,11 @@ fn menu(app: &AppHandle) -> Result<Menu<Wry>> {
             &about,
             &quit,
         ],
-    )
+    )?;
+    if let Some(item) = crate::shelf::tray_item(app) {
+        menu.insert(&item, 9)?; // after the drop zone
+    }
+    Ok(menu)
 }
 
 /// "Clipboard 2026-10-22 at 14.23.11.png — −84%" or "… — Already optimal".
@@ -305,6 +309,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         }
         "drop:batch" => crate::drop_batch::batch::open(app), // Stream D
         "drop:zone" => crate::drop_batch::zone::show_from_menu(app), // Stream D
+        "shelf:show" => crate::shelf::summon(app),
         "settings" => windows::open_settings(app),
         "svc:update" => crate::updater::tray_clicked(app),
         "quit" => app.exit(0),

@@ -25,10 +25,11 @@ Success: drag three Finder files and a result card onto the strip, quit and rela
 ### 1. Look
 
 - Gray panel (`#3a3d44`, 1 px `#555963` border, top corners rounded 14 px), on the bottom edge of the work area, same side as the stack (left or right corner).
-- **Hidden** when the shelf is empty and nothing is being dragged.
-- **Resting**: a flat strip, 16 % of the expanded height, with a grip line "—" inside it (no raised tab) and the item count at the right.
+- **Hidden** at rest, with or without items (user decision 2026-11-16: a strip that is always on screen is bad UX). It shows during a drag, from the tray's "Show shelf" (open for 4 s), and for the Undo note.
+- **Resting** (during a drag only): a flat strip, 16 % of the expanded height, with a grip line "—" inside it (no raised tab) and the item count at the right.
 - **Expanded** (hover, or a drag near the strip): file pile preview (up to three stacked thumbnails or file icons, slightly rotated) and a pill "N Items ⌄" at the bottom.
 - **Drop target**: expanded with an accent outline and the label "Drop to shelve".
+- **Transparency**: the panel's background is `floating.shelf_transparency` percent see-through (default 80, 0–90, Settings → Floating). Content stays solid.
 - **Cleared**: the strip shows "Shelf cleared · Undo" for 5 s (§6).
 - No ✕ anywhere.
 

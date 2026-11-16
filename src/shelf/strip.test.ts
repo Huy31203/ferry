@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { NO_DRAG, countLabel, stripHeight, stripState } from './strip';
 
-const base = { count: 0, canUndo: false, hover: false, drag: NO_DRAG };
+const base = { count: 0, canUndo: false, hover: false, summoned: false, drag: NO_DRAG };
 
 describe('stripState', () => {
-  it('is hidden when empty and nothing is dragged', () => {
+  it('is hidden at rest, with or without items', () => {
     expect(stripState(base)).toBe('hidden');
-    expect(stripState({ ...base, hover: true })).toBe('hidden');
+    expect(stripState({ ...base, count: 3 })).toBe('hidden');
   });
-  it('rests with items, opens on hover', () => {
-    expect(stripState({ ...base, count: 3 })).toBe('resting');
+  it('opens when summoned or hovered', () => {
+    expect(stripState({ ...base, count: 3, summoned: true })).toBe('open');
     expect(stripState({ ...base, count: 3, hover: true })).toBe('open');
+    expect(stripState({ ...base, summoned: true })).toBe('open');
   });
   it('shows the strip for an offered drag, even when empty, and becomes the target near it', () => {
     const offer = { offer: true, near: false, own: false };
@@ -23,7 +24,7 @@ describe('stripState', () => {
   });
   it('shows the cleared note while Undo is possible, and an add dismisses it', () => {
     expect(stripState({ ...base, canUndo: true })).toBe('cleared');
-    expect(stripState({ ...base, count: 1, canUndo: false })).toBe('resting');
+    expect(stripState({ ...base, count: 1, canUndo: false })).toBe('hidden');
   });
 });
 

@@ -50,7 +50,7 @@ pub fn create_stack(app: &AppHandle) -> tauri::Result<()> {
 pub fn follows_screenshot_setting(label: &str) -> bool {
     match label {
         STACK | crate::compare::COMPARE => true,
-        crate::drop_batch::ZONE => true, // Stream D: the drop zone is floating UI
+        crate::drop_batch::ZONE | crate::shelf::SHELF => true, // floating UI
         _ => false,
     }
 }
@@ -72,6 +72,37 @@ pub fn set_content_protected(app: &AppHandle, protected: bool) {
 pub fn stack_pointer(app: AppHandle) -> Result<Option<(f64, f64)>, String> {
     let stack = app.get_webview_window(STACK).ok_or("no stack window")?;
     platform::pointer_in(&stack)
+}
+
+/// The monitor the stack would use: under the cursor when `follow_cursor` is
+/// on, else the primary.
+pub fn stack_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
+    let follow = app
+        .state::<AppState>()
+        .settings
+        .read()
+        .unwrap()
+        .floating
+        .follow_cursor;
+    app.cursor_position()
+        .ok()
+        .filter(|_| follow)
+        .and_then(|p| {
+            // tao reports the macOS cursor as points × the main display's scale,
+            // while monitor_from_point compares against points.
+            #[cfg(target_os = "macos")]
+            let main_scale = app
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .map_or(1.0, |m| m.scale_factor());
+            #[cfg(not(target_os = "macos"))]
+            let main_scale = 1.0;
+            app.monitor_from_point(p.x / main_scale, p.y / main_scale)
+                .ok()
+                .flatten()
+        })
+        .or_else(|| app.primary_monitor().ok().flatten())
 }
 
 /// Fit the stack window to its content and pin it to the chosen corner of the
@@ -99,27 +130,7 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         settings::Corner::BottomLeft => Corner::BottomLeft,
         settings::Corner::BottomRight => Corner::BottomRight,
     };
-    let monitor = app
-        .cursor_position()
-        .ok()
-        .filter(|_| floating.follow_cursor)
-        .and_then(|p| {
-            // tao reports the macOS cursor as points × the main display's scale,
-            // while monitor_from_point compares against points.
-            #[cfg(target_os = "macos")]
-            let main_scale = app
-                .primary_monitor()
-                .ok()
-                .flatten()
-                .map_or(1.0, |m| m.scale_factor());
-            #[cfg(not(target_os = "macos"))]
-            let main_scale = 1.0;
-            app.monitor_from_point(p.x / main_scale, p.y / main_scale)
-                .ok()
-                .flatten()
-        })
-        .or_else(|| app.primary_monitor().ok().flatten())
-        .ok_or("no monitor found")?;
+    let monitor = stack_monitor(&app).ok_or("no monitor found")?;
     let scale = monitor.scale_factor();
     let work = monitor.work_area();
     let area = Rect {
