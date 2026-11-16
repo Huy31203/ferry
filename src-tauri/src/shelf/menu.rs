@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use ferry_core::i18n::{t, tf};
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Wry};
 
 use super::{SHELF, mutate, state};
@@ -20,12 +20,14 @@ pub enum Entry {
     Copy,
     Paste,
     OptimiseAll,
+    Archive,
+    StopArchive,
     ShowItems,
     Clear,
     Separator,
 }
 
-pub fn entries(count: usize, size: u64) -> Vec<Entry> {
+pub fn entries(count: usize, size: u64, busy: bool) -> Vec<Entry> {
     if count == 0 {
         return vec![Entry::Paste];
     }
@@ -46,6 +48,11 @@ pub fn entries(count: usize, size: u64) -> Vec<Entry> {
         Entry::Paste,
         Entry::Separator,
         Entry::OptimiseAll,
+        if busy {
+            Entry::StopArchive
+        } else {
+            Entry::Archive
+        },
         Entry::ShowItems,
         Entry::Separator,
         Entry::Clear,
@@ -59,6 +66,8 @@ fn id(entry: &Entry) -> &'static str {
         Entry::Copy => "shelf:copy",
         Entry::Paste => "shelf:paste",
         Entry::OptimiseAll => "shelf:optimise_all",
+        Entry::Archive => "shelf:archive",
+        Entry::StopArchive => "shelf:archive:stop",
         Entry::ShowItems => "shelf:show_items",
         Entry::Clear => "shelf:clear",
         Entry::Separator => "",
@@ -72,6 +81,8 @@ fn label(entry: &Entry) -> String {
         Entry::Copy => t("shelf.menu.copy"),
         Entry::Paste => t("shelf.menu.paste"),
         Entry::OptimiseAll => t("shelf.menu.optimise_all"),
+        Entry::Archive => t("shelf.menu.archive"),
+        Entry::StopArchive => t("shelf.menu.archive_stop"),
         Entry::ShowItems => t("shelf.menu.show_items"),
         Entry::Clear => t("shelf.menu.clear"),
         Entry::Separator => String::new(),
@@ -80,13 +91,14 @@ fn label(entry: &Entry) -> String {
 
 pub fn popup(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
     let view = super::view(app);
-    let list = entries(view.items.len(), view.size);
+    let list = entries(view.items.len(), view.size, super::archive::busy());
     let mut owned: Vec<Box<dyn IsMenuItem<Wry>>> = Vec::new();
     for entry in &list {
         let item: Box<dyn IsMenuItem<Wry>> = match entry {
             Entry::Separator => {
                 Box::new(PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
             }
+            Entry::Archive => Box::new(archive_submenu(app)?),
             other => Box::new(
                 MenuItem::with_id(
                     app,
@@ -106,6 +118,44 @@ pub fn popup(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
     window
         .popup_menu_at(&menu, LogicalPosition::new(x, y))
         .map_err(|e| e.to_string())
+}
+
+fn archive_submenu(app: &AppHandle) -> Result<Submenu<Wry>, String> {
+    use super::archive::{Preset, cores, estimate, eta_label, items};
+    let items = items(app);
+    let quick = |preset: Preset, id: &str, key: &str| {
+        let eta = eta_label(estimate(app, &items, preset.level(), cores()));
+        MenuItem::with_id(app, id, tf(key, &[("eta", &eta)]), true, None::<&str>)
+            .map_err(|e| e.to_string())
+    };
+    let fast = quick(Preset::Fast, "shelf:archive:fast", "shelf.archive.fast")?;
+    let balanced = quick(
+        Preset::Balanced,
+        "shelf:archive:balanced",
+        "shelf.archive.balanced",
+    )?;
+    let smallest = quick(
+        Preset::Smallest,
+        "shelf:archive:smallest",
+        "shelf.archive.smallest",
+    )?;
+    let sep = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
+    let advanced = MenuItem::with_id(
+        app,
+        "shelf:archive:advanced",
+        t("shelf.archive.advanced"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    Submenu::with_id_and_items(
+        app,
+        "shelf:archive",
+        t("shelf.menu.archive"),
+        true,
+        &[&fast, &balanced, &smallest, &sep, &advanced],
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub fn popup_item(app: &AppHandle, path: &str, x: f64, y: f64) -> Result<(), String> {
@@ -155,6 +205,11 @@ fn run(app: &AppHandle, id: &str) {
             }
         }
         "shelf:optimise_all" => super::optimise_all(app),
+        "shelf:archive:fast" => super::archive::quick(app, super::archive::Preset::Fast),
+        "shelf:archive:balanced" => super::archive::quick(app, super::archive::Preset::Balanced),
+        "shelf:archive:smallest" => super::archive::quick(app, super::archive::Preset::Smallest),
+        "shelf:archive:stop" => super::archive::cancel(),
+        "shelf:archive:advanced" => {}
         "shelf:show_items" => {
             let _ = app.emit_to(SHELF, "shelf:show_items", ());
         }
@@ -178,7 +233,7 @@ mod tests {
 
     #[test]
     fn a_full_shelf_lists_every_action_in_order() {
-        let e = entries(8, 214_000_000);
+        let e = entries(8, 214_000_000, false);
         assert!(matches!(&e[0], Entry::Header(h) if h.starts_with("8 Items · ")));
         assert_eq!(
             &e[1..],
@@ -189,6 +244,7 @@ mod tests {
                 Entry::Paste,
                 Entry::Separator,
                 Entry::OptimiseAll,
+                Entry::Archive,
                 Entry::ShowItems,
                 Entry::Separator,
                 Entry::Clear,
@@ -198,6 +254,13 @@ mod tests {
 
     #[test]
     fn an_empty_shelf_offers_only_paste() {
-        assert_eq!(entries(0, 0), vec![Entry::Paste]);
+        assert_eq!(entries(0, 0, false), vec![Entry::Paste]);
+    }
+
+    #[test]
+    fn while_archiving_the_archive_entry_becomes_stop() {
+        let e = entries(2, 10, true);
+        assert!(e.contains(&Entry::StopArchive));
+        assert!(!e.contains(&Entry::Archive));
     }
 }

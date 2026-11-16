@@ -1,6 +1,7 @@
 //! The built-in shelf (shelf spec): a panel on the bottom edge that holds files
 //! by reference. macOS only; `init` does nothing elsewhere.
 
+pub mod archive;
 pub mod commands;
 pub mod menu;
 pub mod window;
@@ -91,7 +92,7 @@ pub fn state(app: &AppHandle) -> Option<tauri::State<'_, ShelfState>> {
     app.try_state::<ShelfState>()
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

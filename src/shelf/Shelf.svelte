@@ -78,6 +78,8 @@
     }
   });
 
+  let archiving = $state<number | null>(null);
+
   $effect(() => {
     const offs = [
       listen<ShelfView>('shelf:changed', (e) => (view = e.payload)),
@@ -87,6 +89,7 @@
         clearTimeout(summonTimer);
         summonTimer = setTimeout(() => (summoned = false), SUMMON_MS);
       }),
+      listen<{ progress: number | null }>('shelf:archive', (e) => (archiving = e.payload.progress)),
       listen<DragView>('shelf:drag', (e) => (drag = e.payload)),
       listen<Settings>('settings:changed', (e) => (view.opacity = e.payload.floating.shelf_opacity)),
     ];
@@ -235,7 +238,7 @@
         </li>
       {/each}
     </ul>
-    <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+    <button class="pill" onclick={openMenu}>{archiving === null ? countLabel(view.items.length) : t('shelf.archive.progress', { percent: Math.round(archiving * 100) })}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   {:else if shownMode === 'open'}
     <div class="pile" role="presentation" onmousedown={(e) => armDrag(e)}>
       {#each pile as item, i (item.path)}
@@ -244,7 +247,7 @@
         </div>
       {/each}
     </div>
-    <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+    <button class="pill" onclick={openMenu}>{archiving === null ? countLabel(view.items.length) : t('shelf.archive.progress', { percent: Math.round(archiving * 100) })}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   {/if}
 </div>
 
