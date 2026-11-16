@@ -24,9 +24,9 @@ pub fn shelf_remove(app: AppHandle, paths: Vec<String>) {
 
 /// The page's height in points; 0 hides the panel.
 #[tauri::command]
-pub fn shelf_layout(app: AppHandle, height: f64) {
+pub fn shelf_layout(app: AppHandle, height: f64, width: f64) {
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || window::layout(&handle, height));
+    let _ = app.run_on_main_thread(move || window::layout(&handle, width, height));
 }
 
 /// Whether the pointer is over the panel. The page gets no mouse-leave while it

@@ -1,6 +1,7 @@
 import { t } from '../lib/i18n';
 
-export type StripState = 'hidden' | 'resting' | 'open' | 'target' | 'cleared';
+/** `grip`: the shelf holds items and nothing is happening, so only its grip shows. */
+export type StripState = 'hidden' | 'grip' | 'resting' | 'open' | 'target' | 'cleared';
 
 /** Mirrors the Rust `shelf:drag` event. */
 export interface DragView {
@@ -26,25 +27,34 @@ export const STRIP = 27;
 export const EXPANDED = 170;
 /** The panel while "Show items…" lists them. */
 export const LIST = 300;
+export const GRIP = 16;
+export const WIDTH = 150;
+export const LIST_WIDTH = 240;
 export const COLLAPSE_MS = 300;
 export const UNDO_MS = 5000;
 export const SUMMON_MS = 4000;
 
-/** At rest the shelf is hidden: it shows for a drag, a summon, or the Undo note. */
+/** Empty and idle it is hidden; holding items it shows only its grip. */
 export function stripState({ count, canUndo, hover, summoned, drag }: StripInput): StripState {
   if (drag.own) return 'open';
   if (drag.offer && drag.near) return 'target';
   if (count === 0 && canUndo) return 'cleared';
   if (hover || summoned) return 'open';
   if (drag.offer) return 'resting';
+  if (count > 0) return 'grip';
   return 'hidden';
 }
 
 export function stripHeight(state: StripState, listing = false): number {
   if (state === 'hidden') return 0;
+  if (state === 'grip') return GRIP;
   if (state === 'open') return listing ? LIST : EXPANDED;
   if (state === 'target') return EXPANDED;
   return STRIP;
+}
+
+export function stripWidth(state: StripState, listing = false): number {
+  return state === 'open' && listing ? LIST_WIDTH : WIDTH;
 }
 
 export function countLabel(count: number): string {

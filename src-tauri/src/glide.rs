@@ -8,8 +8,8 @@ use std::time::Duration;
 use tauri::WebviewWindow;
 
 /// Matches the shelf page's rise animation.
-const MS: u64 = 160;
-const STEPS: u64 = 10;
+const MS: u64 = 200;
+const STEPS: u64 = 14;
 
 /// The newest slide per window label; older ones stop.
 static LATEST: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);

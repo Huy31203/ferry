@@ -7,9 +7,11 @@ pub const WIDTH: f64 = 150.0;
 pub const EXPANDED: f64 = 170.0;
 /// 16 % of the expanded height.
 pub const STRIP: f64 = 27.0;
-/// The side margin that centres the shelf under the 244 pt drop zone placed at the
-/// same corner: 4 + (244 − 150) / 2.
-pub const SIDE: f64 = 51.0;
+/// The side margin that lines the shelf's outer end up with the drop zone's panel at the
+/// same corner: the zone's window margin 4 + its 12 pt padding.
+pub const SIDE: f64 = 16.0;
+/// The panel while it lists the items, and its width.
+pub const LIST_WIDTH: f64 = 240.0;
 /// How near a drag must come to the strip to expand it.
 pub const REACH: f64 = 80.0;
 
@@ -270,13 +272,15 @@ mod tests {
     }
 
     #[test]
-    fn the_shelf_is_centred_under_a_zone_placed_at_the_corner() {
+    fn the_shelf_ends_line_up_with_a_zone_placed_at_the_corner() {
+        // The zone's window pads its 220 pt panel by 12 pt on each side.
         let zone = (244, 164);
-        for corner in [Corner::BottomRight, Corner::BottomLeft] {
-            let (zx, _) = zone_near_results(AREA, corner, zone, None, 4, 0);
-            let shelf = shelf_rect(AREA, corner, (150, 27), px(SIDE));
-            assert_eq!(zx + 122, shelf.x + 75, "{corner:?}");
-        }
+        let (zx, _) = zone_near_results(AREA, Corner::BottomRight, zone, None, 4, 0);
+        let right = shelf_rect(AREA, Corner::BottomRight, (150, 27), px(SIDE));
+        assert_eq!(zx + 244 - 12, right.x + 150);
+        let (zx, _) = zone_near_results(AREA, Corner::BottomLeft, zone, None, 4, 0);
+        let left = shelf_rect(AREA, Corner::BottomLeft, (150, 27), px(SIDE));
+        assert_eq!(zx + 12, left.x);
     }
 
     fn px(pt: f64) -> u32 {

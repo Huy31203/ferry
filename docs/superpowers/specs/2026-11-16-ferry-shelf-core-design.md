@@ -25,13 +25,14 @@ Success: drag three Finder files and a result card onto the strip, quit and rela
 ### 1. Look
 
 - Gray panel (`#3a3d44`, 1 px `#555963` border, top corners rounded 14 px), on the bottom edge of the work area, same side as the stack (left or right corner).
-- **Hidden** at rest, with or without items (user decision 2026-11-16: a strip that is always on screen is bad UX). It shows during a drag, from the tray's "Show shelf" (open for 4 s), and for the Undo note.
+- **Hidden** when empty and idle. Holding items it shows only its grip (16 pt). (User decisions 2026-11-16: a full strip always on screen is bad UX, but the grip must stay visible.) It grows during a drag, from the tray's "Show shelf" (open for 4 s), and for the Undo note.
 - **Resting** (during a drag only): a flat strip, 16 % of the expanded height, with a grip line "—" inside it (no raised tab) and the item count at the right.
 - **Expanded** (hover, or a drag near the strip): file pile preview (up to three stacked thumbnails or file icons, slightly rotated) and a pill "N Items ⌄" at the bottom.
 - **Drop target**: expanded with an accent outline and the label "Drop to shelve".
 - **Opacity**: the panel's background is `floating.shelf_opacity` percent solid (default 95, 20–100, Settings → Floating). Content stays solid.
-- **Horizontal alignment**: the shelf is centred under the drop zone when the zone sits at the corner (`shelf_place::SIDE`).
-- **Show items…**: the panel grows to 300 pt and lists each item with a type badge, name, size, and on hover Show in Finder and Remove; rows drag out singly.
+- **Horizontal alignment**: the shelf's outer end lines up with the drop zone's panel at the same corner (`shelf_place::SIDE` = 16 pt).
+- **Animation**: the panel's height and width transition over 200 ms inside its window; the window grows first and shrinks 200 ms after, and the stack and zone glide on the same curve.
+- **Show items…**: the panel grows to 240 × 300 pt and lists each item with a type badge, name, size, and on hover Show in Finder and Remove; rows drag out singly.
 - **Cleared**: the strip shows "Shelf cleared · Undo" for 5 s (§6).
 - No ✕ anywhere.
 

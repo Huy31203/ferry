@@ -92,36 +92,82 @@ pub fn area_of(monitor: &Monitor) -> Rect {
     }
 }
 
-/// Size the panel to `height_pt` points (0 hides it) and pin it to the bottom edge.
-pub fn layout(app: &AppHandle, height_pt: f64) {
+/// "left" or "right": the side the panel's outer end is on.
+pub fn side(app: &AppHandle) -> &'static str {
+    match corner(app) {
+        Corner::TopLeft | Corner::BottomLeft => "left",
+        Corner::TopRight | Corner::BottomRight => "right",
+    }
+}
+
+/// How long the window outlives a shrinking panel, so the page can animate it out.
+const SHRINK_MS: u64 = 200;
+
+/// The window's current size in points, and the newest layout request.
+static WINDOW: std::sync::Mutex<(f64, f64)> = std::sync::Mutex::new((0.0, 0.0));
+static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The panel will be `width_pt` × `height_pt` (height 0 hides it), pinned to the bottom
+/// edge. The stack and zone make room at once; a shrinking window waits for the page's
+/// animation. Call on the main thread.
+pub fn layout(app: &AppHandle, width_pt: f64, height_pt: f64) {
     let Some(state) = state(app) else { return };
+    let Some(monitor) = monitor(app) else { return };
+    let scale = monitor.scale_factor();
+    let before = super::inset_px(app, scale);
+    *state.layout.lock().unwrap() = super::Layout {
+        height_pt,
+        width_pt,
+    };
+    let request = REQUEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let (cur_w, cur_h) = *WINDOW.lock().unwrap();
+    let (want_w, want_h) = if height_pt < 1.0 {
+        (0.0, 0.0)
+    } else {
+        (width_pt, height_pt)
+    };
+    let shrinks = want_w < cur_w || want_h < cur_h;
+    // Grow now; shrink after the page has animated.
+    apply_window(app, want_w.max(cur_w), want_h.max(cur_h));
+    restack_if(app, before, scale);
+    if shrinks {
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(SHRINK_MS));
+            if REQUEST.load(std::sync::atomic::Ordering::SeqCst) != request {
+                return;
+            }
+            let inner = handle.clone();
+            let _ = handle.run_on_main_thread(move || apply_window(&inner, want_w, want_h));
+        });
+    }
+}
+
+/// Set the window's size in points (0 hides it) and pin it to the bottom edge.
+fn apply_window(app: &AppHandle, width_pt: f64, height_pt: f64) {
     let Some(window) = app.get_webview_window(SHELF) else {
         return;
     };
     let Some(monitor) = monitor(app) else { return };
-    let scale = monitor.scale_factor();
-    let before = super::inset_px(app, scale);
+    *WINDOW.lock().unwrap() = (width_pt, height_pt);
     if height_pt < 1.0 {
-        *state.layout.lock().unwrap() = super::Layout { height_pt: 0.0 };
         let _ = platform::hide(&window);
-        restack_if(app, before, scale);
         return;
     }
+    let scale = monitor.scale_factor();
     let size = (
-        (WIDTH * scale).round() as u32,
+        (width_pt * scale).round() as u32,
         (height_pt * scale).round() as u32,
     );
     let margin = (shelf_place::SIDE * scale).round() as u32;
     let rect = shelf_place::shelf_rect(area_of(&monitor), corner(app), size, margin);
-    *state.layout.lock().unwrap() = super::Layout { height_pt };
     use tauri::{LogicalPosition, LogicalSize};
-    let _ = window.set_size(LogicalSize::new(WIDTH, height_pt));
+    let _ = window.set_size(LogicalSize::new(width_pt, height_pt));
     let _ = window.set_position(LogicalPosition::new(
         f64::from(rect.x) / scale,
         f64::from(rect.y) / scale,
     ));
     let _ = platform::show_without_focus(&window);
-    restack_if(app, before, scale);
 }
 
 /// The stack follows the shelf's height: move it when what the shelf takes changed.

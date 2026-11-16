@@ -270,7 +270,7 @@ pub fn follow_shelf(app: &AppHandle) {
         scale,
         size,
         (base.x, base.y),
-        crate::shelf::expanded_pt(app),
+        crate::shelf::expanded_size(app),
     );
     crate::glide::to(&window, scale, at);
 }
@@ -345,9 +345,12 @@ fn place(
     // The zone's resting spot clears the shelf's strip; it slides further up only
     // when the shelf expands.
     let strip = if crate::shelf::state(app).is_some() {
-        ferry_core::shelf_place::STRIP
+        (
+            ferry_core::shelf_place::WIDTH,
+            ferry_core::shelf_place::STRIP,
+        )
     } else {
-        0.0
+        (0.0, 0.0)
     };
     let (x, y) = clear_of_height(area, corner, scale, size, (x, y), strip);
     *BASE.lock().unwrap() = Some((
@@ -367,7 +370,7 @@ fn place(
         scale,
         size,
         (x, y),
-        crate::shelf::expanded_pt(app),
+        crate::shelf::expanded_size(app),
     );
     apply_geometry(window, scale, size, (x, y));
 }
@@ -379,14 +382,14 @@ fn clear_of_height(
     scale: f64,
     size: (u32, u32),
     at: (i32, i32),
-    height_pt: f64,
+    (width_pt, height_pt): (f64, f64),
 ) -> (i32, i32) {
-    use ferry_core::shelf_place::{SIDE, WIDTH, clear_of, shelf_rect};
+    use ferry_core::shelf_place::{SIDE, clear_of, shelf_rect};
     if height_pt <= 0.0 {
         return at;
     }
     let px = |pt: f64| (pt * scale).round() as u32;
-    let shelf = shelf_rect(area, corner, (px(WIDTH), px(height_pt)), px(SIDE));
+    let shelf = shelf_rect(area, corner, (px(width_pt), px(height_pt)), px(SIDE));
     let zone = Rect {
         x: at.0,
         y: at.1,

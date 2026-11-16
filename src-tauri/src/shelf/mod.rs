@@ -26,6 +26,7 @@ pub const SHELF: &str = "shelf";
 pub struct Layout {
     /// The page's last reported height in points (0 = hidden).
     pub height_pt: f64,
+    pub width_pt: f64,
 }
 
 pub struct ShelfState {
@@ -55,6 +56,8 @@ pub struct ShelfView {
     pub can_undo: bool,
     /// `floating.shelf_opacity`, percent.
     pub opacity: u32,
+    /// The screen side the shelf sits on: `left` or `right`.
+    pub side: &'static str,
 }
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
@@ -96,6 +99,7 @@ pub fn view(app: &AppHandle) -> ShelfView {
             size: 0,
             can_undo: false,
             opacity: 95,
+            side: "right",
         };
     };
     let list = state.list.lock().unwrap();
@@ -138,6 +142,7 @@ pub fn view(app: &AppHandle) -> ShelfView {
         size,
         can_undo: list.can_undo(),
         opacity,
+        side: window::side(app),
     }
 }
 
@@ -260,14 +265,17 @@ pub fn cursor_over_ferry(cursor: (f64, f64), windows: &[(f64, f64, f64, f64)]) -
         .any(|&(x, y, w, h)| cursor.0 >= x && cursor.0 < x + w && cursor.1 >= y && cursor.1 < y + h)
 }
 
-/// The shelf's height in points while it is expanded (open or a drop target), else 0.
-pub fn expanded_pt(app: &AppHandle) -> f64 {
-    let Some(state) = state(app) else { return 0.0 };
-    let height = state.layout.lock().unwrap().height_pt;
-    if height > ferry_core::shelf_place::STRIP {
-        height
+/// The shelf's size in points (width, height) while it is expanded (open or a drop
+/// target), else (0, 0).
+pub fn expanded_size(app: &AppHandle) -> (f64, f64) {
+    let Some(state) = state(app) else {
+        return (0.0, 0.0);
+    };
+    let layout = *state.layout.lock().unwrap();
+    if layout.height_pt > ferry_core::shelf_place::STRIP {
+        (layout.width_pt, layout.height_pt)
     } else {
-        0.0
+        (0.0, 0.0)
     }
 }
 

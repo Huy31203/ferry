@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
@@ -6,12 +7,12 @@
   import { formatBytes } from '../lib/format';
   import { t } from '../lib/i18n';
   import type { Settings } from '../lib/settings';
-  import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, stripHeight, stripState, type DragView } from './strip';
+  import { COLLAPSE_MS, NO_DRAG, SUMMON_MS, countLabel, stripHeight, stripState, stripWidth, WIDTH, type DragView } from './strip';
 
   interface Entry { path: string; name: string; ext: string; is_dir: boolean; size: number }
-  interface ShelfView { items: Entry[]; size: number; can_undo: boolean; opacity: number }
+  interface ShelfView { items: Entry[]; size: number; can_undo: boolean; opacity: number; side: 'left' | 'right' }
 
-  let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, opacity: 95 });
+  let view = $state<ShelfView>({ items: [], size: 0, can_undo: false, opacity: 95, side: 'right' });
   let hover = $state(false);
   let summoned = $state(false);
   let listing = $state(false);
@@ -24,8 +25,26 @@
   const height = $derived(stripHeight(mode, listing));
   const pile = $derived(view.items.slice(-3));
 
+  const width = $derived(stripWidth(mode, listing));
+  // The panel animates inside its window: the window grows first, and only shrinks
+  // after the page has animated (Rust waits), so a collapse plays out.
+  let panelH = $state(0);
+  let panelW = $state(WIDTH);
   $effect(() => {
-    void invoke('shelf_layout', { height });
+    const [h, w] = [height, width];
+    const [ph, pw] = untrack(() => [panelH, panelW]);
+    if (h < ph || (h > 0 && w < pw)) {
+      panelH = h;
+      panelW = w;
+      void invoke('shelf_layout', { height: h, width: w });
+    } else {
+      void invoke('shelf_layout', { height: h, width: w }).then(() =>
+        requestAnimationFrame(() => {
+          panelH = h;
+          panelW = w;
+        }),
+      );
+    }
   });
 
   $effect(() => {
@@ -69,13 +88,32 @@
     };
   });
 
-  async function dragPile(event: MouseEvent, paths = view.items.map((i) => i.path)) {
+  const BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  /** A drag starts only once the pointer has moved: a click must not flash the drag image. */
+  function armDrag(event: MouseEvent, paths = view.items.map((i) => i.path)) {
     if (event.button !== 0 || paths.length === 0) return;
     const keep = event.altKey;
+    const [x0, y0] = [event.screenX, event.screenY];
+    const move = (e: MouseEvent) => {
+      if (Math.hypot(e.screenX - x0, e.screenY - y0) < 5) return;
+      done();
+      void beginDrag(paths, keep);
+    };
+    const done = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', done);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', done);
+  }
+
+  async function beginDrag(paths: string[], keep: boolean) {
     await invoke('shelf_drag_start');
-    // A pile of folders or PDFs has no thumbnails: fall back to a 1×1 transparent PNG so the drag still starts.
-    const blank = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-    startDrag({ item: paths, icon: icon || blank }, (result) => {
+    // One row drags its own icon; a pile of folders or PDFs has no thumbnail, so a 1×1 PNG keeps the drag starting.
+    const one = paths.length === 1 ? view.items.find((i) => i.path === paths[0]) : undefined;
+    const image = one ? (IMAGE.includes(one.ext) ? await fanIcon([one.path]) : '') : icon;
+    startDrag({ item: paths, icon: image || BLANK }, (result) => {
       void invoke('shelf_drag_finished', { paths, dropped: result.result === 'Dropped', keep });
     }).catch((e) => {
       console.warn('shelf drag', e);
@@ -115,7 +153,11 @@
   class="shelf"
   class:open={mode === 'open' || mode === 'target'}
   class:target={mode === 'target'}
+  class:left={view.side === 'left'}
+  class:right={view.side === 'right'}
   style:--solid={view.opacity / 100}
+  style:--w="{panelW}px"
+  style:--h="{panelH}px"
   role="region"
   aria-label={t('shelf.window_title')}
   onmouseenter={enter}
@@ -138,7 +180,7 @@
   {:else if mode === 'open' && listing}
     <ul class="list">
       {#each view.items as item (item.path)}
-        <li role="presentation" onmousedown={(e) => dragPile(e, [item.path])} oncontextmenu={(e) => itemMenu(e, item.path)}>
+        <li role="presentation" onmousedown={(e) => armDrag(e, [item.path])} oncontextmenu={(e) => itemMenu(e, item.path)}>
           <span class="badge">{item.is_dir ? '📁' : item.ext || '·'}</span>
           <span class="meta">
             <span class="name">{item.name}</span>
@@ -157,7 +199,7 @@
     </ul>
     <button class="pill" onclick={openMenu}>{countLabel(view.items.length)}<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   {:else if mode === 'open'}
-    <div class="pile" role="presentation" onmousedown={(e) => dragPile(e)}>
+    <div class="pile" role="presentation" onmousedown={(e) => armDrag(e)}>
       {#each pile as item, i (item.path)}
         <div class="doc" style:transform={`rotate(${(i - (pile.length - 1) / 2) * 7}deg)`}>
           <span>{item.is_dir ? '📁' : item.ext}</span>
@@ -171,15 +213,16 @@
 <style>
   :global(html), :global(body) { margin: 0; background: transparent; overflow: hidden; }
   .shelf {
-    position: fixed; inset: 0;
+    position: fixed; bottom: 0; width: var(--w); height: var(--h);
+    transition: height 200ms cubic-bezier(0.2, 0.8, 0.3, 1), width 200ms cubic-bezier(0.2, 0.8, 0.3, 1);
     background: rgb(58 61 68 / var(--solid, 0.5)); border: 1px solid rgb(85 89 99 / var(--solid, 0.5)); border-bottom: 0;
     border-radius: 14px 14px 0 0; box-sizing: border-box; color: #fff;
     font: 12px -apple-system, system-ui, sans-serif; user-select: none;
   }
-  @keyframes rise-open { from { transform: translateY(calc(100% - 27px)); } }
-  @keyframes rise-strip { from { transform: translateY(27px); } }
-  .shelf { animation: rise-strip 160ms ease-out; }
-  .shelf.open { animation: rise-open 160ms cubic-bezier(0.2, 0.8, 0.3, 1); }
+  .shelf.right { right: 0; }
+  .shelf.left { left: 0; }
+  @keyframes fade-up { from { opacity: 0; translate: 0 8px; } }
+  .count, .cleared, .drop, .pile, .list, .pill { animation: fade-up 220ms 70ms cubic-bezier(0.2, 0.8, 0.3, 1) both; }
   .shelf.target { outline: 2px solid var(--accent, #0a84ff); outline-offset: -3px; }
   .grip { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.75); }
   .count { position: absolute; right: 10px; top: 4px; font-size: 10px; font-weight: 700; }
