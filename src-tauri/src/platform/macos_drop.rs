@@ -37,16 +37,14 @@ pub fn make_zone_window(window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
-pub use sampling::{drag_files, frontmost_app, mods, sample};
+pub use sampling::{drag_contents, frontmost_app, mods, sample};
 
 /// Sampling the mouse, the modifiers and the drag pasteboard for `drag::DragWatch`.
 /// The NSEvent class properties need no Input Monitoring permission, and all of
 /// it is safe off the main thread. A module of its own keeps its imports apart
 /// from the ones `tauri_panel!` brings in.
 mod sampling {
-    use std::path::PathBuf;
-
-    use ferry_core::drag::{Mods, Sample};
+    use ferry_core::drag::{DragContents, FILE_URL, Mods, PROMISED_TYPE, Sample, is_dragged_image};
     use objc2_app_kit::{
         NSEvent, NSEventModifierFlags, NSPasteboard, NSPasteboardNameDrag, NSWorkspace,
     };
@@ -79,18 +77,27 @@ mod sampling {
         }
     }
 
-    /// The files on the drag pasteboard, as the clipboard reader finds copied files.
-    pub fn drag_files() -> Vec<PathBuf> {
-        drag_pasteboard()
-            .pasteboardItems()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.stringForType(&NSString::from_str("public.file-url")))
-                    .filter_map(|url| NSURL::URLWithString(&url)?.to_file_path())
-                    .collect()
-            })
-            .unwrap_or_default()
+    /// The files on the drag pasteboard, and how many items are images with no file.
+    pub fn drag_contents() -> DragContents {
+        let mut out = DragContents::default();
+        let items = drag_pasteboard().pasteboardItems().unwrap_or_default();
+        for item in items.iter() {
+            let file = item
+                .stringForType(&NSString::from_str(FILE_URL))
+                .and_then(|url| NSURL::URLWithString(&url)?.to_file_path());
+            if let Some(path) = file {
+                out.files.push(path);
+                continue;
+            }
+            let types: Vec<String> = item.types().iter().map(|t| t.to_string()).collect();
+            let promised = item
+                .stringForType(&NSString::from_str(PROMISED_TYPE))
+                .map(|s| s.to_string());
+            if is_dragged_image(&types, promised.as_deref()) {
+                out.images += 1;
+            }
+        }
+        out
     }
 
     /// The bundle id of the frontmost app.

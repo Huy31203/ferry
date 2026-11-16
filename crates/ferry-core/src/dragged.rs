@@ -89,13 +89,22 @@ mod tests {
 
     #[test]
     fn a_dragged_image_is_named_after_its_app() {
-        assert_eq!(dragged_name("Slack", at()), "Slack image 2026-11-09 at 15.42.10");
+        assert_eq!(
+            dragged_name("Slack", at()),
+            "Slack image 2026-11-09 at 15.42.10"
+        );
     }
 
     #[test]
     fn an_awkward_source_name_is_made_safe() {
-        assert_eq!(dragged_name("A/B: C", at()), "A_B_ C image 2026-11-09 at 15.42.10");
-        assert_eq!(dragged_name("", at()), "Dragged image 2026-11-09 at 15.42.10");
+        assert_eq!(
+            dragged_name("A/B: C", at()),
+            "A_B_ C image 2026-11-09 at 15.42.10"
+        );
+        assert_eq!(
+            dragged_name("", at()),
+            "Dragged image 2026-11-09 at 15.42.10"
+        );
     }
 
     #[test]

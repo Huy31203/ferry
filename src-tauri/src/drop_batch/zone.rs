@@ -7,7 +7,7 @@ use std::time::Duration;
 use ferry_core::drag::{tab_at_edge, zone_from_tab, zone_near_results, zone_under_cursor};
 use ferry_core::geometry::{Corner, Rect};
 use ferry_core::i18n::t;
-use ferry_core::intake::{Summary, ZoneMode, ZoneState, ZoneView, summarise, zone_view};
+use ferry_core::intake::{Summary, ZoneMode, ZoneState, ZoneView, summarise_drag, zone_view};
 use ferry_core::settings::{self, ZonePosition};
 use tauri::menu::MenuItem;
 use tauri::{
@@ -375,8 +375,14 @@ fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
     match event {
         DragDropEvent::Enter { paths, .. } => {
             let (app, paths) = (app.clone(), paths.clone());
+            // An image dragged from another app has no path: count it from the drag pasteboard.
+            let images = if paths.is_empty() {
+                crate::platform::drop::drag_contents().images
+            } else {
+                0
+            };
             tauri::async_runtime::spawn_blocking(move || {
-                let summary = summarise(&paths, threshold(&app) as usize + 1);
+                let summary = summarise_drag(&paths, images, threshold(&app) as usize + 1);
                 refresh_keep(&app);
                 let tab = with_zone(&app, |ctl| {
                     ctl.summary = Some(summary);

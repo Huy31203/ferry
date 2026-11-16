@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use ferry_core::drag::{DragWatch, Modifier, Signal, should_auto_show};
-use ferry_core::intake::{ZoneMode, all_own, summarise};
+use ferry_core::drag::{DragContents, DragWatch, Modifier, Signal, should_auto_show};
+use ferry_core::intake::{ZoneMode, all_own, summarise_drag};
 use ferry_core::settings::DropZone;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -25,6 +25,8 @@ pub const ACTIVE_MS: u64 = 30;
 struct Context<'a> {
     zone: &'a DropZone,
     files: &'a [PathBuf],
+    /// Drag items with no file but image bytes or an image promise (an image dragged from Slack).
+    images: u32,
     all_own: bool,
     frontmost: Option<&'a str>,
     visible: bool,
@@ -43,7 +45,8 @@ enum Plan {
 fn plan(signal: Signal, ctx: &Context) -> Plan {
     match signal {
         Signal::DragStarted => {
-            if should_auto_show(ctx.zone, !ctx.files.is_empty(), ctx.all_own, ctx.frontmost) {
+            let has_drop = !ctx.files.is_empty() || ctx.images > 0;
+            if should_auto_show(ctx.zone, has_drop, ctx.all_own, ctx.frontmost) {
                 Plan::Show {
                     mode: ZoneMode::Zone,
                     under_cursor: false,
@@ -117,10 +120,10 @@ fn handle(app: &AppHandle, signal: Signal) {
     let state = app.state::<AppState>();
     let zone_settings = state.settings.read().unwrap().drop_zone.clone();
     // The drag pasteboard and the frontmost app are read only when a signal needs them.
-    let files = if matches!(signal, Signal::DragStarted | Signal::Tap(_)) {
-        platform::drop::drag_files()
+    let DragContents { files, images } = if matches!(signal, Signal::DragStarted | Signal::Tap(_)) {
+        platform::drop::drag_contents()
     } else {
-        Vec::new()
+        DragContents::default()
     };
     let frontmost = if matches!(signal, Signal::DragEnded) {
         None
@@ -137,6 +140,7 @@ fn handle(app: &AppHandle, signal: Signal) {
     let ctx = Context {
         zone: &zone_settings,
         files: &files,
+        images,
         all_own: all_own(&files, &outputs),
         frontmost: frontmost.as_deref(),
         visible: zone::visible(app),
@@ -145,12 +149,12 @@ fn handle(app: &AppHandle, signal: Signal) {
     match plan(signal, &ctx) {
         Plan::Show { mode, under_cursor } => {
             zone::show(app, mode, under_cursor, None);
-            if !files.is_empty() {
+            if !files.is_empty() || images > 0 {
                 // A slow drive never delays the panel: the summary follows it.
                 let app = app.clone();
                 let limit = zone_settings.batch_threshold as usize + 1;
                 tauri::async_runtime::spawn_blocking(move || {
-                    zone::set_summary(&app, summarise(&files, limit));
+                    zone::set_summary(&app, summarise_drag(&files, images, limit));
                 });
             }
         }
@@ -188,6 +192,7 @@ mod tests {
         Context {
             zone,
             files,
+            images: 0,
             all_own: false,
             frontmost: Some("com.apple.finder"),
             visible: false,
@@ -199,6 +204,18 @@ mod tests {
         mode: ZoneMode::Zone,
         under_cursor: false,
     };
+
+    #[test]
+    fn an_image_dragged_from_slack_shows_the_zone() {
+        let zone = any_drag();
+        let image = Context {
+            images: 1,
+            ..ctx(&zone, &[])
+        };
+        assert_eq!(plan(Signal::DragStarted, &image), SHOW_ZONE);
+        // Text or a link: nothing to drop.
+        assert_eq!(plan(Signal::DragStarted, &ctx(&zone, &[])), Plan::Nothing);
+    }
 
     #[test]
     fn a_file_drag_from_another_app_shows_the_zone_near_the_results() {
@@ -295,7 +312,8 @@ mod tests {
     #[test]
     fn sampling_works_off_the_main_thread() {
         let joined =
-            std::thread::spawn(|| (platform::drop::sample(0), platform::drop::drag_files())).join();
+            std::thread::spawn(|| (platform::drop::sample(0), platform::drop::drag_contents()))
+                .join();
         assert!(joined.is_ok());
     }
 }

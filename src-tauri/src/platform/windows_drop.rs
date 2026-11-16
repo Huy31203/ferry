@@ -68,8 +68,8 @@ pub fn sample(at_ms: u64) -> Sample {
 }
 
 /// Windows has no drag pasteboard to read.
-pub fn drag_files() -> Vec<PathBuf> {
-    Vec::new()
+pub fn drag_contents() -> ferry_core::drag::DragContents {
+    ferry_core::drag::DragContents::default()
 }
 
 /// The executable name of the foreground app, such as `Figma.exe`.
