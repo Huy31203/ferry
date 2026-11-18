@@ -1815,7 +1815,8 @@ mod tests {
     #[test]
     fn an_old_file_is_not_onboarded_and_keeps_its_video_quality() {
         let s: Settings =
-            serde_json::from_str(r#"{"general":{"language":"en"},"video":{"compression":80}}"#).unwrap();
+            serde_json::from_str(r#"{"general":{"language":"en"},"video":{"compression":80}}"#)
+                .unwrap();
         assert!(!s.general.onboarded);
         assert_eq!(s.video.compression, 80);
     }

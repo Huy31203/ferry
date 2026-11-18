@@ -610,7 +610,11 @@ pub(crate) mod tests {
         Case {
             probe: probe_1080(),
             edits: Edits::default(),
-            settings: Settings::default().video,
+            // The expected numbers below are worked out at quality 80.
+            settings: settings::Video {
+                compression: 80,
+                ..Settings::default().video
+            },
             target: Format::Mp4,
             hardware: Hardware::default(),
             out_file: "/w/out.mp4",
