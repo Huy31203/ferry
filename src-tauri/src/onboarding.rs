@@ -35,7 +35,7 @@ pub fn open_if_needed(app: &AppHandle) {
     let built =
         WebviewWindowBuilder::new(app, ONBOARDING, WebviewUrl::App("onboarding.html".into()))
             .title(t("onboarding.title"))
-            .inner_size(520.0, 560.0)
+            .inner_size(520.0, 680.0)
             .resizable(false)
             .center()
             .build();

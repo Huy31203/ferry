@@ -36,7 +36,7 @@ At the end of setup, if `!settings.general.onboarded`, Ferry opens the onboardin
 
 The window:
 - is a normal, focusable window titled "Welcome to Ferry";
-- is 520×560 and not resizable;
+- is 520×680 and not resizable, tall enough to show Done without scrolling;
 - is centred and brought to the front, like `open_settings`.
 
 ## 4. The page

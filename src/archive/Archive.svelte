@@ -121,7 +121,7 @@
 <style>
   :global(body) { margin: 0; background: var(--bg-content); color: var(--fg); font: 13px var(--font-ui); }
   main { display: flex; flex-direction: column; height: 100vh; padding: 16px; box-sizing: border-box; gap: 12px; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; flex: 1; }
   section { display: flex; flex-direction: column; gap: 6px; }
   .group { background: var(--bg-group); border-radius: var(--card-radius); padding: 12px; align-self: start; }
   h2 { margin: 0 0 4px; font-size: 13px; }
