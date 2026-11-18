@@ -23,6 +23,7 @@ export default defineConfig({
         drop: page('drop.html'),
         shelf: page('shelf.html'),
         archive: page('archive.html'),
+        onboarding: page('onboarding.html'),
         pipelines: page('pipelines.html'), // stream F
         zones: page('zones.html'), // stream F
       },

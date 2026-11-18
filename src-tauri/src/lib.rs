@@ -10,6 +10,7 @@ mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
+mod onboarding;
 mod pdf_commands; // sE pdf-formats
 mod pipe_commands; // stream F
 mod pipe_jobs; // stream F
@@ -80,6 +81,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
             windows::stack_pointer,
+            onboarding::onboarding_measure,
+            onboarding::onboarding_closed,
             shelf::archive_dialog::archive_view,
             shelf::archive_dialog::archive_estimate,
             shelf::archive_dialog::archive_pick,
@@ -261,6 +264,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     video_startup(app);
     audio::startup(); // stream B: audio
+    onboarding::open_if_needed(app);
     Ok(())
 }
 
