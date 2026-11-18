@@ -121,10 +121,14 @@ pub fn popup(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
 }
 
 fn archive_submenu(app: &AppHandle) -> Result<Submenu<Wry>, String> {
-    use super::archive::{Preset, cores, estimate, eta_label, items};
-    let items = items(app);
+    use super::archive::{Preset, cached, cores, estimate, eta_label, items};
+    // Never walk here: this runs on the main thread and a big folder takes seconds.
+    let totals = cached(&items(app));
     let quick = |preset: Preset, id: &str, key: &str| {
-        let eta = eta_label(estimate(app, &items, preset.level(), cores()));
+        let eta = totals.map_or_else(
+            || "…".to_string(),
+            |t| eta_label(estimate(app, t, preset.level(), cores())),
+        );
         MenuItem::with_id(app, id, tf(key, &[("eta", &eta)]), true, None::<&str>)
             .map_err(|e| e.to_string())
     };

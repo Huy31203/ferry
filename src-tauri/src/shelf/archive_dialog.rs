@@ -104,7 +104,9 @@ pub fn archive_view(app: AppHandle) -> DialogView {
 #[tauri::command]
 pub async fn archive_estimate(app: AppHandle, level: u32, threads: usize) -> String {
     tauri::async_runtime::spawn_blocking(move || {
-        archive::eta_label(archive::estimate(&app, &items(&app), level, threads))
+        let items = items(&app);
+        let totals = archive::cached(&items).unwrap_or_else(|| archive::walk(&items));
+        archive::eta_label(archive::estimate(&app, totals, level, threads))
     })
     .await
     .unwrap_or_default()

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ferry_core::archive::{self, Encryption, Options, Rates};
@@ -77,13 +78,49 @@ fn rates_path(app: &AppHandle) -> Option<PathBuf> {
         .map(|d| d.join("archive_rates.json"))
 }
 
-/// Seconds to archive `items` at `level` on `threads` (spec §5).
-pub fn estimate(app: &AppHandle, items: &[PathBuf], level: u32, threads: usize) -> f64 {
+#[derive(Debug, Clone, Copy)]
+pub struct Totals {
+    pub bytes: u64,
+    pub files: usize,
+}
+
+/// The last walk's totals, keyed by the items walked.
+static TOTALS: Mutex<Option<(Vec<PathBuf>, Totals)>> = Mutex::new(None);
+static WALKING: AtomicBool = AtomicBool::new(false);
+
+/// Walk `items` now and remember the result. Seconds for a big project folder.
+pub fn walk(items: &[PathBuf]) -> Totals {
     let entries = archive::collect(items).unwrap_or_default();
-    let files = entries.iter().filter(|e| !e.is_dir()).count();
-    let bytes = entries.iter().map(|e| e.size).sum();
+    let totals = Totals {
+        bytes: entries.iter().map(|e| e.size).sum(),
+        files: entries.iter().filter(|e| !e.is_dir()).count(),
+    };
+    *TOTALS.lock().unwrap() = Some((items.to_vec(), totals));
+    totals
+}
+
+/// The last walk of `items`, never waiting: a fresh walk starts in the
+/// background so the next ask sees changes inside the folders.
+pub fn cached(items: &[PathBuf]) -> Option<Totals> {
+    if !WALKING.swap(true, Ordering::SeqCst) {
+        let owned = items.to_vec();
+        std::thread::spawn(move || {
+            walk(&owned);
+            WALKING.store(false, Ordering::SeqCst);
+        });
+    }
+    TOTALS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(key, _)| key == items)
+        .map(|(_, t)| *t)
+}
+
+/// Seconds to archive `totals` at `level` on `threads` (spec §5).
+pub fn estimate(app: &AppHandle, totals: Totals, level: u32, threads: usize) -> f64 {
     let rates = rates_path(app).map(|p| Rates::load(&p)).unwrap_or_default();
-    rates.estimate(bytes, level, threads.min(files).max(1))
+    rates.estimate(totals.bytes, level, threads.min(totals.files).max(1))
 }
 
 pub(super) fn items(app: &AppHandle) -> Vec<PathBuf> {
@@ -222,5 +259,30 @@ mod tests {
             [Preset::Fast, Preset::Balanced, Preset::Smallest].map(Preset::level),
             [1, 5, 9]
         );
+    }
+
+    #[test]
+    fn the_menu_never_walks_a_folder_itself_and_answers_from_the_last_walk() {
+        let dir = std::env::temp_dir().join(format!("ferry-totals-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/a.bin"), [0u8; 1000]).unwrap();
+        let items = vec![dir.clone()];
+        assert!(
+            cached(&items).is_none(),
+            "the first ask starts a walk, it doesn't wait for one"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let got = loop {
+            if let Some(t) = cached(&items) {
+                break t;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the background walk never finished"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!((got.bytes, got.files), (1000, 1));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
