@@ -1072,5 +1072,9 @@
   "pipe.zones.icon.globe": "Globe",
   "pipe.zones.icon.star": "Star",
   "pipe.zone.none": "No pipeline for {media}",
-  "pipe.zone.no_pipeline": "“{zone}” has no pipeline for {media}"
+  "pipe.zone.no_pipeline": "“{zone}” has no pipeline for {media}",
+  "onboarding.measure.failed": "—",
+  "onboarding.measure.quick": "< 5 s per min of 1080p",
+  "onboarding.measure.secs": "~{n} s per min of 1080p",
+  "onboarding.measure.mins": "~{n} min per min of 1080p"
 }
