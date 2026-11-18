@@ -1,6 +1,7 @@
 //! Ferry's platform-independent core. No Tauri or OS UI dependencies, so every
 //! module is unit-tested on macOS, Windows and Linux.
 
+pub mod archive;
 pub mod audio; // stream B
 pub mod backup;
 pub mod batch;
@@ -9,6 +10,7 @@ pub mod cancel;
 pub mod clip;
 pub mod color;
 pub mod drag;
+pub mod dragged;
 pub mod edit;
 pub mod formats; // sE pdf-formats
 pub mod fsutil;
@@ -29,6 +31,8 @@ pub mod run_state;
 pub mod selfwrite; // stream C
 pub mod settings;
 pub mod settings_sync;
+pub mod shelf;
+pub mod shelf_place;
 pub mod sidecar;
 pub mod sniff;
 pub mod svc_settings;

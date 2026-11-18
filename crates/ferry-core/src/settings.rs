@@ -81,6 +81,15 @@ pub enum CardSize {
     Compact,
 }
 
+/// What the shelf holds after "Add to archive" (shelf archive spec §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveResult {
+    #[default]
+    Replace,
+    Add,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct General {
@@ -90,6 +99,8 @@ pub struct General {
     pub show_in_screenshots: bool,
     pub tray_style: TrayStyle,
     pub language: String,
+    /// The first-run screen was finished; it shows until then (onboarding spec §2).
+    pub onboarded: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -197,6 +208,10 @@ pub struct Floating {
     pub follow_cursor: bool,
     /// Space, Cmd/Ctrl+D, - and 1–9 act on the hovered card.
     pub hover_hotkeys: bool,
+    /// How solid the shelf's panel is, in percent (20–100).
+    pub shelf_opacity: u32,
+    /// Whether the archive replaces the shelf's items or joins them.
+    pub shelf_archive_result: ArchiveResult,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -398,6 +413,7 @@ impl Default for General {
             show_in_screenshots: false,
             tray_style: TrayStyle::Default,
             language: "en".into(),
+            onboarded: false,
             extra: Map::new(),
         }
     }
@@ -445,6 +461,8 @@ impl Default for Floating {
             auto_hide_secs: 6,
             follow_cursor: true,
             hover_hotkeys: true,
+            shelf_opacity: 95,
+            shelf_archive_result: ArchiveResult::Replace,
             extra: Map::new(),
         }
     }
@@ -638,7 +656,7 @@ impl Default for Video {
     fn default() -> Self {
         Self {
             encoder: Encoder::Fast,
-            compression: 80,
+            compression: 95,
             convert_mov: true,
             audio_to_aac: false,
             remove_audio: false,
@@ -690,6 +708,8 @@ pub struct DropZone {
     pub keep_original_modifier: DragKey,
     pub batch_threshold: u32,
     pub ignored_apps: Vec<String>,
+    /// Where images dragged from other apps (no file behind them) are saved. Stored with `~`.
+    pub save_folder: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -736,6 +756,7 @@ impl Default for DropZone {
             keep_original_modifier: DragKey::Shift,
             batch_threshold: 20,
             ignored_apps: apps.iter().map(|a| a.to_string()).collect(),
+            save_folder: "~/Downloads/Ferry".into(),
             extra: Map::new(),
         }
     }
@@ -942,6 +963,7 @@ impl Settings {
         self.images.max_size_mb = self.images.max_size_mb.max(1);
         self.clipboard.max_size_mb = self.clipboard.max_size_mb.max(1);
         self.floating.auto_hide_secs = self.floating.auto_hide_secs.min(3600);
+        self.floating.shelf_opacity = self.floating.shelf_opacity.clamp(20, 100);
         self.backups.retention_days = self.backups.retention_days.clamp(1, 3650);
         for list in [
             &mut self.images.ignored_extensions,
@@ -1025,7 +1047,7 @@ pub(crate) fn repair_output(out: &mut Output, defaults: &Output) {
     }
 }
 
-fn recover(path: &Path) -> LoadStatus {
+pub(crate) fn recover(path: &Path) -> LoadStatus {
     let mut name = path.file_name().unwrap_or_default().to_owned();
     name.push(".bak");
     let backup = path.with_file_name(name);
@@ -1056,6 +1078,23 @@ pub fn contract_home(path: &Path, home: &Path) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn shelf_archive_result_defaults_to_replace_and_reads_add() {
+        assert_eq!(
+            Settings::default().floating.shelf_archive_result,
+            ArchiveResult::Replace
+        );
+        let s: Floating = serde_json::from_str(r#"{"shelf_archive_result":"add"}"#).unwrap();
+        assert_eq!(s.shelf_archive_result, ArchiveResult::Add);
+    }
+
+    #[test]
+    fn dragged_images_go_to_downloads_ferry_by_default() {
+        assert_eq!(DropZone::default().save_folder, "~/Downloads/Ferry");
+        let old: DropZone = serde_json::from_value(json!({ "enabled": true })).unwrap();
+        assert_eq!(old.save_folder, "~/Downloads/Ferry");
+    }
 
     fn read_json(path: &Path) -> Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
@@ -1258,6 +1297,7 @@ mod tests {
         s.images.max_size_mb = 0;
         s.clipboard.max_size_mb = 0;
         s.floating.auto_hide_secs = 99_999_999;
+        s.floating.shelf_opacity = 0;
         s.backups.retention_days = 0;
         s.images.ignored_extensions = vec![" png ".into(), "".into(), "  ".into()];
         s.clipboard.ignored_apps = vec!["".into(), "com.example.App".into()];
@@ -1265,6 +1305,7 @@ mod tests {
         assert_eq!(s.images.compression, 5);
         assert_eq!((s.images.max_size_mb, s.clipboard.max_size_mb), (1, 1));
         assert_eq!(s.floating.auto_hide_secs, 3600);
+        assert_eq!(s.floating.shelf_opacity, 20);
         assert_eq!(s.backups.retention_days, 1);
         assert_eq!(s.images.ignored_extensions, vec!["png".to_string()]);
         assert_eq!(
@@ -1352,7 +1393,7 @@ mod tests {
                 v.audio_to_aac,
                 v.remove_audio
             ),
-            (Encoder::Fast, 80, true, false, false)
+            (Encoder::Fast, 95, true, false, false)
         );
         assert_eq!(
             (v.fps_cap, v.speed_frames, v.preserve_dates, v.max_size_mb),
@@ -1762,5 +1803,21 @@ mod tests {
             json!({ "name": "iPhone", "width": 1179, "height": 2556 })
         );
         assert_eq!(json["formats"]["heic_to"], "jpeg");
+    }
+
+    #[test]
+    fn fresh_settings_are_not_onboarded_and_videos_default_to_95() {
+        let s = Settings::default();
+        assert!(!s.general.onboarded);
+        assert_eq!(s.video.compression, 95);
+    }
+
+    #[test]
+    fn an_old_file_is_not_onboarded_and_keeps_its_video_quality() {
+        let s: Settings =
+            serde_json::from_str(r#"{"general":{"language":"en"},"video":{"compression":80}}"#)
+                .unwrap();
+        assert!(!s.general.onboarded);
+        assert_eq!(s.video.compression, 80);
     }
 }

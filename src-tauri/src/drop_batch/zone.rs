@@ -7,7 +7,7 @@ use std::time::Duration;
 use ferry_core::drag::{tab_at_edge, zone_from_tab, zone_near_results, zone_under_cursor};
 use ferry_core::geometry::{Corner, Rect};
 use ferry_core::i18n::t;
-use ferry_core::intake::{Summary, ZoneMode, ZoneState, ZoneView, summarise, zone_view};
+use ferry_core::intake::{Summary, ZoneMode, ZoneState, ZoneView, summarise_drag, zone_view};
 use ferry_core::settings::{self, ZonePosition};
 use tauri::menu::MenuItem;
 use tauri::{
@@ -242,6 +242,45 @@ pub fn cursor_monitor(app: &AppHandle) -> Option<Monitor> {
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
+/// The zone's base rect (without the shelf), its work area, corner and scale, from the last `place`.
+static BASE: std::sync::Mutex<Option<(Rect, Rect, Corner, f64)>> = std::sync::Mutex::new(None);
+
+/// Where the zone belongs while it shows, whether or not the shelf has pushed it up.
+pub fn base_rect(app: &AppHandle) -> Option<Rect> {
+    visible(app).then_some(())?;
+    BASE.lock().unwrap().map(|b| b.0)
+}
+
+/// The shelf grew or shrank: slide the zone up out of its way, or back down.
+/// Call on the main thread.
+pub fn follow_shelf(app: &AppHandle) {
+    let Some(window) = app
+        .get_webview_window(ZONE)
+        .filter(|w| w.is_visible().unwrap_or(false))
+    else {
+        return;
+    };
+    let Some((base, area, corner, scale)) = *BASE.lock().unwrap() else {
+        return;
+    };
+    let size = (base.width, base.height);
+    let at = clear_of_height(
+        area,
+        corner,
+        scale,
+        size,
+        (base.x, base.y),
+        crate::shelf::expanded_size(app),
+    );
+    crate::glide::to(&window, scale, at);
+}
+
+/// The cursor in physical pixels, as the work areas are measured.
+pub fn cursor_px(app: &AppHandle) -> Option<(i32, i32)> {
+    let p = app.cursor_position().ok()?;
+    Some((p.x as i32, p.y as i32))
+}
+
 /// Size and move the window; `from_tab` puts the full zone where the tab was.
 fn place(
     app: &AppHandle,
@@ -303,7 +342,61 @@ fn place(
         let margin = (MARGIN * scale).round() as u32;
         zone_near_results(area, corner, size, stack, margin, 0)
     };
+    // The zone's resting spot clears the shelf's strip; it slides further up only
+    // when the shelf expands.
+    let strip = if crate::shelf::state(app).is_some() {
+        (
+            ferry_core::shelf_place::WIDTH,
+            ferry_core::shelf_place::STRIP,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+    let (x, y) = clear_of_height(area, corner, scale, size, (x, y), strip);
+    *BASE.lock().unwrap() = Some((
+        Rect {
+            x,
+            y,
+            width: size.0,
+            height: size.1,
+        },
+        area,
+        corner,
+        scale,
+    ));
+    let (x, y) = clear_of_height(
+        area,
+        corner,
+        scale,
+        size,
+        (x, y),
+        crate::shelf::expanded_size(app),
+    );
     apply_geometry(window, scale, size, (x, y));
+}
+
+/// Move the zone up so it clears a shelf `height_pt` points tall on the bottom edge (spec §4).
+fn clear_of_height(
+    area: Rect,
+    corner: Corner,
+    scale: f64,
+    size: (u32, u32),
+    at: (i32, i32),
+    (width_pt, height_pt): (f64, f64),
+) -> (i32, i32) {
+    use ferry_core::shelf_place::{SIDE, clear_of, shelf_rect};
+    if height_pt <= 0.0 {
+        return at;
+    }
+    let px = |pt: f64| (pt * scale).round() as u32;
+    let shelf = shelf_rect(area, corner, (px(width_pt), px(height_pt)), px(SIDE));
+    let zone = Rect {
+        x: at.0,
+        y: at.1,
+        width: size.0,
+        height: size.1,
+    };
+    clear_of(zone, shelf, area)
 }
 
 /// The stack's per-OS way of sizing and moving a window (`windows::stack_resize`).
@@ -372,11 +465,22 @@ fn expand_tab(app: &AppHandle) {
 }
 
 fn on_drag_drop(app: &AppHandle, event: &DragDropEvent) {
+    if crate::shelf::state(app)
+        .is_some_and(|s| s.dragging.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return; // the shelf's own pile: no intake (spec §3)
+    }
     match event {
         DragDropEvent::Enter { paths, .. } => {
             let (app, paths) = (app.clone(), paths.clone());
+            // An image dragged from another app has no path: count it from the drag pasteboard.
+            let images = if paths.is_empty() {
+                crate::platform::drop::drag_contents().images
+            } else {
+                0
+            };
             tauri::async_runtime::spawn_blocking(move || {
-                let summary = summarise(&paths, threshold(&app) as usize + 1);
+                let summary = summarise_drag(&paths, images, threshold(&app) as usize + 1);
                 refresh_keep(&app);
                 let tab = with_zone(&app, |ctl| {
                     ctl.summary = Some(summary);

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SLIDER_INSET, SLIDER_TOP } from '../lib/edits';
+  import { t } from '../lib/i18n';
 
   /** The vertical slider a press-and-drag on Downscale or Compression drops over the thumbnail (spec §5.2). */
   let {
@@ -11,6 +12,9 @@
     left,
     track,
     width = 300,
+    armed = false,
+    leaving = false,
+    el = $bindable(null),
   }: {
     /** The stop under the pointer, 0 at the top. */
     index: number;
@@ -28,6 +32,12 @@
     track: number;
     /** The card's width in px, so the panel stays inside it. */
     width?: number;
+    /** Releasing now cancels: the panel dims and the knob shows the start value. */
+    armed?: boolean;
+    /** A cancelled panel fading out. */
+    leaving?: boolean;
+    /** The panel element, so the card can tell when the pointer has left its sides. */
+    el?: HTMLElement | null;
   } = $props();
 
   /** Panel padding; the readout and the insets above and below the track add the rest (SLIDER_CHROME). */
@@ -54,11 +64,18 @@
 
 <div
   class="slider"
+  class:armed
+  class:leaving
+  bind:this={el}
   style="left: {x}px; top: {SLIDER_TOP}px; padding: {PAD}px"
   bind:clientWidth={panelWidth}
   aria-hidden="true"
 >
-  <div class="line" style="min-width: {lineMax}px" bind:clientWidth={lineWidth}>{label}</div>
+  <div class="line" style="min-width: {lineMax}px" bind:clientWidth={lineWidth}>
+    <!-- The cancel text overlays the value, which keeps its room, so the panel neither grows nor flips as cancel arms. -->
+    <span class:hide={armed}>{label}</span>
+    {#if armed}<span class="cancel">{t('slider.release_cancel')}</span>{/if}
+  </div>
   <div class="row" class:flip={!toRight} style="padding: {SLIDER_INSET}px 0">
     <div class="track" style="height: {track}px; width: {KNOB}px">
       <div class="rail-line"></div>
@@ -92,7 +109,44 @@
     z-index: 4;
     pointer-events: none;
   }
+  /* Only the track dims: the cancel text stays readable, and the root keeps its backdrop blur. */
+  .slider.armed .row {
+    opacity: 0.4;
+    filter: grayscale(1);
+  }
+  .hide {
+    visibility: hidden;
+  }
+  .cancel {
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--error);
+  }
+  .slider.leaving {
+    animation: leave 150ms ease-in forwards;
+  }
+  @keyframes leave {
+    to {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+  }
+  /* Snap back: the knob glides to the start value as cancel arms. */
+  .slider.armed .knob {
+    transition: top 120ms ease-out;
+  }
+  .slider.armed .fill {
+    transition: height 120ms ease-out;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .slider.armed .knob,
+    .slider.armed .fill {
+      transition: none;
+    }
+  }
   .line {
+    position: relative;
     box-sizing: border-box;
     width: max-content;
     height: 16px;

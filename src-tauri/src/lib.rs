@@ -3,12 +3,14 @@ mod clipboard;
 mod commands;
 mod compare;
 mod drop_batch;
+mod glide;
 mod hotkeys;
 mod hover_keys;
 mod integrations; // Stream H
 mod jobs;
 mod logging;
 mod menu;
+mod onboarding;
 mod pdf_commands; // sE pdf-formats
 mod pipe_commands; // stream F
 mod pipe_jobs; // stream F
@@ -18,6 +20,7 @@ mod platform;
 mod prefs;
 mod preset_zones; // stream F
 mod preview;
+mod shelf;
 mod state;
 mod tray;
 mod watch; // stream C
@@ -78,6 +81,26 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             windows::stack_resize,
             windows::stack_pointer,
+            onboarding::onboarding_measure,
+            onboarding::onboarding_closed,
+            shelf::archive_dialog::archive_view,
+            shelf::archive_dialog::archive_estimate,
+            shelf::archive_dialog::archive_pick,
+            shelf::archive_dialog::archive_start,
+            shelf::archive_dialog::archive_close,
+            shelf::commands::shelf_view,
+            shelf::commands::shelf_add,
+            shelf::commands::shelf_remove,
+            shelf::commands::shelf_layout,
+            shelf::commands::shelf_pointer_inside,
+            shelf::commands::shelf_menu,
+            shelf::commands::shelf_item_menu,
+            shelf::commands::shelf_undo,
+            shelf::commands::shelf_reveal,
+            shelf::commands::shelf_shelve_cards,
+            shelf::commands::shelf_restore,
+            shelf::commands::shelf_drag_start,
+            shelf::commands::shelf_drag_finished,
             compare::open_compare,
             compare::compare_ready,
             compare::compare_close,
@@ -229,6 +252,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     tray::build(app)?;
     menu::init(app);
     drop_batch::init(app)?;
+    shelf::init(app)?;
     preset_zones::init(app); // stream F: pipelines
     clipboard::start(app);
     watch::start(app); // stream C
@@ -240,6 +264,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     video_startup(app);
     audio::startup(); // stream B: audio
+    onboarding::open_if_needed(app);
     Ok(())
 }
 

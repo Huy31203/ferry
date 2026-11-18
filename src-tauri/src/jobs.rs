@@ -179,6 +179,23 @@ pub fn restore(app: &AppHandle, id: &JobId) -> Result<(), String> {
     Ok(())
 }
 
+/// Take a card off the stack but keep its job, for the shelf to bring back.
+pub fn hide_card(app: &AppHandle, id: &JobId) {
+    let state = app.state::<AppState>();
+    state.stack.lock().unwrap().pending.retain(|u| &u.id != id);
+    if let Err(e) = app.emit_to(STACK, "job:close", id.as_str()) {
+        warn!("could not hide a card: {e}");
+    }
+}
+
+/// A job's latest card.
+pub fn last_update(app: &AppHandle, id: &JobId) -> Option<JobUpdate> {
+    let state = app.state::<AppState>();
+    let entry = state.jobs.lock().unwrap().get(id).cloned()?;
+    let update = entry.last.lock().unwrap().clone();
+    Some(update)
+}
+
 /// Forget a job and take its card off the stack.
 fn close_card(app: &AppHandle, id: &JobId) {
     let state = app.state::<AppState>();
@@ -328,6 +345,7 @@ fn work_folders(work_dir: &Path, ids: &[JobId]) -> Vec<std::path::PathBuf> {
 
 /// Send a card to the stack, or hold it until the stack page is listening.
 pub fn show(app: &AppHandle, update: JobUpdate) {
+    crate::shelf::on_job_update(app, &update);
     // Stream D: a batch row's update goes to the batch window, not the stack.
     if crate::drop_batch::batch::claim(app, &update) {
         return;

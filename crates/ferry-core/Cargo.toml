@@ -36,6 +36,9 @@ ssimulacra2 = "=0.5.1"
 tiff = "0.11"
 # Default features pull in the `image` crate, which Ferry does not use.
 webp = { version = "0.3", default-features = false }
+# shelf archive: zip only, Deflate + AES, no zlib-rs (would switch the PDF code's flate2 backend).
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2", "aes-crypto", "time"] }
+time = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

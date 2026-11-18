@@ -765,6 +765,28 @@ const all: Setting[] = [
     depends_on: 'floating.enabled',
   },
   {
+    id: 'shelf_opacity',
+    pane: 'floating',
+    label: 'floating.shelf_opacity',
+    help: 'floating.shelf_opacity.help',
+    path: 'floating.shelf_opacity',
+    control: { kind: 'slider', min: 20, max: 100 },
+  },
+  {
+    id: 'shelf_archive_result',
+    pane: 'floating',
+    label: 'floating.shelf_archive_result',
+    help: 'floating.shelf_archive_result.help',
+    path: 'floating.shelf_archive_result',
+    control: {
+      kind: 'select',
+      options: [
+        { value: 'replace', label: 'floating.shelf_archive_result.replace' },
+        { value: 'add', label: 'floating.shelf_archive_result.add' },
+      ],
+    },
+  },
+  {
     id: 'hover_hotkeys',
     pane: 'floating',
     label: 'floating.hover_hotkeys',

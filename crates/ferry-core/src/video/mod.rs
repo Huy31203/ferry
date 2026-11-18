@@ -8,6 +8,7 @@ use crate::{
     sniff::{self, Format},
 };
 
+pub mod bench;
 pub mod fit;
 pub mod hardware;
 pub mod plan;

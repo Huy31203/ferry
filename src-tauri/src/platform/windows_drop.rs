@@ -68,8 +68,8 @@ pub fn sample(at_ms: u64) -> Sample {
 }
 
 /// Windows has no drag pasteboard to read.
-pub fn drag_files() -> Vec<PathBuf> {
-    Vec::new()
+pub fn drag_contents() -> ferry_core::drag::DragContents {
+    ferry_core::drag::DragContents::default()
 }
 
 /// The executable name of the foreground app, such as `Figma.exe`.
@@ -97,4 +97,8 @@ pub fn frontmost_app() -> Option<String> {
         let path = PathBuf::from(String::from_utf16_lossy(&buf[..len as usize]));
         Some(path.file_name()?.to_string_lossy().into_owned())
     }
+}
+
+pub fn make_shelf_window(_window: &WebviewWindow) -> tauri::Result<()> {
+    Ok(())
 }

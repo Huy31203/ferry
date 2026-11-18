@@ -473,7 +473,7 @@ pub fn init(app: &AppHandle) {
             if is_visible(&app) {
                 hide(&app);
             } else {
-                show(&app, Mode::Drag, platform::drop::drag_files());
+                show(&app, Mode::Drag, platform::drop::drag_contents().files);
             }
         });
     });

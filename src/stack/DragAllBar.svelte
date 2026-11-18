@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { invoke } from '@tauri-apps/api/core';
   import { startDrag } from '@crabnebula/tauri-plugin-drag';
   import { t } from '../lib/i18n';
   import { fanIcon } from '../lib/dragicon';
-  import type { JobUpdate } from '../lib/ipc';
+  import { isMac, type JobUpdate } from '../lib/ipc';
 
   let {
     cards,
@@ -24,6 +25,7 @@
   const tips: Record<string, string> = {
     drag: t('stack.drag_all.tip'),
     clear: t('stack.clear_all.tip'),
+    shelve: t('stack.shelve_all.tip'),
   };
 
   // The preview is a small fan of the newest thumbnails, built ahead of time so the drag starts at once.
@@ -41,6 +43,10 @@
       current = false;
     };
   });
+
+  function shelveAll() {
+    void invoke('shelf_shelve_cards', { ids: cards.map((card) => card.id) });
+  }
 
   function dragAll(event: MouseEvent) {
     if (event.button !== 0 || files.length === 0) return;
@@ -63,10 +69,15 @@
     <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20" /></svg>
     {t('stack.drag_all')}
   </button>
+  {#if isMac}
+    <button type="button" class:hot={hotAction === 'shelve'} data-action="shelve" disabled={files.length === 0} onclick={shelveAll}>
+      {t('stack.shelve_all')}
+    </button>
+  {/if}
   <button type="button" class:hot={hotAction === 'clear'} data-action="clear" onclick={onclear}>
     {t('stack.clear_all')}
   </button>
-  {#if hotAction === 'drag' || hotAction === 'clear'}
+  {#if hotAction === 'drag' || hotAction === 'clear' || hotAction === 'shelve'}
     <div class="tip" role="tooltip" class:above class:end={hotAction === 'clear'}>{tips[hotAction]}</div>
   {/if}
 </div>

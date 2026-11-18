@@ -10,6 +10,12 @@ use ferry_core::i18n::t;
 use crate::state::AppState;
 use crate::{hover_keys, platform};
 
+/// The stack's last requested size, for `restack`.
+/// Set by `restack`: the next `stack_resize` slides instead of jumping.
+static SLIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+static LAST: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
+
 pub const STACK: &str = "stack";
 pub const SETTINGS: &str = "settings";
 
@@ -50,7 +56,8 @@ pub fn create_stack(app: &AppHandle) -> tauri::Result<()> {
 pub fn follows_screenshot_setting(label: &str) -> bool {
     match label {
         STACK | crate::compare::COMPARE => true,
-        crate::drop_batch::ZONE => true, // Stream D: the drop zone is floating UI
+        crate::drop_batch::ZONE | crate::shelf::SHELF => true, // floating UI
+        crate::shelf::archive_dialog::ARCHIVE => true,
         _ => false,
     }
 }
@@ -74,6 +81,47 @@ pub fn stack_pointer(app: AppHandle) -> Result<Option<(f64, f64)>, String> {
     platform::pointer_in(&stack)
 }
 
+/// The monitor the stack would use: under the cursor when `follow_cursor` is
+/// on, else the primary.
+pub fn stack_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
+    let follow = app
+        .state::<AppState>()
+        .settings
+        .read()
+        .unwrap()
+        .floating
+        .follow_cursor;
+    app.cursor_position()
+        .ok()
+        .filter(|_| follow)
+        .and_then(|p| {
+            // tao reports the macOS cursor as points × the main display's scale,
+            // while monitor_from_point compares against points.
+            #[cfg(target_os = "macos")]
+            let main_scale = app
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .map_or(1.0, |m| m.scale_factor());
+            #[cfg(not(target_os = "macos"))]
+            let main_scale = 1.0;
+            app.monitor_from_point(p.x / main_scale, p.y / main_scale)
+                .ok()
+                .flatten()
+        })
+        .or_else(|| app.primary_monitor().ok().flatten())
+}
+
+/// Place the stack again at its last size, after the shelf grew or shrank.
+/// Sets window geometry: call it on the main thread.
+pub fn restack(app: &AppHandle) {
+    let last = *LAST.lock().unwrap();
+    if let Some((width, height)) = last {
+        SLIDE.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = stack_resize(app.clone(), width, height);
+    }
+}
+
 /// Fit the stack window to its content and pin it to the chosen corner of the
 /// work area under the cursor (or of the main screen). A zero size hides it.
 #[tauri::command]
@@ -81,6 +129,7 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
     let Some(stack) = app.get_webview_window(STACK) else {
         return Ok(());
     };
+    *LAST.lock().unwrap() = (width >= 1.0 && height >= 1.0).then_some((width, height));
     if width < 1.0 || height < 1.0 {
         // No pointer-leave arrives from a hidden window: drop the hover keys here.
         hover_keys::set(&app, None);
@@ -99,27 +148,7 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         settings::Corner::BottomLeft => Corner::BottomLeft,
         settings::Corner::BottomRight => Corner::BottomRight,
     };
-    let monitor = app
-        .cursor_position()
-        .ok()
-        .filter(|_| floating.follow_cursor)
-        .and_then(|p| {
-            // tao reports the macOS cursor as points × the main display's scale,
-            // while monitor_from_point compares against points.
-            #[cfg(target_os = "macos")]
-            let main_scale = app
-                .primary_monitor()
-                .ok()
-                .flatten()
-                .map_or(1.0, |m| m.scale_factor());
-            #[cfg(not(target_os = "macos"))]
-            let main_scale = 1.0;
-            app.monitor_from_point(p.x / main_scale, p.y / main_scale)
-                .ok()
-                .flatten()
-        })
-        .or_else(|| app.primary_monitor().ok().flatten())
-        .ok_or("no monitor found")?;
+    let monitor = stack_monitor(&app).ok_or("no monitor found")?;
     let scale = monitor.scale_factor();
     let work = monitor.work_area();
     let area = Rect {
@@ -128,6 +157,8 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
         width: work.size.width,
         height: work.size.height,
     };
+    let inset = crate::shelf::inset_px(&app, scale);
+    let area = ferry_core::shelf_place::stack_area(area, corner, inset);
     let margin = (STACK_MARGIN * scale).round() as u32;
     // A stack taller than the work area keeps its newest cards (the page anchors
     // them to the bottom) instead of running under the taskbar.
@@ -152,12 +183,16 @@ pub fn stack_resize(app: AppHandle, width: f64, height: f64) -> Result<(), Strin
                 f64::from(size.1) / scale,
             ))
             .map_err(|e| e.to_string())?;
-        stack
-            .set_position(LogicalPosition::new(
-                f64::from(x) / scale,
-                f64::from(y) / scale,
-            ))
-            .map_err(|e| e.to_string())?;
+        if SLIDE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            crate::glide::to(&stack, scale, (x, y));
+        } else {
+            stack
+                .set_position(LogicalPosition::new(
+                    f64::from(x) / scale,
+                    f64::from(y) / scale,
+                ))
+                .map_err(|e| e.to_string())?;
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -220,6 +255,9 @@ mod tests {
     fn the_stack_and_the_compare_window_follow_the_screenshot_setting() {
         assert!(follows_screenshot_setting(STACK));
         assert!(follows_screenshot_setting(crate::compare::COMPARE));
+        assert!(follows_screenshot_setting(
+            crate::shelf::archive_dialog::ARCHIVE
+        ));
         assert!(!follows_screenshot_setting(SETTINGS));
     }
 }

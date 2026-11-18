@@ -35,6 +35,7 @@ export interface Settings {
     show_in_screenshots: boolean;
     tray_style: 'default' | 'classic' | 'flat';
     language: string;
+    onboarded: boolean;
   };
   svc: {
     updates: { auto_check: boolean; pill: boolean; skipped_version: string };
@@ -70,6 +71,8 @@ export interface Settings {
     auto_hide_secs: number;
     follow_cursor: boolean;
     hover_hotkeys: boolean;
+    shelf_opacity: number;
+    shelf_archive_result: 'replace' | 'add';
   };
   backups: { retention_days: number };
   hotkeys: { optimise: string; aggressive: string; cycle_state: string };
@@ -102,6 +105,7 @@ export interface Settings {
     keep_original_modifier: 'alt' | 'shift';
     batch_threshold: number;
     ignored_apps: string[];
+    save_folder: string;
   };
   results_list: { after_cards: number };
   audio: AudioSettings; // stream B: audio
