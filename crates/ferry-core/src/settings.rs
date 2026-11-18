@@ -99,6 +99,8 @@ pub struct General {
     pub show_in_screenshots: bool,
     pub tray_style: TrayStyle,
     pub language: String,
+    /// The first-run screen was finished; it shows until then (onboarding spec §2).
+    pub onboarded: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -411,6 +413,7 @@ impl Default for General {
             show_in_screenshots: false,
             tray_style: TrayStyle::Default,
             language: "en".into(),
+            onboarded: false,
             extra: Map::new(),
         }
     }
@@ -653,7 +656,7 @@ impl Default for Video {
     fn default() -> Self {
         Self {
             encoder: Encoder::Fast,
-            compression: 80,
+            compression: 95,
             convert_mov: true,
             audio_to_aac: false,
             remove_audio: false,
@@ -1390,7 +1393,7 @@ mod tests {
                 v.audio_to_aac,
                 v.remove_audio
             ),
-            (Encoder::Fast, 80, true, false, false)
+            (Encoder::Fast, 95, true, false, false)
         );
         assert_eq!(
             (v.fps_cap, v.speed_frames, v.preserve_dates, v.max_size_mb),
@@ -1800,5 +1803,20 @@ mod tests {
             json!({ "name": "iPhone", "width": 1179, "height": 2556 })
         );
         assert_eq!(json["formats"]["heic_to"], "jpeg");
+    }
+
+    #[test]
+    fn fresh_settings_are_not_onboarded_and_videos_default_to_95() {
+        let s = Settings::default();
+        assert!(!s.general.onboarded);
+        assert_eq!(s.video.compression, 95);
+    }
+
+    #[test]
+    fn an_old_file_is_not_onboarded_and_keeps_its_video_quality() {
+        let s: Settings =
+            serde_json::from_str(r#"{"general":{"language":"en"},"video":{"compression":80}}"#).unwrap();
+        assert!(!s.general.onboarded);
+        assert_eq!(s.video.compression, 80);
     }
 }

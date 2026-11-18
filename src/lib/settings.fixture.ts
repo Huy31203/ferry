@@ -10,6 +10,7 @@ export const sample: Settings = {
     show_in_screenshots: false,
     tray_style: 'default',
     language: 'en',
+    onboarded: false,
   },
   svc: {
     updates: { auto_check: true, pill: true, skipped_version: '' },
@@ -83,7 +84,7 @@ export const sample: Settings = {
   clip: { auto_copy: false },
   video: {
     encoder: 'fast',
-    compression: 80,
+    compression: 95,
     convert_mov: true,
     audio_to_aac: false,
     remove_audio: false,

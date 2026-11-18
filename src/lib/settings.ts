@@ -35,6 +35,7 @@ export interface Settings {
     show_in_screenshots: boolean;
     tray_style: 'default' | 'classic' | 'flat';
     language: string;
+    onboarded: boolean;
   };
   svc: {
     updates: { auto_check: boolean; pill: boolean; skipped_version: string };
